@@ -182,7 +182,10 @@ pub(crate) enum EngineCommand {
     SetRoot {
         root: DomId,
     },
-    DeleteNode {
+    DestroyNode {
+        node: DomId,
+    },
+    DetachNode {
         node: DomId,
     },
     SetStyle {
@@ -480,7 +483,7 @@ impl PaintEngine {
         true
     }
 
-    pub(crate) fn delete_node(&mut self, node: DomId) -> bool {
+    pub(crate) fn destroy_node(&mut self, node: DomId) -> bool {
         let Some(node_id) = self.node_for(node) else {
             return false;
         };
@@ -495,6 +498,31 @@ impl PaintEngine {
         }
 
         self.delete_subtree(node);
+        self.layout_dirty = true;
+        true
+    }
+
+    pub(crate) fn detach_node(&mut self, node: DomId) -> bool {
+        let Some(node_id) = self.node_for(node) else {
+            return false;
+        };
+
+        if self.root == Some(node) {
+            self.root = None;
+            self.layout_dirty = true;
+            return true;
+        }
+
+        let Some(parent) = self.parents.remove(&node) else {
+            return false;
+        };
+
+        if let Some(parent_node) = self.node_for(parent) {
+            self.arena.remove_child(parent_node, node_id);
+        }
+        if let Some(siblings) = self.children.get_mut(&parent) {
+            siblings.retain(|id| *id != node);
+        }
         self.layout_dirty = true;
         true
     }
@@ -973,7 +1001,7 @@ impl PaintEngine {
 
         if let Some(node_id) = self.dom_to_node.remove(&node) {
             self.node_to_dom.remove(&node_id);
-            self.transitions.remove_node(node_id);
+            self.transitions.clear_node(node_id);
         }
     }
 
@@ -1208,8 +1236,11 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         EngineCommand::SetRoot { root } => {
             engine.set_root(root);
         }
-        EngineCommand::DeleteNode { node } => {
-            engine.delete_node(node);
+        EngineCommand::DestroyNode { node } => {
+            engine.destroy_node(node);
+        }
+        EngineCommand::DetachNode { node } => {
+            engine.detach_node(node);
         }
         EngineCommand::SetStyle { node, style } => {
             engine.set_style(node, style);
@@ -1610,15 +1641,15 @@ mod tests {
     }
 
     #[test]
-    fn dom_ids_are_stable_and_not_reused_after_delete() {
+    fn dom_ids_are_stable_and_not_reused_after_destroy() {
         let mut engine = PaintEngine::new();
         let first = engine.create_element(DivStyle::default());
-        assert!(engine.delete_node(first));
+        assert!(engine.destroy_node(first));
 
         let second = engine.create_element(DivStyle::default());
 
         assert_ne!(first, second);
-        assert!(!engine.delete_node(first));
+        assert!(!engine.destroy_node(first));
         assert!(engine.set_root(second));
     }
 
@@ -1646,7 +1677,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_child_detaches_it_from_layout_and_hit_testing() {
+    fn destroying_child_detaches_it_from_layout_and_hit_testing() {
         let mut engine = PaintEngine::new();
         let mut root_style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
         root_style.background = Background::Blue;
@@ -1661,7 +1692,7 @@ mod tests {
         engine.render_frame(4, 1).unwrap();
         assert_eq!(engine.target_at(0, 0), Some(child));
 
-        assert!(engine.delete_node(child));
+        assert!(engine.destroy_node(child));
         engine.render_frame(4, 1).unwrap();
 
         assert_eq!(engine.target_at(0, 0), Some(root));
@@ -1669,7 +1700,32 @@ mod tests {
     }
 
     #[test]
-    fn deleting_root_clears_render_output() {
+    fn detaching_child_detaches_without_destroying_it() {
+        let mut engine = PaintEngine::new();
+        let root = engine.create_element(block_style(
+            CssDimension::Length(4.0),
+            CssDimension::Length(1.0),
+        ));
+        let child = engine.create_element(block_style(
+            CssDimension::Length(1.0),
+            CssDimension::Length(1.0),
+        ));
+
+        assert!(engine.append_child(root, child));
+        assert!(engine.set_root(root));
+        engine.render_frame(4, 1).unwrap();
+
+        assert!(engine.detach_node(child));
+        engine.render_frame(4, 1).unwrap();
+        assert_eq!(engine.target_at(0, 0), Some(root));
+
+        assert!(engine.append_child(root, child));
+        engine.render_frame(4, 1).unwrap();
+        assert_eq!(engine.target_at(0, 0), Some(child));
+    }
+
+    #[test]
+    fn destroying_root_clears_render_output() {
         let mut engine = PaintEngine::new();
         let root = engine.create_element(block_style(
             CssDimension::Length(2.0),
@@ -1678,7 +1734,7 @@ mod tests {
         assert!(engine.set_root(root));
 
         assert!(engine.render_frame(2, 1).is_some());
-        assert!(engine.delete_node(root));
+        assert!(engine.destroy_node(root));
 
         assert!(engine.render_frame(2, 1).is_none());
     }

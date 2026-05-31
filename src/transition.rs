@@ -60,7 +60,7 @@ impl TransitionState {
         }
     }
 
-    pub(crate) fn remove_node(&mut self, node: NodeId) {
+    pub(crate) fn clear_node(&mut self, node: NodeId) {
         self.specs.remove(&node);
         self.active.retain(|key, _| key.node != node);
         self.events.retain(|event| event.target != node);

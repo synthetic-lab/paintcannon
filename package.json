@@ -12,6 +12,8 @@
     "demo:borders": "npm run build:debug && node dist/examples/borders.js",
     "demo:counter": "npm run build:debug && node dist/examples/counter-button.js",
     "demo:chunky-rounded": "npm run build:debug && node dist/examples/chunky-rounded-hover.js",
+    "demo:destroy": "npm run build:debug && node dist/examples/destroy-nodes.js",
+    "demo:detach": "npm run build:debug && node dist/examples/detach-reattach.js",
     "demo:keyboard": "npm run build:debug && node dist/examples/keyboard-events.js",
     "demo:images": "npm run build:debug && node dist/examples/images.js",
     "demo:input": "npm run build:debug && node dist/examples/input.js",

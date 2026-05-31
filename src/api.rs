@@ -234,6 +234,16 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn detach_node(&self, id: u32) -> Result<()> {
+        self.send(EngineCommand::DetachNode { node: DomId(id) })
+    }
+
+    #[napi]
+    pub fn destroy_node(&self, id: u32) -> Result<()> {
+        self.send(EngineCommand::DestroyNode { node: DomId(id) })
+    }
+
+    #[napi]
     pub fn set_style_property(&self, id: u32, property: String, value: String) -> Result<()> {
         self.send(style_command(id, &property, &value)?)
     }
@@ -382,6 +392,14 @@ impl PaintCannon {
                         parent: DomId(parent),
                         child: DomId(child),
                     });
+                }
+                "detachNode" => {
+                    let id = resolve_batch_id(command.id, "id", "detachNode", &id_map)?;
+                    render_commands.push(EngineCommand::DetachNode { node: DomId(id) });
+                }
+                "destroyNode" => {
+                    let id = resolve_batch_id(command.id, "id", "destroyNode", &id_map)?;
+                    render_commands.push(EngineCommand::DestroyNode { node: DomId(id) });
                 }
                 "setStyleProperty" => {
                     let temporary_id = command.id.filter(|id| *id < 0);

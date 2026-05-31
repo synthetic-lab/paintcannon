@@ -183,6 +183,8 @@ export interface NativePaintCannon {
   setInputFocused(id: number, focused: boolean): void;
   setRoot(id: number): void;
   appendChild(parent: number, child: number): void;
+  detachNode(id: number): void;
+  destroyNode(id: number): void;
   setStyleProperty(id: number, property: string, value: string): void;
   applyBatch(commands: NativeBatchCommand[]): NativeBatchIdMapping[];
   terminalSize(): TerminalSize;
@@ -568,9 +570,7 @@ export class PaintCannon {
   }
 
   private setParent(child: PaintNode, parent: PaintElement): void {
-    if (child instanceof DivElement || child instanceof SpanElement || child instanceof ImageElement || child instanceof InputElement || child instanceof TextAreaElement) {
-      this.parents.set(child.id, parent);
-    }
+    this.parents.set(child.id, parent);
   }
 
   getScrollLeft(element: PaintElement): number {
@@ -722,6 +722,126 @@ export class PaintCannon {
     }
 
     this.setParent(child, parent);
+  }
+
+  detachChild(parent: PaintElement, child: PaintNode): PaintNode {
+    assertElement(parent);
+    assertPaintNode(child);
+    if (this.parents.get(child.id) !== parent) {
+      throw new Error('node is not a child of this parent');
+    }
+
+    this.detachNativeNode(child.id);
+    this.parents.delete(child.id);
+    this.clearDetachedState(child);
+    return child;
+  }
+
+  detachNode(node: PaintNode): void {
+    assertPaintNode(node);
+    if (!this.parents.has(node.id) && !(node instanceof DivElement || node instanceof SpanElement || node instanceof ImageElement || node instanceof InputElement || node instanceof TextAreaElement)) {
+      return;
+    }
+
+    this.detachNativeNode(node.id);
+    this.parents.delete(node.id);
+    this.clearDetachedState(node);
+  }
+
+  destroyNode(node: PaintNode): void {
+    assertPaintNode(node);
+    this.destroyNativeNode(node.id);
+    this.cleanupDestroyedNode(node);
+  }
+
+  private detachNativeNode(id: number): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'detachNode', id });
+      return;
+    }
+
+    this.binding.detachNode(id);
+  }
+
+  private destroyNativeNode(id: number): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'destroyNode', id });
+      return;
+    }
+
+    this.binding.destroyNode(id);
+  }
+
+  private clearDetachedState(node: PaintNode): void {
+    const ids = new Set<number>();
+    const collect = (id: number): void => {
+      if (ids.has(id)) {
+        return;
+      }
+      ids.add(id);
+      for (const [childId, parent] of this.parents) {
+        if (parent.id === id) {
+          collect(childId);
+        }
+      }
+    };
+    collect(node.id);
+
+    if (this.focusedTextControl !== undefined && ids.has(this.focusedTextControl.id)) {
+      this.focusedTextControl.setFocused(false);
+      this.focusedTextControl = undefined;
+    }
+    if (this.hoveredElement !== undefined && ids.has(this.hoveredElement.id)) {
+      this.hoveredElement = undefined;
+    }
+  }
+
+  private cleanupDestroyedNode(node: PaintNode): void {
+    const ids = this.collectSubtreeIds(node.id);
+
+    for (const id of ids) {
+      this.parents.delete(id);
+      this.elements.delete(id);
+      this.elementEventListeners.delete(id);
+      this.scrollMetrics.delete(id);
+      this.batchNodes.delete(id);
+    }
+
+    for (const [childId, parent] of Array.from(this.parents.entries())) {
+      if (ids.has(parent.id)) {
+        this.parents.delete(childId);
+      }
+    }
+
+    for (let index = this.textControls.length - 1; index >= 0; index -= 1) {
+      if (ids.has(this.textControls[index].id)) {
+        this.textControls.splice(index, 1);
+      }
+    }
+
+    if (this.focusedTextControl !== undefined && ids.has(this.focusedTextControl.id)) {
+      this.focusedTextControl = undefined;
+    }
+    if (this.hoveredElement !== undefined && ids.has(this.hoveredElement.id)) {
+      this.hoveredElement = undefined;
+    }
+  }
+
+  private collectSubtreeIds(id: number): Set<number> {
+    const ids = new Set<number>();
+    const collect = (currentId: number): void => {
+      if (ids.has(currentId)) {
+        return;
+      }
+      ids.add(currentId);
+      for (const [childId, parent] of this.parents) {
+        if (parent.id === currentId) {
+          collect(childId);
+        }
+      }
+    };
+    collect(id);
+    return ids;
   }
 
   private setNativeStyleProperty(id: number, property: string, value: string): void {
@@ -1596,6 +1716,18 @@ export class DivElement {
     return child;
   }
 
+  detachChild(child: PaintNode): PaintNode {
+    return this.ownerDocument.detachChild(this, child);
+  }
+
+  detach(): void {
+    this.ownerDocument.detachNode(this);
+  }
+
+  destroy(): void {
+    this.ownerDocument.destroyNode(this);
+  }
+
   get scrollLeft(): number {
     return this.ownerDocument.getScrollLeft(this);
   }
@@ -1667,6 +1799,18 @@ export class SpanElement {
     assertPaintNode(child);
     this.appendNativeChild(this, child);
     return child;
+  }
+
+  detachChild(child: PaintNode): PaintNode {
+    return this.ownerDocument.detachChild(this, child);
+  }
+
+  detach(): void {
+    this.ownerDocument.detachNode(this);
+  }
+
+  destroy(): void {
+    this.ownerDocument.destroyNode(this);
   }
 
   get scrollLeft(): number {
@@ -1743,6 +1887,14 @@ export class ImageElement {
   set src(value: string) {
     this.source = String(value);
     this.setNativeImageSource(this.id, this.source);
+  }
+
+  detach(): void {
+    this.ownerDocument.detachNode(this);
+  }
+
+  destroy(): void {
+    this.ownerDocument.destroyNode(this);
   }
 
   addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
@@ -1828,6 +1980,14 @@ export class InputElement {
 
   blur(): void {
     this.ownerDocument.blurInput(this);
+  }
+
+  detach(): void {
+    this.ownerDocument.detachNode(this);
+  }
+
+  destroy(): void {
+    this.ownerDocument.destroyNode(this);
   }
 
   insertText(text: string): void {
@@ -1986,6 +2146,14 @@ export class TextNode {
 
   set textContent(value: string) {
     this.nodeValue = value;
+  }
+
+  detach(): void {
+    this.ownerDocument.detachNode(this);
+  }
+
+  destroy(): void {
+    this.ownerDocument.destroyNode(this);
   }
 }
 
