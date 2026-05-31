@@ -218,6 +218,12 @@ pub(crate) enum EngineCommand {
         direction: i32,
         response: Sender<Option<u32>>,
     },
+    SetTextControlCursorAtPoint {
+        node: DomId,
+        x: u32,
+        y: u32,
+        response: Sender<Option<u32>>,
+    },
     SetScrollOffset {
         node: DomId,
         scroll_left: u32,
@@ -713,6 +719,19 @@ impl PaintEngine {
         let node = self.node_for(node)?;
         self.ensure_layout_for_size(width, height);
         self.arena.move_textarea_cursor_vertically(node, direction)
+    }
+
+    pub(crate) fn set_text_control_cursor_at_point_for_size(
+        &mut self,
+        node: DomId,
+        x: u32,
+        y: u32,
+        width: usize,
+        height: usize,
+    ) -> Option<u32> {
+        let node = self.node_for(node)?;
+        self.ensure_layout_for_size(width, height);
+        self.arena.set_text_control_cursor_at_point(node, x, y)
     }
 
     pub(crate) fn scroll_metrics(&mut self, node: DomId) -> Option<ArenaScrollMetrics> {
@@ -1252,6 +1271,21 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
             let _ = response.send(engine.move_textarea_cursor_vertically_for_size(
                 node,
                 direction,
+                size.cols as usize,
+                size.rows as usize,
+            ));
+        }
+        EngineCommand::SetTextControlCursorAtPoint {
+            node,
+            x,
+            y,
+            response,
+        } => {
+            let size = query_terminal_size();
+            let _ = response.send(engine.set_text_control_cursor_at_point_for_size(
+                node,
+                x,
+                y,
                 size.cols as usize,
                 size.rows as usize,
             ));
@@ -1968,6 +2002,45 @@ mod tests {
 
         let frame = engine.render_frame(6, 3).unwrap();
         assert!(frame.cell(2, 0).unwrap().reversed);
+    }
+
+    #[test]
+    fn clicking_input_moves_cursor_to_clicked_column() {
+        let mut engine = PaintEngine::new();
+        let input = engine.create_input_with_id(
+            DomId(1),
+            block_style(CssDimension::Length(6.0), CssDimension::Length(1.0)),
+            "abcdef",
+        );
+        engine.set_root(input);
+        engine.set_input_focused(input, true);
+
+        assert_eq!(
+            engine.set_text_control_cursor_at_point_for_size(input, 3, 0, 6, 1),
+            Some(3)
+        );
+
+        let frame = engine.render_frame(6, 1).unwrap();
+        assert!(frame.cell(3, 0).unwrap().reversed);
+    }
+
+    #[test]
+    fn clicking_textarea_uses_soft_wrapped_visual_position() {
+        let mut engine = PaintEngine::new();
+        let textarea = engine.create_textarea(
+            block_style(CssDimension::Length(6.0), CssDimension::Auto),
+            "abcd efgh",
+        );
+        engine.set_root(textarea);
+        engine.set_textarea_focused(textarea, true);
+
+        assert_eq!(
+            engine.set_text_control_cursor_at_point_for_size(textarea, 2, 1, 6, 3),
+            Some(7)
+        );
+
+        let frame = engine.render_frame(6, 3).unwrap();
+        assert!(frame.cell(2, 1).unwrap().reversed);
     }
 
     #[test]

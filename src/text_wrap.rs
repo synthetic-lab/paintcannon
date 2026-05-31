@@ -96,7 +96,7 @@ impl WrappedText {
             .unwrap_or(cursor)
     }
 
-    fn cursor_for_visual_position(&self, row: usize, col: usize) -> Option<usize> {
+    pub(crate) fn cursor_for_visual_position(&self, row: usize, col: usize) -> Option<usize> {
         self.cursor_positions
             .iter()
             .enumerate()

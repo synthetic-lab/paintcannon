@@ -187,6 +187,7 @@ export interface NativePaintCannon {
   setTextAreaFocused(id: number, focused: boolean): void;
   setTextAreaPlaceholder(id: number, placeholder: string): void;
   moveTextAreaCursorVertically(id: number, direction: number): number | null;
+  setTextControlCursorAtPoint(id: number, x: number, y: number): number | null;
   setRoot(id: number): void;
   appendChild(parent: number, child: number): void;
   detachNode(id: number): void;
@@ -342,6 +343,7 @@ export class PaintCannon {
         (id, value, cursor) => this.setNativeInputValue(id, value, cursor),
         (id, focused) => this.setNativeInputFocused(id, focused),
         (id, placeholder) => this.setNativeInputPlaceholder(id, placeholder),
+        (id, x, y) => this.binding.setTextControlCursorAtPoint(id, x, y),
         (id, property, value) => this.setNativeStyleProperty(id, property, value),
       );
       this.registerElement(element);
@@ -355,6 +357,7 @@ export class PaintCannon {
         (id, value, cursor) => this.setNativeTextAreaValue(id, value, cursor),
         (id, focused) => this.setNativeTextAreaFocused(id, focused),
         (id, placeholder) => this.setNativeTextAreaPlaceholder(id, placeholder),
+        (id, x, y) => this.binding.setTextControlCursorAtPoint(id, x, y),
         (id, direction) => this.binding.moveTextAreaCursorVertically(id, direction),
         (id, property, value) => this.setNativeStyleProperty(id, property, value),
       );
@@ -1367,6 +1370,7 @@ export class PaintCannon {
       let handled = false;
       if (isTextControl(target)) {
         this.focusInput(target);
+        target.setCursorPositionFromNativePoint(input.x, input.y);
         handled = true;
       }
       if (hasClick) {
@@ -1971,6 +1975,7 @@ export class InputElement {
     private readonly setNativeInputValue: (id: number, value: string, cursor: number) => void,
     private readonly setNativeInputFocused: (id: number, focused: boolean) => void,
     private readonly setNativeInputPlaceholder: (id: number, placeholder: string) => void,
+    private readonly setNativeCursorAtPoint: (id: number, x: number, y: number) => number | null,
     setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {
     this.ownerDocument = owner;
@@ -2037,6 +2042,16 @@ export class InputElement {
 
     const length = Array.from(this.inputValue).length;
     this.cursor = Math.max(0, Math.min(length, Math.floor(position)));
+  }
+
+  setCursorPositionFromNativePoint(x: number, y: number): boolean {
+    const cursor = this.setNativeCursorAtPoint(this.id, x, y);
+    if (cursor === null) {
+      return false;
+    }
+
+    this.setCursorPositionFromNative(cursor);
+    return true;
   }
 
   focus(): void {
@@ -2178,10 +2193,11 @@ export class TextAreaElement extends InputElement {
     setNativeInputValue: (id: number, value: string, cursor: number) => void,
     setNativeInputFocused: (id: number, focused: boolean) => void,
     setNativeInputPlaceholder: (id: number, placeholder: string) => void,
+    setNativeCursorAtPoint: (id: number, x: number, y: number) => number | null,
     private readonly moveNativeTextAreaCursorVertically: (id: number, direction: number) => number | null,
     setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {
-    super(owner, id, setNativeInputValue, setNativeInputFocused, setNativeInputPlaceholder, setNativeStyleProperty);
+    super(owner, id, setNativeInputValue, setNativeInputFocused, setNativeInputPlaceholder, setNativeCursorAtPoint, setNativeStyleProperty);
   }
 
   override get type(): string {

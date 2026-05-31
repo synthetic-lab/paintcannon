@@ -315,6 +315,56 @@ impl LayoutArena {
         Some(next)
     }
 
+    pub(crate) fn set_text_control_cursor_at_point(
+        &mut self,
+        node: NodeId,
+        x: u32,
+        y: u32,
+    ) -> Option<u32> {
+        let rect = self.content_box_absolute_rect(node);
+        if rect.width == 0 || rect.height == 0 {
+            return None;
+        }
+
+        let local_x = (x as i32 - rect.left).clamp(0, rect.width.saturating_sub(1) as i32) as usize;
+        let local_y = (y as i32 - rect.top).clamp(0, rect.height.saturating_sub(1) as i32) as usize;
+        let index = node_index(node);
+        match &mut self.nodes[index].kind {
+            LayoutNodeKind::Input(input) => {
+                let value_len = input.value.chars().count();
+                let width = rect.width.max(1);
+                let cursor = (input.cursor as usize).min(value_len);
+                let start = if input.focused && value_len > 0 && cursor >= width {
+                    cursor + 1 - width
+                } else {
+                    0
+                };
+                let next = (start + local_x).min(value_len) as u32;
+                input.cursor = next;
+                Some(next)
+            }
+            LayoutNodeKind::TextArea(textarea) => {
+                let wrap_width = rect.width.max(1);
+                let value_len = textarea.value.chars().count();
+                if value_len == 0 {
+                    textarea.cursor = 0;
+                    return Some(0);
+                }
+
+                let layout = WrappedText::new(&textarea.value, wrap_width);
+                let (cursor_row, _) = layout.cursor_position(textarea.cursor as usize);
+                let scroll_top = textarea_scroll_top(cursor_row, rect.height.max(1));
+                let next = layout
+                    .cursor_for_visual_position(scroll_top + local_y, local_x)
+                    .unwrap_or(value_len)
+                    .min(value_len) as u32;
+                textarea.cursor = next;
+                Some(next)
+            }
+            LayoutNodeKind::Element | LayoutNodeKind::Text(_) | LayoutNodeKind::Image(_) => None,
+        }
+    }
+
     pub(crate) fn append_child(&mut self, parent: NodeId, child: NodeId) {
         self.nodes[node_index(parent)].children.push(child);
         self.nodes[node_index(child)].parent = Some(parent);
@@ -455,6 +505,35 @@ impl LayoutArena {
             current = parent_node.parent;
         }
         origin
+    }
+
+    fn absolute_layout_origin(&self, node: NodeId) -> Point<f32> {
+        let mut origin = Point { x: 0.0, y: 0.0 };
+        let mut path = Vec::new();
+        let mut current = Some(node);
+        while let Some(node_id) = current {
+            path.push(node_id);
+            current = self.nodes[node_index(node_id)].parent;
+        }
+
+        for node_id in path.into_iter().rev() {
+            let layout = self.layout(node_id);
+            origin.x += layout.location.x;
+            origin.y += layout.location.y;
+        }
+        origin
+    }
+
+    fn content_box_absolute_rect(&self, node: NodeId) -> AbsoluteContentRect {
+        let layout = self.layout(node);
+        let origin = self.absolute_layout_origin(node);
+        let content_size = layout.content_box_size();
+        AbsoluteContentRect {
+            left: (origin.x + layout.border.left + layout.padding.left).round() as i32,
+            top: (origin.y + layout.border.top + layout.padding.top).round() as i32,
+            width: float_to_cells(content_size.width) as usize,
+            height: float_to_cells(content_size.height) as usize,
+        }
     }
 
     pub(crate) fn scroll_metrics(&mut self, node: NodeId) -> Option<ArenaScrollMetrics> {
@@ -1212,8 +1291,24 @@ struct InlineLayoutCursor {
     fragments: Vec<InlineFragment>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AbsoluteContentRect {
+    left: i32,
+    top: i32,
+    width: usize,
+    height: usize,
+}
+
 fn node_index(node: NodeId) -> usize {
     node.into()
+}
+
+fn textarea_scroll_top(cursor_row: usize, viewport_height: usize) -> usize {
+    if viewport_height == 0 {
+        return 0;
+    }
+
+    cursor_row.saturating_add(1).saturating_sub(viewport_height)
 }
 
 fn image_natural_size(image: &ImageLayoutData) -> Size<f32> {

@@ -268,6 +268,20 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn set_text_control_cursor_at_point(&self, id: u32, x: u32, y: u32) -> Result<Option<u32>> {
+        let (response_tx, response_rx) = bounded(1);
+        self.send(EngineCommand::SetTextControlCursorAtPoint {
+            node: DomId(id),
+            x,
+            y,
+            response: response_tx,
+        })?;
+        response_rx
+            .recv()
+            .map_err(|_| Error::from_reason("renderer thread stopped"))
+    }
+
+    #[napi]
     pub fn set_root(&self, id: u32) -> Result<()> {
         self.send(EngineCommand::SetRoot { root: DomId(id) })
     }
