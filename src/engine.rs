@@ -817,6 +817,7 @@ impl PaintEngine {
         let layout_start = Instant::now();
         let layout_passes_before = self.layout_passes();
         self.ensure_layout(width, height, root);
+        self.arena.ensure_dirty_textareas_visible();
         let stats = self.arena.stats();
         let layout_profile = self.arena.profile_stats();
         profile_log(

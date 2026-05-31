@@ -46,6 +46,7 @@ pub(crate) struct TextAreaLayoutData {
     pub(crate) placeholder: String,
     pub(crate) cursor: u32,
     pub(crate) focused: bool,
+    pub(crate) scroll_cursor_dirty: bool,
 }
 
 pub(crate) struct LayoutArena {
@@ -202,6 +203,7 @@ impl LayoutArena {
                 placeholder: String::new(),
                 cursor: 0,
                 focused: false,
+                scroll_cursor_dirty: false,
             }),
             style,
         )
@@ -277,6 +279,7 @@ impl LayoutArena {
         if let LayoutNodeKind::TextArea(textarea) = &mut item.kind {
             textarea.value = value.into();
             textarea.cursor = cursor;
+            textarea.scroll_cursor_dirty = true;
             self.clear_cache_from(node);
         }
     }
@@ -284,6 +287,9 @@ impl LayoutArena {
     pub(crate) fn set_textarea_focused(&mut self, node: NodeId, focused: bool) {
         if let LayoutNodeKind::TextArea(textarea) = &mut self.nodes[node_index(node)].kind {
             textarea.focused = focused;
+            if focused {
+                textarea.scroll_cursor_dirty = true;
+            }
         }
     }
 
@@ -312,6 +318,7 @@ impl LayoutArena {
         let next = wrapped.cursor_after_vertical_move(textarea.cursor as usize, direction);
         let next = next.min(textarea.value.chars().count()) as u32;
         textarea.cursor = next;
+        textarea.scroll_cursor_dirty = true;
         Some(next)
     }
 
@@ -329,6 +336,7 @@ impl LayoutArena {
         let local_x = (x as i32 - rect.left).clamp(0, rect.width.saturating_sub(1) as i32) as usize;
         let local_y = (y as i32 - rect.top).clamp(0, rect.height.saturating_sub(1) as i32) as usize;
         let index = node_index(node);
+        let scroll_top = self.nodes[index].scroll_top as usize;
         match &mut self.nodes[index].kind {
             LayoutNodeKind::Input(input) => {
                 let value_len = input.value.chars().count();
@@ -352,13 +360,12 @@ impl LayoutArena {
                 }
 
                 let layout = WrappedText::new(&textarea.value, wrap_width);
-                let (cursor_row, _) = layout.cursor_position(textarea.cursor as usize);
-                let scroll_top = textarea_scroll_top(cursor_row, rect.height.max(1));
                 let next = layout
                     .cursor_for_visual_position(scroll_top + local_y, local_x)
                     .unwrap_or(value_len)
                     .min(value_len) as u32;
                 textarea.cursor = next;
+                textarea.scroll_cursor_dirty = false;
                 Some(next)
             }
             LayoutNodeKind::Element | LayoutNodeKind::Text(_) | LayoutNodeKind::Image(_) => None,
@@ -411,8 +418,18 @@ impl LayoutArena {
     }
 
     pub(crate) fn scroll_offset(&self, node: NodeId) -> (u32, u32) {
-        let node = &self.nodes[node_index(node)];
-        (node.scroll_left, node.scroll_top)
+        let item = &self.nodes[node_index(node)];
+        if let LayoutNodeKind::TextArea(textarea) = &item.kind {
+            let layout = self.layout(node);
+            let content_size = layout.content_box_size();
+            let client_width = float_to_cells(content_size.width);
+            let client_height = float_to_cells(content_size.height);
+            let scroll_height =
+                textarea_content_height(&textarea.value, client_width.max(1) as usize);
+            let max_top = scroll_height.saturating_sub(client_height);
+            return (0, item.scroll_top.min(max_top));
+        }
+        (item.scroll_left, item.scroll_top)
     }
 
     pub(crate) fn layout_passes(&self) -> u64 {
@@ -547,22 +564,37 @@ impl LayoutArena {
         scroll_top: u32,
     ) -> Option<ArenaScrollMetrics> {
         let metrics = self.scroll_metrics_for_node(node)?;
-        let max_left = axis_max_scroll(
-            self.nodes[node_index(node)].style.overflow_x,
-            metrics.scroll_width.saturating_sub(metrics.client_width),
-        );
-        let max_top = axis_max_scroll(
-            self.nodes[node_index(node)].style.overflow_y,
-            metrics.scroll_height.saturating_sub(metrics.client_height),
-        );
+        let index = node_index(node);
+        let max_left = if matches!(self.nodes[index].kind, LayoutNodeKind::TextArea(_)) {
+            0
+        } else {
+            axis_max_scroll(
+                self.nodes[index].style.overflow_x,
+                metrics.scroll_width.saturating_sub(metrics.client_width),
+            )
+        };
+        let max_top = if matches!(self.nodes[index].kind, LayoutNodeKind::TextArea(_)) {
+            metrics.scroll_height.saturating_sub(metrics.client_height)
+        } else {
+            axis_max_scroll(
+                self.nodes[index].style.overflow_y,
+                metrics.scroll_height.saturating_sub(metrics.client_height),
+            )
+        };
         let item = &mut self.nodes[node_index(node)];
         item.scroll_left = scroll_left.min(max_left);
         item.scroll_top = scroll_top.min(max_top);
+        if let LayoutNodeKind::TextArea(textarea) = &mut item.kind {
+            textarea.scroll_cursor_dirty = false;
+        }
         self.scroll_metrics_for_node(node)
     }
 
     fn scroll_metrics_for_node(&mut self, node_id: NodeId) -> Option<ArenaScrollMetrics> {
         let index = node_index(node_id);
+        if matches!(self.nodes[index].kind, LayoutNodeKind::TextArea(_)) {
+            return Some(self.textarea_scroll_metrics_for_node(node_id));
+        }
         if !matches!(self.nodes[index].kind, LayoutNodeKind::Element) {
             return None;
         }
@@ -616,6 +648,75 @@ impl LayoutArena {
             client_width,
             client_height,
         })
+    }
+
+    fn textarea_scroll_metrics_for_node(&mut self, node_id: NodeId) -> ArenaScrollMetrics {
+        let index = node_index(node_id);
+        let layout = self.layout(node_id);
+        let content_size = layout.content_box_size();
+        let client_width = float_to_cells(content_size.width);
+        let client_height = float_to_cells(content_size.height);
+        let scroll_height = match &self.nodes[index].kind {
+            LayoutNodeKind::TextArea(textarea) => {
+                textarea_content_height(&textarea.value, client_width.max(1) as usize)
+                    .max(client_height)
+            }
+            _ => client_height,
+        };
+        let max_top = scroll_height.saturating_sub(client_height);
+        let scroll_top = self.nodes[index].scroll_top.min(max_top);
+
+        ArenaScrollMetrics {
+            scroll_left: 0,
+            scroll_top,
+            scroll_width: client_width,
+            scroll_height,
+            client_width,
+            client_height,
+        }
+    }
+
+    pub(crate) fn ensure_dirty_textareas_visible(&mut self) {
+        let nodes = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| match &node.kind {
+                LayoutNodeKind::TextArea(textarea) if textarea.scroll_cursor_dirty => {
+                    Some(NodeId::from(index))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        for node in nodes {
+            self.ensure_textarea_cursor_visible(node);
+        }
+    }
+
+    pub(crate) fn ensure_textarea_cursor_visible(&mut self, node: NodeId) -> Option<()> {
+        let index = node_index(node);
+        let layout = self.layout(node);
+        let content_size = layout.content_box_size();
+        let viewport_width = float_to_cells(content_size.width).max(1) as usize;
+        let viewport_height = float_to_cells(content_size.height).max(1) as usize;
+        let (value, cursor) = match &self.nodes[index].kind {
+            LayoutNodeKind::TextArea(textarea) => (textarea.value.clone(), textarea.cursor),
+            _ => return None,
+        };
+        let wrapped = WrappedText::new(&value, viewport_width);
+        let (cursor_row, _) = wrapped.cursor_position(cursor as usize);
+        let scroll_height = wrapped.row_count() as u32;
+        let max_top = scroll_height.saturating_sub(viewport_height as u32) as usize;
+        let current = self.nodes[index].scroll_top as usize;
+        let next = textarea_scroll_top_for_cursor(current, cursor_row, viewport_height, max_top);
+
+        let item = &mut self.nodes[index];
+        item.scroll_top = next as u32;
+        if let LayoutNodeKind::TextArea(textarea) = &mut item.kind {
+            textarea.scroll_cursor_dirty = false;
+        }
+        Some(())
     }
 
     fn clear_cache_from(&mut self, node: NodeId) {
@@ -1309,6 +1410,31 @@ fn textarea_scroll_top(cursor_row: usize, viewport_height: usize) -> usize {
     }
 
     cursor_row.saturating_add(1).saturating_sub(viewport_height)
+}
+
+fn textarea_scroll_top_for_cursor(
+    current: usize,
+    cursor_row: usize,
+    viewport_height: usize,
+    max_top: usize,
+) -> usize {
+    if viewport_height == 0 {
+        return 0;
+    }
+
+    if cursor_row < current {
+        return cursor_row.min(max_top);
+    }
+
+    if cursor_row >= current.saturating_add(viewport_height) {
+        return textarea_scroll_top(cursor_row, viewport_height).min(max_top);
+    }
+
+    current.min(max_top)
+}
+
+fn textarea_content_height(value: &str, wrap_width: usize) -> u32 {
+    WrappedText::new(value, wrap_width.max(1)).row_count() as u32
 }
 
 fn image_natural_size(image: &ImageLayoutData) -> Size<f32> {
@@ -2226,6 +2352,34 @@ mod tests {
         let layout = arena.layout(textarea);
         assert_eq!(layout.size.width, 4.0);
         assert_eq!(layout.size.height, 2.0);
+    }
+
+    #[test]
+    fn textarea_reports_scroll_metrics_and_clamps_offset() {
+        let mut arena = LayoutArena::new();
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Length(5.0), CssDimension::Length(2.0)),
+            "a\nb\nc\nd",
+        );
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        let metrics = arena.scroll_metrics(textarea).unwrap();
+        assert_eq!(metrics.client_width, 5);
+        assert_eq!(metrics.client_height, 2);
+        assert_eq!(metrics.scroll_width, 5);
+        assert_eq!(metrics.scroll_height, 4);
+        assert_eq!(metrics.scroll_top, 0);
+
+        let metrics = arena.set_scroll_offset(textarea, 10, 99).unwrap();
+        assert_eq!(metrics.scroll_left, 0);
+        assert_eq!(metrics.scroll_top, 2);
     }
 
     #[test]

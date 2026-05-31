@@ -338,6 +338,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             effective_background(style.placeholder_color, state.foreground);
         let selection_background = style.selection_background.or(state.selection_background);
         let content = content_box_rect(bounds, style);
+        let (_, scroll_top) = self.arena.scroll_offset(id);
 
         push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
         self.output
@@ -354,6 +355,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             selection_background,
             foreground,
             placeholder_foreground,
+            scroll_top as usize,
             state.clip,
         );
         let border_color =
@@ -710,6 +712,7 @@ fn paint_textarea(
     selection_background: Option<Background>,
     foreground: Background,
     placeholder_foreground: Background,
+    scroll_top: usize,
     clip: ClipBounds,
 ) {
     if rect.width() <= 0 || rect.height() <= 0 {
@@ -737,9 +740,13 @@ fn paint_textarea(
         WrappedText::new(&textarea.value, rect.width() as usize)
             .cursor_position(textarea.cursor as usize)
     });
-    let scroll_top = cursor_position
-        .map(|(row, _)| textarea_scroll_top(row, rect.height() as usize))
-        .unwrap_or(0);
+    let scroll_top = if textarea.scroll_cursor_dirty {
+        cursor_position
+            .map(|(row, _)| textarea_scroll_top(row, rect.height() as usize))
+            .unwrap_or(scroll_top)
+    } else {
+        scroll_top
+    };
     for glyph in &layout.glyphs {
         if glyph.row < scroll_top {
             continue;
@@ -1501,6 +1508,28 @@ mod tests {
         assert_eq!(output.frame.cell(0, 0).unwrap().character, 'b');
         assert_eq!(output.frame.cell(0, 1).unwrap().character, 'c');
         assert!(output.frame.cell(1, 1).unwrap().reversed);
+    }
+
+    #[test]
+    fn textarea_paint_uses_stored_scroll_offset() {
+        let mut arena = LayoutArena::new();
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Length(5.0), CssDimension::Length(2.0)),
+            "a\nb\nc",
+        );
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+        arena.set_scroll_offset(textarea, 0, 1).unwrap();
+        let output = paint_arena(&arena, textarea, 5, 2, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'b');
+        assert_eq!(output.frame.cell(0, 1).unwrap().character, 'c');
     }
 
     #[test]

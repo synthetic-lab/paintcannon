@@ -1396,8 +1396,8 @@ export class PaintCannon {
     }
 
     const current = this.getScrollMetrics(scrollTarget) ?? emptyScrollMetrics();
-    const canScrollX = isAxisScrollable(scrollTarget.style.overflowX || scrollTarget.style.overflow);
-    const canScrollY = isAxisScrollable(scrollTarget.style.overflowY || scrollTarget.style.overflow);
+    const canScrollX = isElementAxisScrollable(scrollTarget, 'x');
+    const canScrollY = isElementAxisScrollable(scrollTarget, 'y');
     const nextLeft = canScrollX ? current.scrollLeft + input.deltaX * 4 : current.scrollLeft;
     const nextTop = canScrollY ? current.scrollTop + input.deltaY * 3 : current.scrollTop;
 
@@ -1416,9 +1416,8 @@ export class PaintCannon {
     deltaY: number,
   ): PaintElement | undefined {
     for (const element of this.elementPath(target)) {
-      const overflow = element.style.overflow;
-      const canScrollX = deltaX !== 0 && isAxisScrollable(element.style.overflowX || overflow);
-      const canScrollY = deltaY !== 0 && isAxisScrollable(element.style.overflowY || overflow);
+      const canScrollX = deltaX !== 0 && isElementAxisScrollable(element, 'x');
+      const canScrollY = deltaY !== 0 && isElementAxisScrollable(element, 'y');
       if (canScrollX || canScrollY) {
         return element;
       }
@@ -2217,6 +2216,52 @@ export class TextAreaElement extends InputElement {
     this.setCursorPositionFromNative(cursor);
     return true;
   }
+
+  get scrollLeft(): number {
+    return this.ownerDocument.getScrollLeft(this);
+  }
+
+  set scrollLeft(value: number) {
+    this.ownerDocument.setScrollLeft(this, value);
+  }
+
+  get scrollTop(): number {
+    return this.ownerDocument.getScrollTop(this);
+  }
+
+  set scrollTop(value: number) {
+    this.ownerDocument.setScrollTop(this, value);
+  }
+
+  get scrollWidth(): number {
+    return this.ownerDocument.getScrollWidth(this);
+  }
+
+  get scrollHeight(): number {
+    return this.ownerDocument.getScrollHeight(this);
+  }
+
+  get clientWidth(): number {
+    return this.ownerDocument.getClientWidth(this);
+  }
+
+  get clientHeight(): number {
+    return this.ownerDocument.getClientHeight(this);
+  }
+
+  override addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  override addEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  override addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
+  override addEventListener(type: ElementEventType, listener: ElementEventListener): void {
+    this.ownerDocument.addElementEventListener(this, type, listener);
+  }
+
+  override removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  override removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  override removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
+  override removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
+    this.ownerDocument.removeElementEventListener(this, type, listener);
+  }
 }
 
 export class TextNode {
@@ -2720,6 +2765,17 @@ function isElementEventType(type: string): type is ElementEventType {
 
 function isAxisScrollable(value: string): boolean {
   return value === 'scroll';
+}
+
+function isElementAxisScrollable(element: PaintElement, axis: 'x' | 'y'): boolean {
+  const overflow = axis === 'x'
+    ? element.style.overflowX || element.style.overflow
+    : element.style.overflowY || element.style.overflow;
+  if (isAxisScrollable(overflow)) {
+    return true;
+  }
+
+  return element instanceof TextAreaElement && axis === 'y' && overflow !== 'hidden';
 }
 
 function normalizeScrollOffset(value: number): number {

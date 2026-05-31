@@ -82,6 +82,10 @@ impl WrappedText {
             .unwrap_or(self.end_position)
     }
 
+    pub(crate) fn row_count(&self) -> usize {
+        self.end_position.0 + 1
+    }
+
     pub(crate) fn cursor_after_vertical_move(&self, cursor: usize, direction: i32) -> usize {
         if direction == 0 {
             return cursor.min(self.cursor_positions.len().saturating_sub(1));
