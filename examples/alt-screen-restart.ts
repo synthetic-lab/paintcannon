@@ -55,7 +55,7 @@ function renderGoodbye() {
   goodbye.style.height = 1;
   goodbye.style.backgroundColor = '#111827';
   goodbye.style.color = '#f9fafb';
-  goodbye.appendChild(second.createTextNode('goodbye'));
+  goodbye.appendChild(second.createTextNode(`goodbye ${(new Date()).toISOString()}`));
   second.setRoot(goodbye);
   second.render();
   setTimeout(() => second.stop(), 250);
