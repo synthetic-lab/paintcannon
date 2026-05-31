@@ -153,6 +153,10 @@ impl LayoutArena {
         self.push_node(LayoutNodeKind::Element, style)
     }
 
+    pub(crate) fn reserve_nodes(&mut self, additional: usize) {
+        self.nodes.reserve(additional);
+    }
+
     pub(crate) fn create_text(&mut self, text: impl Into<String>) -> NodeId {
         self.push_node(LayoutNodeKind::Text(text.into()), DivStyle::default())
     }

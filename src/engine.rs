@@ -334,6 +334,37 @@ impl PaintEngine {
         self.register_node(node)
     }
 
+    fn reserve_for_batch(&mut self, commands: &[EngineCommand]) {
+        let mut create_count = 0;
+        let mut append_count = 0;
+        for command in commands {
+            match command {
+                EngineCommand::CreateElement { .. }
+                | EngineCommand::CreateElementWithId { .. }
+                | EngineCommand::CreateText { .. }
+                | EngineCommand::CreateTextWithId { .. }
+                | EngineCommand::CreateImage { .. }
+                | EngineCommand::CreateImageWithId { .. }
+                | EngineCommand::CreateInput { .. }
+                | EngineCommand::CreateInputWithId { .. }
+                | EngineCommand::CreateTextArea { .. }
+                | EngineCommand::CreateTextAreaWithId { .. } => create_count += 1,
+                EngineCommand::AppendChild { .. } => append_count += 1,
+                _ => {}
+            }
+        }
+
+        if create_count > 0 {
+            self.arena.reserve_nodes(create_count);
+            self.dom_to_node.reserve(create_count);
+            self.node_to_dom.reserve(create_count);
+        }
+        if append_count > 0 {
+            self.parents.reserve(append_count);
+            self.children.reserve(append_count);
+        }
+    }
+
     pub(crate) fn create_element_with_id(&mut self, id: DomId, style: DivStyle) -> DomId {
         self.layout_dirty = true;
         let node = self.arena.create_element(style);
@@ -985,7 +1016,7 @@ impl PaintEngine {
     }
 }
 
-fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation) {
+pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation) {
     match mutation {
         StyleMutation::Display(display) => style.display = display,
         StyleMutation::Overflow(overflow) => {
@@ -1083,6 +1114,7 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         EngineCommand::Batch { commands } => {
             let start = Instant::now();
             let command_count = commands.len();
+            engine.reserve_for_batch(&commands);
             for command in commands {
                 if !apply_command(engine, command) {
                     profile_log(

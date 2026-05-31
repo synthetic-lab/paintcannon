@@ -14,8 +14,8 @@ use napi_derive::napi;
 use termprofile::{DetectorSettings, TermProfile};
 
 use crate::engine::{
-    engine_loop, ClickEvent as EngineClickEvent, DomId, EngineCommand, EngineTransitionEvent,
-    MouseClick, StyleMutation,
+    apply_style_mutation, engine_loop, ClickEvent as EngineClickEvent, DomId, EngineCommand,
+    EngineTransitionEvent, MouseClick, StyleMutation,
 };
 use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseEvent, TerminalResizeEvent};
 use crate::layout::ArenaScrollMetrics;
@@ -243,6 +243,7 @@ impl PaintCannon {
         let total_start = Instant::now();
         let input_count = commands.len();
         let mut id_map = HashMap::new();
+        let mut create_command_by_temporary_id = HashMap::new();
         let mut mappings = Vec::new();
         let mut render_commands = Vec::with_capacity(commands.len());
 
@@ -261,6 +262,7 @@ impl PaintCannon {
                         id,
                         style: Default::default(),
                     });
+                    create_command_by_temporary_id.insert(temporary_id, render_commands.len() - 1);
                 }
                 "createSpan" => {
                     let temporary_id = required_i32(command.id, "id", "createSpan")?;
@@ -273,6 +275,7 @@ impl PaintCannon {
                     let mut style = crate::style::DivStyle::default();
                     style.display = crate::style::LayoutDisplay::Inline;
                     render_commands.push(EngineCommand::CreateElementWithId { id, style });
+                    create_command_by_temporary_id.insert(temporary_id, render_commands.len() - 1);
                 }
                 "createText" => {
                     let temporary_id = required_i32(command.id, "id", "createText")?;
@@ -301,6 +304,7 @@ impl PaintCannon {
                         cell_width_px: 1,
                         cell_height_px: 1,
                     });
+                    create_command_by_temporary_id.insert(temporary_id, render_commands.len() - 1);
                 }
                 "createInput" => {
                     let temporary_id = required_i32(command.id, "id", "createInput")?;
@@ -315,6 +319,7 @@ impl PaintCannon {
                         style: Default::default(),
                         value: String::new(),
                     });
+                    create_command_by_temporary_id.insert(temporary_id, render_commands.len() - 1);
                 }
                 "createTextArea" => {
                     let temporary_id = required_i32(command.id, "id", "createTextArea")?;
@@ -329,6 +334,7 @@ impl PaintCannon {
                         style: Default::default(),
                         value: String::new(),
                     });
+                    create_command_by_temporary_id.insert(temporary_id, render_commands.len() - 1);
                 }
                 "setText" => {
                     let id = resolve_batch_id(command.id, "id", "setText", &id_map)?;
@@ -378,11 +384,29 @@ impl PaintCannon {
                     });
                 }
                 "setStyleProperty" => {
+                    let temporary_id = command.id.filter(|id| *id < 0);
                     let id = resolve_batch_id(command.id, "id", "setStyleProperty", &id_map)?;
                     let property =
                         required_string(command.property, "property", "setStyleProperty")?;
                     let value = required_string(command.value, "value", "setStyleProperty")?;
-                    render_commands.push(style_command(id, &property, &value)?);
+                    match style_command(id, &property, &value)? {
+                        EngineCommand::MutateStyle { node, mutation } => {
+                            if let Some(temporary_id) = temporary_id {
+                                if let Some(command_index) =
+                                    create_command_by_temporary_id.get(&temporary_id).copied()
+                                {
+                                    if let Some(style) = create_command_style_mut(
+                                        &mut render_commands[command_index],
+                                    ) {
+                                        apply_style_mutation(style, mutation);
+                                        continue;
+                                    }
+                                }
+                            }
+                            render_commands.push(EngineCommand::MutateStyle { node, mutation });
+                        }
+                        command => render_commands.push(command),
+                    }
                 }
                 value => {
                     return Err(Error::from_reason(format!(
@@ -689,6 +713,16 @@ impl PaintCannon {
     }
 }
 
+fn create_command_style_mut(command: &mut EngineCommand) -> Option<&mut crate::style::DivStyle> {
+    match command {
+        EngineCommand::CreateElementWithId { style, .. }
+        | EngineCommand::CreateImageWithId { style, .. }
+        | EngineCommand::CreateInputWithId { style, .. }
+        | EngineCommand::CreateTextAreaWithId { style, .. } => Some(style),
+        _ => None,
+    }
+}
+
 fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> {
     let node = DomId(id);
     let mutation = match property {
@@ -907,5 +941,39 @@ fn profile_log(label: &str, duration: std::time::Duration, fields: &[(&str, Stri
 impl Drop for PaintCannon {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::CssDimension;
+
+    #[test]
+    fn can_fold_style_mutation_into_create_command() {
+        let mut command = EngineCommand::CreateElementWithId {
+            id: DomId(1),
+            style: Default::default(),
+        };
+
+        let style = create_command_style_mut(&mut command).expect("create command has style");
+        apply_style_mutation(style, StyleMutation::Width(CssDimension::Percent(1.0)));
+
+        match command {
+            EngineCommand::CreateElementWithId { style, .. } => {
+                assert!(matches!(style.width, CssDimension::Percent(value) if value == 1.0));
+            }
+            _ => panic!("expected create element command"),
+        }
+    }
+
+    #[test]
+    fn text_create_command_has_no_foldable_style() {
+        let mut command = EngineCommand::CreateTextWithId {
+            id: DomId(1),
+            text: "hello".to_string(),
+        };
+
+        assert!(create_command_style_mut(&mut command).is_none());
     }
 }
