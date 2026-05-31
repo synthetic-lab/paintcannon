@@ -27,6 +27,7 @@ pub(crate) struct DivStyle {
     pub(crate) column_gap: CssLengthPercentage,
     pub(crate) width: CssDimension,
     pub(crate) height: CssDimension,
+    pub(crate) min_height: CssDimension,
     pub(crate) grid_template_columns: Vec<CssGridTemplateTrack>,
     pub(crate) grid_template_rows: Vec<CssGridTemplateTrack>,
     pub(crate) grid_auto_columns: Vec<CssTrackSizing>,
@@ -67,6 +68,7 @@ impl Default for DivStyle {
             column_gap: CssLengthPercentage::Length(0.0),
             width: CssDimension::Auto,
             height: CssDimension::Auto,
+            min_height: CssDimension::Length(0.0),
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
             grid_auto_columns: Vec::new(),
@@ -543,7 +545,10 @@ impl DivStyle {
                 width: self.width.to_taffy(),
                 height: self.height.to_taffy(),
             },
-            min_size: Size::zero(),
+            min_size: Size {
+                width: Dimension::length(0.0),
+                height: self.min_height.to_taffy(),
+            },
             border: Rect {
                 left: border_size(self.border_left),
                 right: border_size(self.border_right),

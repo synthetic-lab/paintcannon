@@ -22,7 +22,7 @@ export interface TerminalSize {
 export type AnimationFrameCallback = (timestamp: number) => void;
 export type KeyboardEventType = 'keydown' | 'keyup';
 export type PaintCannonEventType = KeyboardEventType | 'resize';
-export type KeyboardEventListener = (event: KeyboardEvent) => void;
+export type KeyboardEventListener = (event: PaintKeyboardEvent) => void;
 export type ResizeEventListener = (event: PaintResizeEvent) => void;
 export type MouseElementEventType = 'click' | 'mouseenter' | 'mouseleave' | 'mousemove';
 export type TransitionElementEventType = 'transitionstart' | 'transitionend';
@@ -66,7 +66,7 @@ export type CSSCursor =
   | 'zoom-in'
   | 'zoom-out';
 
-export interface KeyboardEvent {
+export interface NativeKeyboardEvent {
   type: KeyboardEventType;
   key: string;
   code: string;
@@ -76,6 +76,35 @@ export interface KeyboardEvent {
   shiftKey: boolean;
   repeat: boolean;
 }
+
+export class PaintKeyboardEvent {
+  readonly type: KeyboardEventType;
+  readonly key: string;
+  readonly code: string;
+  readonly ctrlKey: boolean;
+  readonly altKey: boolean;
+  readonly metaKey: boolean;
+  readonly shiftKey: boolean;
+  readonly repeat: boolean;
+  defaultPrevented = false;
+
+  constructor(event: NativeKeyboardEvent) {
+    this.type = event.type;
+    this.key = event.key;
+    this.code = event.code;
+    this.ctrlKey = event.ctrlKey;
+    this.altKey = event.altKey;
+    this.metaKey = event.metaKey;
+    this.shiftKey = event.shiftKey;
+    this.repeat = event.repeat;
+  }
+
+  preventDefault(): void {
+    this.defaultPrevented = true;
+  }
+}
+
+export type KeyboardEvent = PaintKeyboardEvent;
 
 export interface TerminalMouseEvent {
   type: 'click' | 'mousemove' | 'wheel' | string;
@@ -145,6 +174,7 @@ export interface NativePaintCannon {
   createSpan(): number;
   createImage(): number;
   createInput(): number;
+  createTextArea(): number;
   createTextNode(text: string): number;
   setTextNodeValue(id: number, text: string): void;
   setImageSource(id: number, src: string): void;
@@ -158,7 +188,7 @@ export interface NativePaintCannon {
   readonly kittyKeyboardEnabled: boolean;
   render(): void;
   renderSync(): void;
-  drainKeyboardEvents(): KeyboardEvent[];
+  drainKeyboardEvents(): NativeKeyboardEvent[];
   drainMouseEvents(): TerminalMouseEvent[];
   drainResizeEvents(): TerminalResizeEvent[];
   drainTransitionEvents(): NativeTransitionEvent[];
@@ -191,7 +221,8 @@ export interface NativeBinding {
   ) => NativePaintCannon;
 }
 
-export type PaintElement = DivElement | SpanElement | ImageElement | InputElement;
+type TextControlElement = InputElement | TextAreaElement;
+export type PaintElement = DivElement | SpanElement | ImageElement | InputElement | TextAreaElement;
 export type PaintNode = PaintElement | TextNode;
 
 export const native: NativeBinding = loadNativeBinding();
@@ -213,8 +244,8 @@ export class PaintCannon {
   private readonly captureCtrlZ: boolean;
   private readonly captureMouse: boolean;
   private readonly animationFrameCallbacks = new Map<number, AnimationFrameCallback>();
-  private readonly inputElements: InputElement[] = [];
-  private focusedInput: InputElement | undefined;
+  private readonly textControls: TextControlElement[] = [];
+  private focusedTextControl: TextControlElement | undefined;
   private readonly keyboardEventListeners: Record<KeyboardEventType, Set<KeyboardEventListener>> = {
     keydown: new Set(),
     keyup: new Set(),
@@ -261,6 +292,7 @@ export class PaintCannon {
   createElement(tagName: 'span'): SpanElement;
   createElement(tagName: 'img'): ImageElement;
   createElement(tagName: 'input'): InputElement;
+  createElement(tagName: 'textarea'): TextAreaElement;
   createElement(tagName: string): PaintElement {
     if (tagName === 'div') {
       const element = new DivElement(
@@ -301,11 +333,23 @@ export class PaintCannon {
         (id, property, value) => this.setNativeStyleProperty(id, property, value),
       );
       this.registerElement(element);
-      this.inputElements.push(element);
+      this.textControls.push(element);
+      return element;
+    }
+    if (tagName === 'textarea') {
+      const element = new TextAreaElement(
+        this,
+        this.createNativeTextArea(),
+        (id, value, cursor) => this.setNativeInputValue(id, value, cursor),
+        (id, focused) => this.setNativeInputFocused(id, focused),
+        (id, property, value) => this.setNativeStyleProperty(id, property, value),
+      );
+      this.registerElement(element);
+      this.textControls.push(element);
       return element;
     }
 
-    throw new Error(`paintcannon only supports <div>, <span>, <img>, and <input> right now, got <${tagName}>`);
+    throw new Error(`paintcannon only supports <div>, <span>, <img>, <input>, and <textarea> right now, got <${tagName}>`);
   }
 
   createTextNode(data: string): TextNode {
@@ -523,7 +567,7 @@ export class PaintCannon {
   }
 
   private setParent(child: PaintNode, parent: PaintElement): void {
-    if (child instanceof DivElement || child instanceof SpanElement || child instanceof ImageElement || child instanceof InputElement) {
+    if (child instanceof DivElement || child instanceof SpanElement || child instanceof ImageElement || child instanceof InputElement || child instanceof TextAreaElement) {
       this.parents.set(child.id, parent);
     }
   }
@@ -601,6 +645,16 @@ export class PaintCannon {
 
     const id = this.allocateTemporaryId();
     this.batchCommands.push({ type: 'createInput', id });
+    return id;
+  }
+
+  private createNativeTextArea(): number {
+    if (!this.isTransactionActive()) {
+      return this.binding.createTextArea();
+    }
+
+    const id = this.allocateTemporaryId();
+    this.batchCommands.push({ type: 'createTextArea', id });
     return id;
   }
 
@@ -747,7 +801,7 @@ export class PaintCannon {
       this.elements.set(element.id, element);
     }
     for (const node of this.batchNodes.values()) {
-      if (node instanceof DivElement || node instanceof SpanElement || node instanceof ImageElement || node instanceof InputElement) {
+      if (node instanceof DivElement || node instanceof SpanElement || node instanceof ImageElement || node instanceof InputElement || node instanceof TextAreaElement) {
         this.elements.set(node.id, node);
       }
     }
@@ -838,18 +892,19 @@ export class PaintCannon {
     const events = this.binding.drainKeyboardEvents();
     let handledAnyEvent = false;
     if (events.length > 0) {
-      for (const event of events) {
+      for (const nativeEvent of events) {
+        const event = new PaintKeyboardEvent(nativeEvent);
         if (this.handleDefaultControlEvent(event)) {
           return;
-        }
-
-        if (this.handleDefaultInputEvent(event)) {
-          handledAnyEvent = true;
         }
 
         const listeners = Array.from(this.keyboardEventListeners[event.type] ?? []);
         for (const listener of listeners) {
           listener(event);
+        }
+
+        if (!event.defaultPrevented && this.handleDefaultInputEvent(event)) {
+          handledAnyEvent = true;
         }
       }
       handledAnyEvent = true;
@@ -897,7 +952,7 @@ export class PaintCannon {
       this.resizeEventListeners.size > 0 ||
       this.hasElementEventListeners('transitionstart') ||
       this.hasElementEventListeners('transitionend') ||
-      this.inputElements.length > 0 ||
+      this.textControls.length > 0 ||
       !this.captureCtrlZ ||
       this.captureMouse
     );
@@ -933,7 +988,7 @@ export class PaintCannon {
       return this.focusNextInput(event.shiftKey ? -1 : 1);
     }
 
-    const input = this.focusedInput;
+    const input = this.focusedTextControl;
     if (input === undefined || event.altKey || event.metaKey) {
       return false;
     }
@@ -953,12 +1008,38 @@ export class PaintCannon {
       case 'ArrowRight':
         input.cursorPosition += 1;
         return true;
+      case 'ArrowUp':
+        if (input instanceof TextAreaElement) {
+          moveTextAreaCursorVertically(input, -1);
+          return true;
+        }
+        return false;
+      case 'ArrowDown':
+        if (input instanceof TextAreaElement) {
+          moveTextAreaCursorVertically(input, 1);
+          return true;
+        }
+        return false;
       case 'Home':
-        input.cursorToStart();
+        if (input instanceof TextAreaElement) {
+          moveTextAreaCursorToLineStart(input);
+        } else {
+          input.cursorToStart();
+        }
         return true;
       case 'End':
-        input.cursorToEnd();
+        if (input instanceof TextAreaElement) {
+          moveTextAreaCursorToLineEnd(input);
+        } else {
+          input.cursorToEnd();
+        }
         return true;
+      case 'Enter':
+        if (input instanceof TextAreaElement) {
+          input.insertText('\n');
+          return true;
+        }
+        return false;
       default:
         if (event.key.length === 1) {
           input.insertText(event.key);
@@ -971,10 +1052,18 @@ export class PaintCannon {
   private handleInputControlKey(input: InputElement, event: KeyboardEvent): boolean {
     switch (event.code) {
       case 'KeyA':
-        input.cursorToStart();
+        if (input instanceof TextAreaElement) {
+          moveTextAreaCursorToLineStart(input);
+        } else {
+          input.cursorToStart();
+        }
         return true;
       case 'KeyE':
-        input.cursorToEnd();
+        if (input instanceof TextAreaElement) {
+          moveTextAreaCursorToLineEnd(input);
+        } else {
+          input.cursorToEnd();
+        }
         return true;
       case 'KeyB':
         input.cursorPosition -= 1;
@@ -997,40 +1086,40 @@ export class PaintCannon {
     }
   }
 
-  focusInput(element: InputElement): void {
-    if (this.focusedInput === element) {
+  focusInput(element: TextControlElement): void {
+    if (this.focusedTextControl === element) {
       return;
     }
 
-    this.focusedInput?.setFocused(false);
-    this.focusedInput = element;
+    this.focusedTextControl?.setFocused(false);
+    this.focusedTextControl = element;
     element.setFocused(true);
     this.render();
   }
 
-  blurInput(element: InputElement): void {
-    if (this.focusedInput !== element) {
+  blurInput(element: TextControlElement): void {
+    if (this.focusedTextControl !== element) {
       return;
     }
 
     element.setFocused(false);
-    this.focusedInput = undefined;
+    this.focusedTextControl = undefined;
     this.render();
   }
 
   private focusNextInput(direction: 1 | -1): boolean {
-    if (this.inputElements.length === 0) {
+    if (this.textControls.length === 0) {
       return false;
     }
 
-    const currentIndex = this.focusedInput === undefined
+    const currentIndex = this.focusedTextControl === undefined
       ? -1
-      : this.inputElements.indexOf(this.focusedInput);
+      : this.textControls.indexOf(this.focusedTextControl);
     const start = currentIndex < 0
       ? (direction === 1 ? -1 : 0)
       : currentIndex;
-    const nextIndex = (start + direction + this.inputElements.length) % this.inputElements.length;
-    this.focusInput(this.inputElements[nextIndex]);
+    const nextIndex = (start + direction + this.textControls.length) % this.textControls.length;
+    this.focusInput(this.textControls[nextIndex]);
     return true;
   }
 
@@ -1094,7 +1183,7 @@ export class PaintCannon {
     const targetId = this.binding.targetIdForPoint(input.x, input.y);
     const target = targetId === null ? undefined : this.elements.get(targetId);
 
-    if (input.type === 'click' && !hasClick && !(target instanceof InputElement)) {
+    if (input.type === 'click' && !hasClick && !isTextControl(target)) {
       return false;
     }
 
@@ -1110,7 +1199,7 @@ export class PaintCannon {
 
     if (input.type === 'click' && target !== undefined) {
       let handled = false;
-      if (target instanceof InputElement) {
+      if (isTextControl(target)) {
         this.focusInput(target);
         handled = true;
       }
@@ -1856,6 +1945,16 @@ export class InputElement {
   }
 }
 
+export class TextAreaElement extends InputElement {
+  override get type(): string {
+    return 'textarea';
+  }
+
+  override set type(value: string) {
+    throw new Error(`textarea does not support input type assignment, got "${String(value)}"`);
+  }
+}
+
 export class TextNode {
   readonly ownerDocument: PaintCannon;
 
@@ -2084,6 +2183,14 @@ export class CSSStyleDeclaration {
     this.setProperty('height', value);
   }
 
+  get minHeight(): string {
+    return this.getPropertyValue('min-height');
+  }
+
+  set minHeight(value: string | number) {
+    this.setProperty('min-height', value);
+  }
+
   get imageRendering(): ImageRendering | string {
     return this.getPropertyValue('image-rendering');
   }
@@ -2270,15 +2377,72 @@ export class CSSStyleDeclaration {
 }
 
 function assertElement(value: unknown): asserts value is PaintElement {
-  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement) && !(value instanceof InputElement)) {
+  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement) && !(value instanceof InputElement) && !(value instanceof TextAreaElement)) {
     throw new TypeError('expected a paintcannon element');
   }
 }
 
 function assertPaintNode(value: unknown): asserts value is PaintNode {
-  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement) && !(value instanceof InputElement) && !(value instanceof TextNode)) {
+  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement) && !(value instanceof InputElement) && !(value instanceof TextAreaElement) && !(value instanceof TextNode)) {
     throw new TypeError('expected a paintcannon node');
   }
+}
+
+function isTextControl(value: unknown): value is TextControlElement {
+  return value instanceof InputElement || value instanceof TextAreaElement;
+}
+
+function moveTextAreaCursorToLineStart(input: TextAreaElement): void {
+  const chars = Array.from(input.value);
+  input.cursorPosition = lineStart(chars, input.cursorPosition);
+}
+
+function moveTextAreaCursorToLineEnd(input: TextAreaElement): void {
+  const chars = Array.from(input.value);
+  input.cursorPosition = lineEnd(chars, input.cursorPosition);
+}
+
+function moveTextAreaCursorVertically(input: TextAreaElement, direction: -1 | 1): void {
+  const chars = Array.from(input.value);
+  const cursor = Math.max(0, Math.min(chars.length, input.cursorPosition));
+  const currentStart = lineStart(chars, cursor);
+  const currentEnd = lineEnd(chars, cursor);
+  const column = cursor - currentStart;
+
+  if (direction < 0) {
+    if (currentStart === 0) {
+      return;
+    }
+
+    const previousEnd = currentStart - 1;
+    const previousStart = lineStart(chars, previousEnd);
+    input.cursorPosition = Math.min(previousStart + column, previousEnd);
+    return;
+  }
+
+  if (currentEnd >= chars.length) {
+    return;
+  }
+
+  const nextStart = currentEnd + 1;
+  const nextEnd = lineEnd(chars, nextStart);
+  input.cursorPosition = Math.min(nextStart + column, nextEnd);
+}
+
+function lineStart(chars: string[], cursor: number): number {
+  let index = Math.max(0, Math.min(chars.length, Math.floor(cursor)));
+  while (index > 0 && chars[index - 1] !== '\n') {
+    index -= 1;
+  }
+  return index;
+}
+
+function lineEnd(chars: string[], cursor: number): number {
+  let index = Math.max(0, Math.min(chars.length, Math.floor(cursor)));
+  while (index < chars.length && chars[index] !== '\n') {
+    index += 1;
+  }
+  return index;
 }
 
 function isElementEventType(type: string): type is ElementEventType {

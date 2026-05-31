@@ -23,6 +23,7 @@
     "demo:scroll-percent": "npm run build:debug && node dist/examples/scroll-percent.js",
     "demo:scroll-percent-static": "npm run build:debug && node dist/examples/scroll-percent-static.js",
     "demo:spans": "npm run build:debug && node dist/examples/spans.js",
+    "demo:textarea": "npm run build:debug && node dist/examples/textarea.js",
     "demo:transitions": "npm run build:debug && node dist/examples/transitions.js",
     "probe:tmux-pointer": "npm run build:debug && node dist/examples/tmux-pointer-probe.js"
   },

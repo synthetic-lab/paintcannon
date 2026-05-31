@@ -126,6 +126,13 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn create_text_area(&mut self) -> Result<u32> {
+        let id = self.allocate_id();
+        self.send(RenderCommand::CreateTextArea { id })?;
+        Ok(id)
+    }
+
+    #[napi]
     pub fn create_text_node(&mut self, text: String) -> Result<u32> {
         let id = self.allocate_id();
         self.send(RenderCommand::CreateText { id, text })?;
@@ -210,6 +217,13 @@ impl PaintCannon {
                     id_map.insert(temporary_id, id);
                     mappings.push(BatchIdMapping { temporary_id, id });
                     render_commands.push(RenderCommand::CreateInput { id });
+                }
+                "createTextArea" => {
+                    let temporary_id = required_i32(command.id, "id", "createTextArea")?;
+                    let id = self.allocate_id();
+                    id_map.insert(temporary_id, id);
+                    mappings.push(BatchIdMapping { temporary_id, id });
+                    render_commands.push(RenderCommand::CreateTextArea { id });
                 }
                 "setText" => {
                     let id = resolve_batch_id(command.id, "id", "setText", &id_map)?;
@@ -602,6 +616,10 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<RenderCommand> 
         "height" => RenderCommand::SetHeight {
             id,
             height: parse_dimension(value)?,
+        },
+        "min-height" | "minHeight" => RenderCommand::SetMinHeight {
+            id,
+            min_height: parse_dimension(value)?,
         },
         "border" => RenderCommand::SetBorder {
             id,

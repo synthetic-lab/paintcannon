@@ -16,6 +16,7 @@ use napi_derive::napi;
 use taffy::geometry::Point;
 use taffy::prelude::*;
 use termprofile::{DetectorSettings, TermProfile};
+use unicode_width::UnicodeWidthChar;
 
 use crate::style::*;
 use crate::terminal::{
@@ -37,6 +38,9 @@ pub(crate) enum RenderCommand {
         id: u32,
     },
     CreateInput {
+        id: u32,
+    },
+    CreateTextArea {
         id: u32,
     },
     CreateText {
@@ -172,6 +176,10 @@ pub(crate) enum RenderCommand {
     SetHeight {
         id: u32,
         height: CssDimension,
+    },
+    SetMinHeight {
+        id: u32,
+        min_height: CssDimension,
     },
     SetBorder {
         id: u32,
@@ -352,6 +360,7 @@ enum DomNode {
     Span(SpanNode),
     Image(ImageNode),
     Input(InputNode),
+    TextArea(TextAreaNode),
     Text(TextNode),
 }
 
@@ -429,6 +438,25 @@ struct InputNode {
 }
 
 impl Default for InputNode {
+    fn default() -> Self {
+        Self {
+            style: DivStyle::default(),
+            value: String::new(),
+            cursor: 0,
+            focused: false,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct TextAreaNode {
+    style: DivStyle,
+    value: String,
+    cursor: u32,
+    focused: bool,
+}
+
+impl Default for TextAreaNode {
     fn default() -> Self {
         Self {
             style: DivStyle::default(),
@@ -561,6 +589,13 @@ impl Renderer {
                     self.taffy_ids.insert(id, taffy_id);
                 }
                 self.nodes.insert(id, DomNode::Input(node));
+            }
+            RenderCommand::CreateTextArea { id } => {
+                let node = TextAreaNode::default();
+                if let Ok(taffy_id) = self.taffy.new_leaf(textarea_taffy_style(&node)) {
+                    self.taffy_ids.insert(id, taffy_id);
+                }
+                self.nodes.insert(id, DomNode::TextArea(node));
             }
             RenderCommand::CreateText { id, text } => {
                 let node = TextNode {
@@ -716,6 +751,9 @@ impl Renderer {
             RenderCommand::SetHeight { id, height } => {
                 self.update_style(id, |node| node.height = height);
             }
+            RenderCommand::SetMinHeight { id, min_height } => {
+                self.update_style(id, |node| node.min_height = min_height);
+            }
             RenderCommand::SetBorder { id, style } => {
                 self.update_style(id, |node| {
                     node.border_top = style;
@@ -824,6 +862,7 @@ impl Renderer {
             DomNode::Span(node) => Some(&mut node.children),
             DomNode::Image(_) => None,
             DomNode::Input(_) => None,
+            DomNode::TextArea(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -834,6 +873,7 @@ impl Renderer {
             DomNode::Span(node) => Some(&mut node.style),
             DomNode::Image(node) => Some(&mut node.style),
             DomNode::Input(node) => Some(&mut node.style),
+            DomNode::TextArea(node) => Some(&mut node.style),
             DomNode::Text(_) => None,
         }
     }
@@ -865,11 +905,21 @@ impl Renderer {
 
     fn set_input_value(&mut self, id: u32, value: String, cursor: u32) {
         let mut natural_size_changed = false;
-        if let Some(DomNode::Input(node)) = self.nodes.get_mut(&id) {
-            let previous_width = input_natural_width(node);
-            node.value = value;
-            node.cursor = cursor.min(node.value.chars().count() as u32);
-            natural_size_changed = previous_width != input_natural_width(node);
+        match self.nodes.get_mut(&id) {
+            Some(DomNode::Input(node)) => {
+                let previous_width = input_natural_width(node);
+                node.value = value;
+                node.cursor = cursor.min(node.value.chars().count() as u32);
+                natural_size_changed = previous_width != input_natural_width(node);
+            }
+            Some(DomNode::TextArea(node)) => {
+                let previous = textarea_natural_size(node, textarea_explicit_width(node));
+                node.value = value;
+                node.cursor = cursor.min(node.value.chars().count() as u32);
+                natural_size_changed =
+                    previous != textarea_natural_size(node, textarea_explicit_width(node));
+            }
+            _ => {}
         }
 
         if natural_size_changed {
@@ -879,8 +929,10 @@ impl Renderer {
     }
 
     fn set_input_focused(&mut self, id: u32, focused: bool) {
-        if let Some(DomNode::Input(node)) = self.nodes.get_mut(&id) {
-            node.focused = focused;
+        match self.nodes.get_mut(&id) {
+            Some(DomNode::Input(node)) => node.focused = focused,
+            Some(DomNode::TextArea(node)) => node.focused = focused,
+            _ => {}
         }
     }
 
@@ -1079,6 +1131,7 @@ impl Renderer {
             }
             DomNode::Image(_) => false,
             DomNode::Input(_) => false,
+            DomNode::TextArea(_) => false,
             DomNode::Text(_) => false,
         }
     }
@@ -1090,6 +1143,7 @@ impl Renderer {
             Some(DomNode::Span(node)) => node.style.display == LayoutDisplay::Inline,
             Some(DomNode::Image(node)) => node.style.display == LayoutDisplay::Inline,
             Some(DomNode::Input(node)) => node.style.display == LayoutDisplay::Inline,
+            Some(DomNode::TextArea(node)) => node.style.display == LayoutDisplay::Inline,
             None => false,
         }
     }
@@ -1100,6 +1154,7 @@ impl Renderer {
             DomNode::Span(node) => Some(node.style.to_taffy()),
             DomNode::Image(node) => Some(image_taffy_style(node, query_terminal_size())),
             DomNode::Input(node) => Some(input_taffy_style(node)),
+            DomNode::TextArea(node) => Some(textarea_taffy_style(node)),
             DomNode::Text(node) => Some(node.style()),
         }
     }
@@ -1124,6 +1179,7 @@ impl Renderer {
             }
             DomNode::Image(_) => return Vec::new(),
             DomNode::Input(_) => return Vec::new(),
+            DomNode::TextArea(_) => return Vec::new(),
             DomNode::Text(_) => return Vec::new(),
         };
 
@@ -1139,6 +1195,7 @@ impl Renderer {
             DomNode::Span(node) => Some((&mut node.scroll_left, &mut node.scroll_top)),
             DomNode::Image(_) => None,
             DomNode::Input(_) => None,
+            DomNode::TextArea(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -1149,6 +1206,7 @@ impl Renderer {
             DomNode::Span(node) => Some((node.scroll_left, node.scroll_top)),
             DomNode::Image(_) => None,
             DomNode::Input(_) => None,
+            DomNode::TextArea(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -1184,6 +1242,7 @@ impl Renderer {
             )),
             DomNode::Image(_) => None,
             DomNode::Input(_) => None,
+            DomNode::TextArea(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -1314,6 +1373,7 @@ impl Renderer {
             DomNode::Span(node) => Some(node.children.clone()),
             DomNode::Image(_) => None,
             DomNode::Input(_) => None,
+            DomNode::TextArea(_) => None,
             DomNode::Text(_) => None,
         };
         let Some(children) = children else {
@@ -1406,6 +1466,7 @@ impl Renderer {
                 }
                 DomNode::Image(_) => {}
                 DomNode::Input(_) => {}
+                DomNode::TextArea(_) => {}
                 DomNode::Text(_) => {}
             }
         }
@@ -1653,6 +1714,41 @@ impl Renderer {
                     clip,
                 );
             }
+            DomNode::TextArea(node) => {
+                let selection_background = effective_selection_background(
+                    node.style.selection_background,
+                    selection_background,
+                );
+                let node_foreground = self
+                    .paint_color(id, ColorTransitionProperty::Color, now)
+                    .unwrap_or(node.style.color);
+                let foreground = effective_foreground(node_foreground, foreground);
+                let background = self
+                    .paint_color(id, ColorTransitionProperty::BackgroundColor, now)
+                    .unwrap_or(node.style.background);
+                push_hit_region(hit_regions, id, bounds, clip);
+                frame.fill_rect(bounds, background, selection_background, clip);
+                frame.clear_chunky_rounded_corners(bounds, &node.style, clip);
+                frame.write_textarea(
+                    content_box_rect(bounds, &node.style),
+                    &node.value,
+                    node.cursor,
+                    node.focused,
+                    foreground,
+                    selection_background,
+                    clip,
+                );
+                let border_color = self
+                    .paint_color(id, ColorTransitionProperty::BorderColor, now)
+                    .unwrap_or(node.style.border_color);
+                frame.stroke_border(
+                    bounds,
+                    &node.style,
+                    border_color,
+                    selection_background,
+                    clip,
+                );
+            }
         }
     }
 
@@ -1744,6 +1840,9 @@ impl Renderer {
                     has_inline_element = true;
                 }
                 Some(DomNode::Input(node)) if node.style.display == LayoutDisplay::Inline => {
+                    has_inline_element = true;
+                }
+                Some(DomNode::TextArea(node)) if node.style.display == LayoutDisplay::Inline => {
                     has_inline_element = true;
                 }
                 _ => return false,
@@ -1893,7 +1992,23 @@ impl Renderer {
                     clip,
                 );
             }
-            Some(DomNode::Div(_)) | Some(DomNode::Image(_)) | Some(DomNode::Input(_)) | None => {}
+            Some(DomNode::TextArea(node)) if node.style.display == LayoutDisplay::Inline => {
+                write_inline_textarea(
+                    id,
+                    node,
+                    cursor,
+                    frame,
+                    hit_regions,
+                    hit_target,
+                    foreground,
+                    clip,
+                );
+            }
+            Some(DomNode::Div(_))
+            | Some(DomNode::Image(_))
+            | Some(DomNode::Input(_))
+            | Some(DomNode::TextArea(_))
+            | None => {}
         }
     }
 
@@ -2473,6 +2588,7 @@ fn node_style(node: &DomNode) -> Option<&DivStyle> {
         DomNode::Span(node) => Some(&node.style),
         DomNode::Image(node) => Some(&node.style),
         DomNode::Input(node) => Some(&node.style),
+        DomNode::TextArea(node) => Some(&node.style),
         DomNode::Text(_) => None,
     }
 }
@@ -2730,6 +2846,217 @@ fn input_cell_size(node: &InputNode) -> (u32, u32) {
     (width.max(1), height.max(1))
 }
 
+fn textarea_taffy_style(node: &TextAreaNode) -> Style {
+    let mut style = node.style.to_taffy();
+    let natural = textarea_natural_size(node, textarea_explicit_width(node));
+
+    if matches!(node.style.width, CssDimension::Auto) {
+        style.size.width = Dimension::length(natural.0 as f32);
+    }
+    if matches!(node.style.height, CssDimension::Auto) {
+        style.size.height = Dimension::length(natural.1 as f32);
+    }
+
+    style
+}
+
+fn textarea_natural_size(node: &TextAreaNode, wrap_width: Option<usize>) -> (u32, u32) {
+    let layout = TextLayout::new(&node.value, wrap_width, TextWrapMode::Word);
+    (layout.width.max(1) as u32, layout.height.max(1) as u32)
+}
+
+fn textarea_cell_size(node: &TextAreaNode) -> (u32, u32) {
+    let explicit_width = textarea_explicit_width(node);
+    let natural = textarea_natural_size(node, explicit_width);
+    let width = match node.style.width {
+        CssDimension::Length(value) => value.max(0.0).round() as u32,
+        _ => natural.0,
+    };
+    let height = match node.style.height {
+        CssDimension::Length(value) => value.max(0.0).round() as u32,
+        _ => natural.1,
+    };
+
+    (width.max(1), height.max(1))
+}
+
+fn textarea_explicit_width(node: &TextAreaNode) -> Option<usize> {
+    match node.style.width {
+        CssDimension::Length(value) => Some((value.max(0.0).round() as usize).max(1)),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TextWrapMode {
+    Word,
+}
+
+#[derive(Clone)]
+struct TextLayout {
+    glyphs: Vec<PositionedGlyph>,
+    cursor_positions: Vec<(usize, usize)>,
+    width: usize,
+    height: usize,
+    wrap_width: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct PositionedGlyph {
+    character: char,
+    row: usize,
+    col: usize,
+    width: usize,
+}
+
+impl TextLayout {
+    fn new(text: &str, wrap_width: Option<usize>, wrap_mode: TextWrapMode) -> Self {
+        Self::new_with_start_col(text, wrap_width, 0, wrap_mode)
+    }
+
+    fn new_with_start_col(
+        text: &str,
+        wrap_width: Option<usize>,
+        start_col: usize,
+        wrap_mode: TextWrapMode,
+    ) -> Self {
+        let chars = text.chars().collect::<Vec<_>>();
+        let mut layout = Self {
+            glyphs: Vec::new(),
+            cursor_positions: vec![(0, start_col); chars.len() + 1],
+            width: start_col,
+            height: 1,
+            wrap_width: wrap_width.map(|width| width.max(1)),
+        };
+
+        match wrap_mode {
+            TextWrapMode::Word => layout.layout_word_wrapped(&chars, start_col),
+        }
+
+        layout
+    }
+
+    fn cursor_position(&self, cursor: usize) -> (usize, usize) {
+        let (row, col) = self.cursor_positions[cursor.min(self.cursor_positions.len() - 1)];
+        if let Some(width) = self.wrap_width {
+            (row, col.min(width.saturating_sub(1)))
+        } else {
+            (row, col)
+        }
+    }
+
+    fn end_position(&self) -> (usize, usize) {
+        self.cursor_positions[self.cursor_positions.len() - 1]
+    }
+
+    fn layout_word_wrapped(&mut self, chars: &[char], start_col: usize) {
+        let mut row = 0;
+        let mut col = start_col;
+        let mut index = 0;
+
+        while index < chars.len() {
+            self.cursor_positions[index] = (row, col);
+            let character = chars[index];
+
+            if character == '\r' {
+                index += 1;
+                continue;
+            }
+
+            if character == '\n' {
+                row += 1;
+                col = 0;
+                self.height = self.height.max(row + 1);
+                index += 1;
+                continue;
+            }
+
+            if !character.is_whitespace() {
+                let word_end = next_word_end(chars, index);
+                let word_width = text_width(&chars[index..word_end]);
+                if self.should_wrap_before(col, word_width) {
+                    row += 1;
+                    col = 0;
+                    self.height = self.height.max(row + 1);
+                }
+                while index < word_end {
+                    self.cursor_positions[index] = (row, col);
+                    let width = character_cell_width(chars[index]);
+                    if self.should_wrap_before(col, width) {
+                        row += 1;
+                        col = 0;
+                        self.height = self.height.max(row + 1);
+                        self.cursor_positions[index] = (row, col);
+                    }
+                    self.push_glyph(chars[index], row, col, width);
+                    col += width;
+                    self.width = self.width.max(col);
+                    index += 1;
+                }
+                continue;
+            }
+
+            let width = character_cell_width(character);
+            if self.should_wrap_before(col, width) {
+                row += 1;
+                col = 0;
+                self.height = self.height.max(row + 1);
+                if character == ' ' || character == '\t' {
+                    index += 1;
+                    continue;
+                }
+                self.cursor_positions[index] = (row, col);
+            }
+            self.push_glyph(character, row, col, width);
+            col += width;
+            self.width = self.width.max(col);
+            index += 1;
+        }
+
+        self.cursor_positions[chars.len()] = (row, col);
+        self.height = self.height.max(row + 1);
+        self.width = self.width.max(1);
+    }
+
+    fn should_wrap_before(&self, col: usize, next_width: usize) -> bool {
+        matches!(self.wrap_width, Some(width) if col > 0 && next_width > 0 && col + next_width > width)
+    }
+
+    fn push_glyph(&mut self, character: char, row: usize, col: usize, width: usize) {
+        if width == 0 {
+            return;
+        }
+        self.glyphs.push(PositionedGlyph {
+            character,
+            row,
+            col,
+            width,
+        });
+    }
+}
+
+fn next_word_end(chars: &[char], start: usize) -> usize {
+    let mut index = start;
+    while index < chars.len() && !chars[index].is_whitespace() {
+        index += 1;
+    }
+    index
+}
+
+fn text_width(chars: &[char]) -> usize {
+    chars
+        .iter()
+        .map(|character| character_cell_width(*character))
+        .sum()
+}
+
+fn character_cell_width(character: char) -> usize {
+    if character == '\t' {
+        return 4;
+    }
+    UnicodeWidthChar::width(character).unwrap_or(0)
+}
+
 struct InlineCursor {
     x: i32,
     y: i32,
@@ -2749,34 +3076,38 @@ fn write_inline_text(
     foreground: Background,
     clip: ClipBounds,
 ) {
-    for character in text.chars() {
-        if character == '\n' {
-            cursor.col = 0;
-            cursor.row += 1;
-            continue;
-        }
+    let layout = TextLayout::new_with_start_col(
+        text,
+        Some(cursor.width.max(1) as usize),
+        cursor.col.max(0) as usize,
+        TextWrapMode::Word,
+    );
 
-        if cursor.col >= cursor.width {
-            cursor.col = 0;
-            cursor.row += 1;
-        }
-
-        let x = cursor.x + cursor.col;
-        let y = cursor.y + cursor.row;
-        frame.write_char(
+    for glyph in &layout.glyphs {
+        let x = cursor.x + glyph.col as i32;
+        let y = cursor.y + cursor.row + glyph.row as i32;
+        frame.write_glyph(
             x,
             y,
-            character,
+            glyph.character,
+            glyph.width,
             background,
             foreground,
             selection_background,
             clip,
         );
         if let Some(hit_target) = hit_target {
-            push_hit_region(hit_regions, hit_target, ClipRect::new(x, y, 1, 1), clip);
+            push_hit_region(
+                hit_regions,
+                hit_target,
+                ClipRect::new(x, y, glyph.width as i32, 1),
+                clip,
+            );
         }
-        cursor.col += 1;
     }
+
+    cursor.row += layout.end_position().0 as i32;
+    cursor.col = layout.end_position().1 as i32;
 }
 
 fn write_inline_image(
@@ -2828,6 +3159,39 @@ fn write_inline_input(
     let y = cursor.y + cursor.row;
     let rect = ClipRect::new(x, y, width as i32, height as i32);
     frame.write_input(
+        rect,
+        &node.value,
+        node.cursor,
+        node.focused,
+        foreground,
+        None,
+        clip,
+    );
+    push_hit_region(hit_regions, hit_target.unwrap_or(id), rect, clip);
+    cursor.col += width as i32;
+    cursor.max_row(height as i32);
+}
+
+fn write_inline_textarea(
+    id: u32,
+    node: &TextAreaNode,
+    cursor: &mut InlineCursor,
+    frame: &mut Frame,
+    hit_regions: &mut Vec<HitRegion>,
+    hit_target: Option<u32>,
+    foreground: Background,
+    clip: ClipBounds,
+) {
+    let (width, height) = textarea_cell_size(node);
+    if cursor.col + width as i32 > cursor.width {
+        cursor.col = 0;
+        cursor.row += 1;
+    }
+
+    let x = cursor.x + cursor.col;
+    let y = cursor.y + cursor.row;
+    let rect = ClipRect::new(x, y, width as i32, height as i32);
+    frame.write_textarea(
         rect,
         &node.value,
         node.cursor,
@@ -2901,6 +3265,7 @@ impl Frame {
                     selection_background,
                     selection_order: None,
                     reversed: false,
+                    wide_continuation: false,
                 };
             }
         }
@@ -3021,6 +3386,7 @@ impl Frame {
                 self.cells[index].foreground = Background::Rgb(red, green, blue);
                 self.cells[index].background = Background::Default;
                 self.cells[index].selection_order = None;
+                self.cells[index].wide_continuation = false;
                 if selection_background.is_some() {
                     self.cells[index].selection_background = selection_background;
                 }
@@ -3069,6 +3435,7 @@ impl Frame {
                 self.cells[index].foreground =
                     Background::Rgb(bottom_pixel[0], bottom_pixel[1], bottom_pixel[2]);
                 self.cells[index].selection_order = None;
+                self.cells[index].wide_continuation = false;
                 if selection_background.is_some() {
                     self.cells[index].selection_background = selection_background;
                 }
@@ -3085,33 +3452,18 @@ impl Frame {
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
-        for (line_offset, line) in text.lines().enumerate() {
-            let row = y + line_offset as i32;
-            let mut col = x;
-            for character in line.chars() {
-                let visible = row >= 0
-                    && row < self.height as i32
-                    && col >= 0
-                    && col < self.width as i32
-                    && clip.contains(col, row);
-
-                if !visible && !self.capture_hidden_selection_units {
-                    col += 1;
-                    continue;
-                }
-
-                let selection_order = self.push_selection_unit(row, character);
-                if visible {
-                    let index = row as usize * self.width + col as usize;
-                    self.cells[index].character = character;
-                    self.cells[index].foreground = foreground;
-                    self.cells[index].selection_order = Some(selection_order);
-                    if selection_background.is_some() {
-                        self.cells[index].selection_background = selection_background;
-                    }
-                }
-                col += 1;
-            }
+        let layout = TextLayout::new(text, None, TextWrapMode::Word);
+        for glyph in layout.glyphs {
+            self.write_glyph(
+                x + glyph.col as i32,
+                y + glyph.row as i32,
+                glyph.character,
+                glyph.width,
+                Background::Default,
+                foreground,
+                selection_background,
+                clip,
+            );
         }
     }
 
@@ -3155,6 +3507,7 @@ impl Frame {
                 self.cells[index].character = character;
                 self.cells[index].foreground = foreground;
                 self.cells[index].selection_order = None;
+                self.cells[index].wide_continuation = false;
                 if let Some(order) =
                     (char_index < chars.len()).then(|| self.push_selection_unit(y, character))
                 {
@@ -3170,16 +3523,111 @@ impl Frame {
         }
     }
 
-    fn write_char(
+    fn write_textarea(
+        &mut self,
+        rect: ClipRect,
+        value: &str,
+        cursor: u32,
+        focused: bool,
+        foreground: Background,
+        selection_background: Option<Background>,
+        clip: ClipBounds,
+    ) {
+        let Some(bounds) = clip.clip_rect(rect) else {
+            return;
+        };
+        if rect.width() <= 0 || rect.height() <= 0 {
+            return;
+        }
+
+        let layout = TextLayout::new(
+            value,
+            Some(rect.width().max(1) as usize),
+            TextWrapMode::Word,
+        );
+        let (cursor_row, cursor_col) = layout.cursor_position(cursor as usize);
+        for y in bounds.top..bounds.bottom {
+            for x in bounds.left..bounds.right {
+                if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+                    continue;
+                }
+
+                let local_row = (y - rect.top).max(0) as usize;
+                let local_col = (x - rect.left).max(0) as usize;
+                let index = y as usize * self.width + x as usize;
+                self.cells[index].character = ' ';
+                self.cells[index].foreground = foreground;
+                self.cells[index].selection_order = None;
+                self.cells[index].wide_continuation = false;
+                if selection_background.is_some() {
+                    self.cells[index].selection_background = selection_background;
+                }
+                if focused && local_row == cursor_row && local_col == cursor_col {
+                    self.cells[index].reversed = true;
+                }
+            }
+        }
+
+        for glyph in layout.glyphs {
+            let x = rect.left + glyph.col as i32;
+            let y = rect.top + glyph.row as i32;
+            if x < bounds.left
+                || y < bounds.top
+                || x >= bounds.right
+                || y >= bounds.bottom
+                || x < 0
+                || y < 0
+                || x >= self.width as i32
+                || y >= self.height as i32
+            {
+                continue;
+            }
+
+            let index = y as usize * self.width + x as usize;
+            self.cells[index].character = glyph.character;
+            self.cells[index].foreground = foreground;
+            self.cells[index].selection_order = Some(self.push_selection_unit(y, glyph.character));
+            self.cells[index].wide_continuation = false;
+            if selection_background.is_some() {
+                self.cells[index].selection_background = selection_background;
+            }
+
+            for offset in 1..glyph.width {
+                let continuation_x = x + offset as i32;
+                if continuation_x < bounds.left
+                    || continuation_x >= bounds.right
+                    || continuation_x < 0
+                    || continuation_x >= self.width as i32
+                {
+                    continue;
+                }
+                let continuation_index = y as usize * self.width + continuation_x as usize;
+                self.cells[continuation_index].character = ' ';
+                self.cells[continuation_index].foreground = foreground;
+                self.cells[continuation_index].selection_order = None;
+                self.cells[continuation_index].wide_continuation = true;
+                if selection_background.is_some() {
+                    self.cells[continuation_index].selection_background = selection_background;
+                }
+            }
+        }
+    }
+
+    fn write_glyph(
         &mut self,
         x: i32,
         y: i32,
         character: char,
+        width: usize,
         background: Background,
         foreground: Background,
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
+        if width == 0 {
+            return;
+        }
+
         let visible = x >= 0
             && y >= 0
             && x < self.width as i32
@@ -3198,11 +3646,34 @@ impl Frame {
         self.cells[index].character = character;
         self.cells[index].foreground = foreground;
         self.cells[index].selection_order = Some(selection_order);
+        self.cells[index].wide_continuation = false;
         if background != Background::Default {
             self.cells[index].background = background;
         }
         if selection_background.is_some() {
             self.cells[index].selection_background = selection_background;
+        }
+
+        for offset in 1..width {
+            let continuation_x = x + offset as i32;
+            if continuation_x < 0
+                || continuation_x >= self.width as i32
+                || !clip.contains(continuation_x, y)
+            {
+                continue;
+            }
+
+            let continuation_index = y as usize * self.width + continuation_x as usize;
+            self.cells[continuation_index].character = ' ';
+            self.cells[continuation_index].foreground = foreground;
+            self.cells[continuation_index].selection_order = None;
+            self.cells[continuation_index].wide_continuation = true;
+            if background != Background::Default {
+                self.cells[continuation_index].background = background;
+            }
+            if selection_background.is_some() {
+                self.cells[continuation_index].selection_background = selection_background;
+            }
         }
     }
 
@@ -3318,6 +3789,7 @@ impl Frame {
         self.cells[index].character = character;
         self.cells[index].foreground = foreground;
         self.cells[index].selection_order = None;
+        self.cells[index].wide_continuation = false;
         if selection_background.is_some() {
             self.cells[index].selection_background = selection_background;
         }
@@ -3510,6 +3982,9 @@ impl Frame {
         let mut current_reversed = false;
         for col in start_col..end_col {
             let cell = self.cells[row * self.width + col];
+            if cell.wide_continuation {
+                continue;
+            }
             let background = cell.background;
             let foreground = cell.foreground;
             if cell.reversed != current_reversed {
@@ -3592,6 +4067,7 @@ struct Cell {
     selection_background: Option<Background>,
     selection_order: Option<usize>,
     reversed: bool,
+    wide_continuation: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -3610,6 +4086,7 @@ impl Default for Cell {
             selection_background: None,
             selection_order: None,
             reversed: false,
+            wide_continuation: false,
         }
     }
 }
@@ -3633,17 +4110,11 @@ struct InlineMetrics {
 }
 
 fn measure_text(text: &str) -> TextMetrics {
-    let mut width = 0;
-    let mut height = 0;
-
-    for line in text.lines() {
-        height += 1;
-        width = width.max(line.chars().count());
-    }
+    let layout = TextLayout::new(text, None, TextWrapMode::Word);
 
     TextMetrics {
-        width,
-        height: height.max(1),
+        width: layout.width,
+        height: layout.height,
     }
 }
 
@@ -3695,28 +4166,23 @@ fn measure_inline_node(id: u32, nodes: &HashMap<u32, DomNode>, cursor: &mut Inli
         Some(DomNode::Input(node)) if node.style.display == LayoutDisplay::Inline => {
             measure_inline_input(node, cursor);
         }
+        Some(DomNode::TextArea(node)) if node.style.display == LayoutDisplay::Inline => {
+            measure_inline_textarea(node, cursor);
+        }
         _ => {}
     }
 }
 
 fn measure_inline_text(text: &str, cursor: &mut InlineMeasureCursor) {
-    for character in text.chars() {
-        if character == '\n' {
-            cursor.max_col = cursor.max_col.max(cursor.col);
-            cursor.col = 0;
-            cursor.row += 1;
-            continue;
-        }
-
-        if cursor.col >= cursor.width {
-            cursor.max_col = cursor.max_col.max(cursor.col);
-            cursor.col = 0;
-            cursor.row += 1;
-        }
-
-        cursor.col += 1;
-        cursor.max_col = cursor.max_col.max(cursor.col);
-    }
+    let layout = TextLayout::new_with_start_col(
+        text,
+        Some(cursor.width.max(1) as usize),
+        cursor.col as usize,
+        TextWrapMode::Word,
+    );
+    cursor.max_col = cursor.max_col.max(layout.width as u32);
+    cursor.row += layout.end_position().0 as u32;
+    cursor.col = layout.end_position().1 as u32;
 }
 
 fn measure_inline_image(node: &ImageNode, cursor: &mut InlineMeasureCursor) {
@@ -3739,6 +4205,21 @@ fn measure_inline_image(node: &ImageNode, cursor: &mut InlineMeasureCursor) {
 
 fn measure_inline_input(node: &InputNode, cursor: &mut InlineMeasureCursor) {
     let (width, height) = input_cell_size(node);
+    if cursor.col + width > cursor.width {
+        cursor.max_col = cursor.max_col.max(cursor.col);
+        cursor.col = 0;
+        cursor.row += 1;
+    }
+
+    cursor.col += width;
+    cursor.max_col = cursor.max_col.max(cursor.col);
+    if height > 1 {
+        cursor.row += height - 1;
+    }
+}
+
+fn measure_inline_textarea(node: &TextAreaNode, cursor: &mut InlineMeasureCursor) {
+    let (width, height) = textarea_cell_size(node);
     if cursor.col + width > cursor.width {
         cursor.max_col = cursor.max_col.max(cursor.col);
         cursor.col = 0;
@@ -3805,6 +4286,10 @@ mod tests {
         apply(renderer, RenderCommand::CreateDiv { id });
     }
 
+    fn textarea(renderer: &mut Renderer, id: u32) {
+        apply(renderer, RenderCommand::CreateTextArea { id });
+    }
+
     fn append(renderer: &mut Renderer, parent: u32, child: u32) {
         apply(renderer, RenderCommand::AppendChild { parent, child });
     }
@@ -3822,6 +4307,10 @@ mod tests {
 
     fn set_height(renderer: &mut Renderer, id: u32, height: CssDimension) {
         apply(renderer, RenderCommand::SetHeight { id, height });
+    }
+
+    fn set_min_height(renderer: &mut Renderer, id: u32, min_height: CssDimension) {
+        apply(renderer, RenderCommand::SetMinHeight { id, min_height });
     }
 
     fn set_display(renderer: &mut Renderer, id: u32, display: LayoutDisplay) {
@@ -4046,6 +4535,209 @@ mod tests {
         assert_eq!(frame.cells[1].character, 'd');
         assert_eq!(frame.cells[2].character, ' ');
         assert!(frame.cells[2].reversed);
+    }
+
+    #[test]
+    fn focused_textarea_renders_multiline_value_and_cursor() {
+        let mut frame = Frame::new(3, 2, false);
+        frame.write_textarea(
+            ClipRect::new(0, 0, 3, 2),
+            "ab\ncd",
+            4,
+            true,
+            Background::Rgb(255, 255, 255),
+            None,
+            ClipBounds::unbounded(),
+        );
+
+        assert_eq!(frame.cells[0].character, 'a');
+        assert_eq!(frame.cells[1].character, 'b');
+        assert_eq!(frame.cells[3].character, 'c');
+        assert_eq!(frame.cells[4].character, 'd');
+        assert!(frame.cells[4].reversed);
+    }
+
+    #[test]
+    fn textarea_word_wraps_long_lines() {
+        let mut frame = Frame::new(5, 2, false);
+        frame.write_textarea(
+            ClipRect::new(0, 0, 5, 2),
+            "hello world",
+            6,
+            true,
+            Background::Rgb(255, 255, 255),
+            None,
+            ClipBounds::unbounded(),
+        );
+
+        assert_eq!(frame.cells[0].character, 'h');
+        assert_eq!(frame.cells[4].character, 'o');
+        assert_eq!(frame.cells[5].character, 'w');
+        assert_eq!(frame.cells[9].character, 'd');
+        assert!(frame.cells[5].reversed);
+    }
+
+    #[test]
+    fn inline_text_uses_word_wrapping_layout() {
+        let mut cursor = InlineMeasureCursor {
+            col: 0,
+            row: 0,
+            width: 5,
+            max_col: 0,
+        };
+
+        measure_inline_text("hello world", &mut cursor);
+
+        assert_eq!(cursor.row, 1);
+        assert_eq!(cursor.col, 5);
+        assert_eq!(cursor.max_col, 5);
+    }
+
+    #[test]
+    fn inline_text_uses_unicode_cell_width() {
+        let mut cursor = InlineMeasureCursor {
+            col: 0,
+            row: 0,
+            width: 2,
+            max_col: 0,
+        };
+
+        measure_inline_text("界a", &mut cursor);
+
+        assert_eq!(cursor.row, 1);
+        assert_eq!(cursor.col, 1);
+        assert_eq!(cursor.max_col, 2);
+    }
+
+    #[test]
+    fn inline_text_paints_from_shared_layout() {
+        let mut frame = Frame::new(5, 2, false);
+        let mut cursor = InlineCursor {
+            x: 0,
+            y: 0,
+            col: 0,
+            row: 0,
+            width: 5,
+        };
+        let mut hit_regions = Vec::new();
+
+        write_inline_text(
+            "hello world",
+            &mut cursor,
+            Background::Default,
+            &mut frame,
+            &mut hit_regions,
+            None,
+            None,
+            Background::Rgb(255, 255, 255),
+            ClipBounds::unbounded(),
+        );
+
+        assert_eq!(frame.cells[0].character, 'h');
+        assert_eq!(frame.cells[4].character, 'o');
+        assert_eq!(frame.cells[5].character, 'w');
+        assert_eq!(frame.cells[9].character, 'd');
+        assert_eq!(cursor.row, 1);
+        assert_eq!(cursor.col, 5);
+    }
+
+    #[test]
+    fn textarea_wraps_using_unicode_cell_width() {
+        let mut frame = Frame::new(2, 2, false);
+        frame.write_textarea(
+            ClipRect::new(0, 0, 2, 2),
+            "界a",
+            0,
+            false,
+            Background::Rgb(255, 255, 255),
+            None,
+            ClipBounds::unbounded(),
+        );
+
+        assert_eq!(frame.cells[0].character, '界');
+        assert!(frame.cells[1].wide_continuation);
+        assert_eq!(frame.cells[2].character, 'a');
+    }
+
+    #[test]
+    fn textarea_auto_height_tracks_newlines() {
+        let mut renderer = test_renderer();
+
+        div(&mut renderer, 1);
+        set_display(&mut renderer, 1, LayoutDisplay::Flex);
+        set_flex_direction(&mut renderer, 1, LayoutFlexDirection::Column);
+        set_width(&mut renderer, 1, CssDimension::Length(20.0));
+        apply(&mut renderer, RenderCommand::SetRoot { id: 1 });
+
+        textarea(&mut renderer, 2);
+        apply(
+            &mut renderer,
+            RenderCommand::SetInputValue {
+                id: 2,
+                value: "alpha\nbeta\ngamma".to_string(),
+                cursor: 0,
+            },
+        );
+        append(&mut renderer, 1, 2);
+
+        compute_layout(&mut renderer, 1, 20.0, 10.0);
+        let textarea_layout = renderer.taffy.layout(renderer.taffy_ids[&2]).unwrap();
+
+        assert_eq!(textarea_layout.size.width, 5.0);
+        assert_eq!(textarea_layout.size.height, 3.0);
+    }
+
+    #[test]
+    fn textarea_auto_height_tracks_word_wrapping_for_fixed_width() {
+        let mut renderer = test_renderer();
+
+        div(&mut renderer, 1);
+        set_width(&mut renderer, 1, CssDimension::Length(20.0));
+        apply(&mut renderer, RenderCommand::SetRoot { id: 1 });
+
+        textarea(&mut renderer, 2);
+        set_width(&mut renderer, 2, CssDimension::Length(5.0));
+        apply(
+            &mut renderer,
+            RenderCommand::SetInputValue {
+                id: 2,
+                value: "hello world".to_string(),
+                cursor: 0,
+            },
+        );
+        append(&mut renderer, 1, 2);
+
+        compute_layout(&mut renderer, 1, 20.0, 10.0);
+        let textarea_layout = renderer.taffy.layout(renderer.taffy_ids[&2]).unwrap();
+
+        assert_eq!(textarea_layout.size.width, 5.0);
+        assert_eq!(textarea_layout.size.height, 2.0);
+    }
+
+    #[test]
+    fn min_height_expands_auto_sized_textarea() {
+        let mut renderer = test_renderer();
+
+        div(&mut renderer, 1);
+        set_width(&mut renderer, 1, CssDimension::Length(20.0));
+        apply(&mut renderer, RenderCommand::SetRoot { id: 1 });
+
+        textarea(&mut renderer, 2);
+        set_min_height(&mut renderer, 2, CssDimension::Length(5.0));
+        apply(
+            &mut renderer,
+            RenderCommand::SetInputValue {
+                id: 2,
+                value: "short".to_string(),
+                cursor: 0,
+            },
+        );
+        append(&mut renderer, 1, 2);
+
+        compute_layout(&mut renderer, 1, 20.0, 10.0);
+        let textarea_layout = renderer.taffy.layout(renderer.taffy_ids[&2]).unwrap();
+
+        assert_eq!(textarea_layout.size.height, 5.0);
     }
 
     #[test]
