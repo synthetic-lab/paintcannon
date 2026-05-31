@@ -15,6 +15,8 @@ export type AnimationFrameCallback = (timestamp: number) => void;
 
 export interface NativePaintCannon {
   createDiv(): number;
+  createTextNode(text: string): number;
+  setTextNodeValue(id: number, text: string): void;
   setRoot(id: number): void;
   appendChild(parent: number, child: number): void;
   setStyleProperty(id: number, property: string, value: string): void;
@@ -26,6 +28,8 @@ export interface NativePaintCannon {
 export interface NativeBinding {
   PaintCannon: new () => NativePaintCannon;
 }
+
+export type PaintNode = DivElement | TextNode;
 
 export const native: NativeBinding = loadNativeBinding();
 
@@ -49,6 +53,11 @@ export class PaintCannon {
     }
 
     return new DivElement(this, this.binding, this.binding.createDiv());
+  }
+
+  createTextNode(data: string): TextNode {
+    const text = String(data);
+    return new TextNode(this, this.binding, this.binding.createTextNode(text), text);
   }
 
   setRoot(element: DivElement): void {
@@ -147,10 +156,40 @@ export class DivElement {
     this.style = new CSSStyleDeclaration(binding, id);
   }
 
-  appendChild(child: DivElement): DivElement {
-    assertElement(child);
+  appendChild(child: PaintNode): PaintNode {
+    assertPaintNode(child);
     this.binding.appendChild(this.id, child.id);
     return child;
+  }
+}
+
+export class TextNode {
+  readonly ownerDocument: PaintCannon;
+
+  constructor(
+    owner: PaintCannon,
+    private readonly binding: NativePaintCannon,
+    readonly id: number,
+    private data: string = '',
+  ) {
+    this.ownerDocument = owner;
+  }
+
+  get nodeValue(): string {
+    return this.data;
+  }
+
+  set nodeValue(value: string) {
+    this.data = String(value);
+    this.binding.setTextNodeValue(this.id, this.data);
+  }
+
+  get textContent(): string {
+    return this.nodeValue;
+  }
+
+  set textContent(value: string) {
+    this.nodeValue = value;
   }
 }
 
@@ -189,6 +228,22 @@ export class CSSStyleDeclaration {
     this.setProperty('flex-direction', value);
   }
 
+  get justifyContent(): string {
+    return this.getPropertyValue('justify-content');
+  }
+
+  set justifyContent(value: string) {
+    this.setProperty('justify-content', value);
+  }
+
+  get alignItems(): string {
+    return this.getPropertyValue('align-items');
+  }
+
+  set alignItems(value: string) {
+    this.setProperty('align-items', value);
+  }
+
   get width(): string {
     return this.getPropertyValue('width');
   }
@@ -217,6 +272,12 @@ export class CSSStyleDeclaration {
 function assertElement(value: unknown): asserts value is DivElement {
   if (!(value instanceof DivElement)) {
     throw new TypeError('expected a paintcannon div element');
+  }
+}
+
+function assertPaintNode(value: unknown): asserts value is PaintNode {
+  if (!(value instanceof DivElement) && !(value instanceof TextNode)) {
+    throw new TypeError('expected a paintcannon node');
   }
 }
 

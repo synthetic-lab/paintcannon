@@ -21,11 +21,14 @@ const leftTop = pc.createElement('div');
 leftTop.style.width = '30px';
 leftTop.style.height = '33%';
 leftTop.style.backgroundColor = 'cyan';
+leftTop.appendChild(pc.createTextNode('paintcannon'));
 
 const leftBottom = pc.createElement('div');
 leftBottom.style.width = '30px';
 leftBottom.style.height = '67%';
 leftBottom.style.backgroundColor = 'magenta';
+const counterText = pc.createTextNode('frame 0');
+leftBottom.appendChild(counterText);
 
 left.appendChild(leftTop);
 left.appendChild(leftBottom);
@@ -41,6 +44,7 @@ const rightTop = pc.createElement('div');
 rightTop.style.width = '50px';
 rightTop.style.height = '50%';
 rightTop.style.backgroundColor = 'yellow';
+rightTop.appendChild(pc.createTextNode('text nodes render over div backgrounds'));
 
 const rightBottom = pc.createElement('div');
 rightBottom.style.width = '50px';
@@ -59,6 +63,7 @@ const paint = () => {
   } else {
     rightBottom.style.backgroundColor = 'blue';
   }
+  counterText.nodeValue = `frame ${frames}`;
 
   if (frames < 20) {
     pc.requestAnimationFrame(paint);
