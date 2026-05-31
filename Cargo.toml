@@ -1,0 +1,17 @@
+[package]
+name = "paintcannon"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+crossbeam-channel = "0.5"
+libc = "0.2"
+napi = { version = "3", default-features = false, features = ["napi4"] }
+napi-derive = "3"
+taffy = "0.10"
+
+[build-dependencies]
+napi-build = "2"
