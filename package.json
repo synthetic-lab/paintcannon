@@ -16,6 +16,7 @@
     "demo:images": "npm run build:debug && node dist/examples/images.js",
     "demo:input": "npm run build:debug && node dist/examples/input.js",
     "demo:image-scroll": "npm run build:debug && node dist/examples/image-scroll.js",
+    "demo:less": "npm run build:debug && node dist/examples/less.js",
     "demo:mouse": "npm run build:debug && node dist/examples/mouse-clicks.js",
     "demo:overflow": "npm run build:debug && node dist/examples/overflow.js",
     "demo:pong": "npm run build:debug && node dist/examples/pong.js",
