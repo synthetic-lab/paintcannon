@@ -32,6 +32,7 @@ export type ScrollEventListener = (event: PaintScrollEvent) => void;
 export type TransitionEventListener = (event: PaintTransitionEvent) => void;
 type ElementEventListener = MouseEventListener | ScrollEventListener | TransitionEventListener;
 export type ClickEventListener = MouseEventListener;
+export type ImageRendering = 'ascii' | 'half-block';
 export type CSSCursor =
   | 'auto'
   | 'alias'
@@ -1722,6 +1723,14 @@ export class CSSStyleDeclaration {
 
   set height(value: string | number) {
     this.setProperty('height', value);
+  }
+
+  get imageRendering(): ImageRendering | string {
+    return this.getPropertyValue('image-rendering');
+  }
+
+  set imageRendering(value: ImageRendering | string) {
+    this.setProperty('image-rendering', value);
   }
 
   get border(): string {

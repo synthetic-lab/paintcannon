@@ -21,19 +21,24 @@ root.style.backgroundColor = '#101820';
 
 const label = pc.createElement('div');
 label.style.color = '#e8f1f2';
-label.appendChild(pc.createTextNode('ASCII image rendering'));
+label.appendChild(pc.createTextNode('half-block and ASCII image rendering'));
 
-const img = pc.createElement('img');
-img.src = pngPath;
-img.style.width = 32;
-img.style.height = 12;
+const row = pc.createElement('div');
+row.style.display = 'flex';
+row.style.flexDirection = 'row';
+row.style.gap = 4;
+
+const halfBlockColumn = imageColumn('half-block default', 'half-block');
+const asciiColumn = imageColumn('ASCII fallback', 'ascii');
+row.appendChild(halfBlockColumn);
+row.appendChild(asciiColumn);
 
 const hint = pc.createElement('div');
 hint.style.color = '#90a4ae';
 hint.appendChild(pc.createTextNode('press q or Escape to exit'));
 
 root.appendChild(label);
-root.appendChild(img);
+root.appendChild(row);
 root.appendChild(hint);
 pc.setRoot(root);
 pc.render();
@@ -44,3 +49,25 @@ pc.addEventListener('keydown', (event) => {
     process.exit(0);
   }
 });
+
+function imageColumn(labelText: string, rendering: 'ascii' | 'half-block') {
+  const column = pc.createElement('div');
+  column.style.display = 'flex';
+  column.style.flexDirection = 'column';
+  column.style.alignItems = 'center';
+  column.style.gap = 1;
+
+  const title = pc.createElement('div');
+  title.style.color = '#e8f1f2';
+  title.appendChild(pc.createTextNode(labelText));
+
+  const img = pc.createElement('img');
+  img.src = pngPath;
+  img.style.width = 28;
+  img.style.height = 10;
+  img.style.imageRendering = rendering;
+
+  column.appendChild(title);
+  column.appendChild(img);
+  return column;
+}

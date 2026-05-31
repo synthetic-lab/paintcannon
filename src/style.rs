@@ -45,6 +45,7 @@ pub(crate) struct DivStyle {
     pub(crate) cursor: CursorStyle,
     pub(crate) overflow_x: LayoutOverflow,
     pub(crate) overflow_y: LayoutOverflow,
+    pub(crate) image_rendering: ImageRendering,
 }
 
 impl Default for DivStyle {
@@ -84,6 +85,7 @@ impl Default for DivStyle {
             cursor: CursorStyle::Auto,
             overflow_x: LayoutOverflow::Visible,
             overflow_y: LayoutOverflow::Visible,
+            image_rendering: ImageRendering::HalfBlock,
         }
     }
 }
@@ -101,6 +103,12 @@ pub(crate) enum LayoutOverflow {
     Visible,
     Hidden,
     Scroll,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImageRendering {
+    Ascii,
+    HalfBlock,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -614,6 +622,16 @@ pub(crate) fn parse_overflow(value: &str) -> Result<LayoutOverflow> {
         "hidden" => Ok(LayoutOverflow::Hidden),
         "scroll" => Ok(LayoutOverflow::Scroll),
         value => Err(Error::from_reason(format!("unsupported overflow: {value}"))),
+    }
+}
+
+pub(crate) fn parse_image_rendering(value: &str) -> Result<ImageRendering> {
+    match value.trim() {
+        "ascii" => Ok(ImageRendering::Ascii),
+        "half-block" => Ok(ImageRendering::HalfBlock),
+        value => Err(Error::from_reason(format!(
+            "unsupported image rendering: {value}"
+        ))),
     }
 }
 

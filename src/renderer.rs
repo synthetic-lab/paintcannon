@@ -71,6 +71,10 @@ pub(crate) enum RenderCommand {
         id: u32,
         overflow: LayoutOverflow,
     },
+    SetImageRendering {
+        id: u32,
+        image_rendering: ImageRendering,
+    },
     SetScrollOffset {
         id: u32,
         scroll_left: u32,
@@ -566,6 +570,12 @@ impl Renderer {
             }
             RenderCommand::SetOverflowY { id, overflow } => {
                 self.update_style(id, |node| node.overflow_y = overflow);
+            }
+            RenderCommand::SetImageRendering {
+                id,
+                image_rendering,
+            } => {
+                self.update_visual_style(id, |node| node.image_rendering = image_rendering);
             }
             RenderCommand::SetScrollOffset {
                 id,
@@ -1515,7 +1525,7 @@ impl Renderer {
             DomNode::Image(node) => {
                 push_hit_region(hit_regions, id, bounds, clip);
                 frame.fill_rect(bounds, Background::Default, selection_background, clip);
-                frame.write_ascii_image(node, bounds, selection_background, clip);
+                frame.write_image(node, bounds, selection_background, clip);
             }
         }
     }
@@ -2292,6 +2302,12 @@ fn ascii_pixel_char(red: u8, green: u8, blue: u8) -> char {
     ASCII_CHARS[index] as char
 }
 
+fn image_pixel(image: &ImageData, x: u32, y: u32) -> Option<[u8; 3]> {
+    let pixel_index = (y as usize * image.width_px as usize + x as usize) * 3;
+    let pixel = image.rgb.get(pixel_index..pixel_index + 3)?;
+    Some([pixel[0], pixel[1], pixel[2]])
+}
+
 fn node_style(node: &DomNode) -> Option<&DivStyle> {
     match node {
         DomNode::Div(node) => Some(&node.style),
@@ -2594,7 +2610,7 @@ fn write_inline_image(
     let x = cursor.x + cursor.col;
     let y = cursor.y + cursor.row;
     let rect = ClipRect::new(x, y, width as i32, height as i32);
-    frame.write_ascii_image(node, rect, None, clip);
+    frame.write_image(node, rect, None, clip);
     if let Some(hit_target) = hit_target {
         push_hit_region(hit_regions, hit_target, rect, clip);
     }
@@ -2719,7 +2735,7 @@ impl Frame {
         self.cells[y as usize * self.width + x as usize] = Cell::default();
     }
 
-    fn write_ascii_image(
+    fn write_image(
         &mut self,
         node: &ImageNode,
         rect: ClipRect,
@@ -2733,12 +2749,27 @@ impl Frame {
             return;
         };
 
-        let width_cells = bounds.width().max(0) as u32;
-        let height_cells = bounds.height().max(0) as u32;
-        if width_cells == 0 || height_cells == 0 {
+        if bounds.width() <= 0 || bounds.height() <= 0 {
             return;
         }
 
+        match node.style.image_rendering {
+            ImageRendering::Ascii => {
+                self.write_ascii_image_data(image, rect, bounds, selection_background);
+            }
+            ImageRendering::HalfBlock => {
+                self.write_half_block_image_data(image, rect, bounds, selection_background);
+            }
+        }
+    }
+
+    fn write_ascii_image_data(
+        &mut self,
+        image: &ImageData,
+        rect: ClipRect,
+        bounds: ClipRect,
+        selection_background: Option<Background>,
+    ) {
         let rect_width = rect.width().max(1) as u32;
         let rect_height = rect.height().max(1) as u32;
         for y in bounds.top..bounds.bottom {
@@ -2766,6 +2797,54 @@ impl Frame {
                 self.cells[index].character = ascii_pixel_char(red, green, blue);
                 self.cells[index].foreground = Background::Rgb(red, green, blue);
                 self.cells[index].background = Background::Default;
+                self.cells[index].selection_order = None;
+                if selection_background.is_some() {
+                    self.cells[index].selection_background = selection_background;
+                }
+            }
+        }
+    }
+
+    fn write_half_block_image_data(
+        &mut self,
+        image: &ImageData,
+        rect: ClipRect,
+        bounds: ClipRect,
+        selection_background: Option<Background>,
+    ) {
+        let rect_width = rect.width().max(1) as u32;
+        let virtual_height = (rect.height().max(1) as u32).saturating_mul(2);
+        for y in bounds.top..bounds.bottom {
+            for x in bounds.left..bounds.right {
+                if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+                    continue;
+                }
+
+                let local_x = (x - rect.left).max(0) as u32;
+                let local_y = (y - rect.top).max(0) as u32;
+                let source_x = (local_x.saturating_mul(image.width_px) / rect_width)
+                    .min(image.width_px.saturating_sub(1));
+                let top_y = (local_y.saturating_mul(2).saturating_mul(image.height_px)
+                    / virtual_height)
+                    .min(image.height_px.saturating_sub(1));
+                let bottom_y = ((local_y.saturating_mul(2).saturating_add(1))
+                    .saturating_mul(image.height_px)
+                    / virtual_height)
+                    .min(image.height_px.saturating_sub(1));
+
+                let Some(top_pixel) = image_pixel(image, source_x, top_y) else {
+                    continue;
+                };
+                let Some(bottom_pixel) = image_pixel(image, source_x, bottom_y) else {
+                    continue;
+                };
+
+                let index = y as usize * self.width + x as usize;
+                self.cells[index].character = '▄';
+                self.cells[index].background =
+                    Background::Rgb(top_pixel[0], top_pixel[1], top_pixel[2]);
+                self.cells[index].foreground =
+                    Background::Rgb(bottom_pixel[0], bottom_pixel[1], bottom_pixel[2]);
                 self.cells[index].selection_order = None;
                 if selection_background.is_some() {
                     self.cells[index].selection_background = selection_background;
@@ -3434,6 +3513,13 @@ mod tests {
         apply(renderer, RenderCommand::AppendChild { parent, child });
     }
 
+    fn rgb(value: Background) -> Option<(u8, u8, u8)> {
+        match value {
+            Background::Rgb(red, green, blue) => Some((red, green, blue)),
+            _ => None,
+        }
+    }
+
     fn set_width(renderer: &mut Renderer, id: u32, width: CssDimension) {
         apply(renderer, RenderCommand::SetWidth { id, width });
     }
@@ -3563,6 +3649,60 @@ mod tests {
         assert_eq!(metrics.client_height, 20);
         assert!(metrics.scroll_height > metrics.client_height, "{metrics:?}");
         assert!(max_scroll_top(&metrics) > 0, "{metrics:?}");
+    }
+
+    #[test]
+    fn image_rendering_defaults_to_half_block() {
+        let mut frame = Frame::new(1, 1, false);
+        let node = ImageNode {
+            style: DivStyle::default(),
+            src: None,
+            image: Some(ImageData {
+                width_px: 1,
+                height_px: 2,
+                rgb: vec![255, 0, 0, 0, 0, 255],
+            }),
+        };
+
+        frame.write_image(
+            &node,
+            ClipRect::new(0, 0, 1, 1),
+            None,
+            ClipBounds::unbounded(),
+        );
+
+        let cell = frame.cells[0];
+        assert_eq!(cell.character, '▄');
+        assert_eq!(rgb(cell.background), Some((255, 0, 0)));
+        assert_eq!(rgb(cell.foreground), Some((0, 0, 255)));
+    }
+
+    #[test]
+    fn image_rendering_can_use_ascii() {
+        let mut frame = Frame::new(1, 1, false);
+        let mut style = DivStyle::default();
+        style.image_rendering = ImageRendering::Ascii;
+        let node = ImageNode {
+            style,
+            src: None,
+            image: Some(ImageData {
+                width_px: 1,
+                height_px: 2,
+                rgb: vec![255, 0, 0, 0, 0, 255],
+            }),
+        };
+
+        frame.write_image(
+            &node,
+            ClipRect::new(0, 0, 1, 1),
+            None,
+            ClipBounds::unbounded(),
+        );
+
+        let cell = frame.cells[0];
+        assert_ne!(cell.character, '▄');
+        assert!(matches!(cell.background, Background::Default));
+        assert_eq!(rgb(cell.foreground), Some((255, 0, 0)));
     }
 
     fn build_demo_shaped_scroll_tree(renderer: &mut Renderer) {
