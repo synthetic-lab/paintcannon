@@ -5,6 +5,7 @@ import { performance } from 'node:perf_hooks';
 export interface PaintCannonOptions {
   fps?: number;
   syntheticKeyupDelayMs?: number;
+  forceCompatMode?: boolean;
 }
 
 export interface TerminalSize {
@@ -42,7 +43,7 @@ export interface NativePaintCannon {
 }
 
 export interface NativeBinding {
-  PaintCannon: new () => NativePaintCannon;
+  PaintCannon: new (forceCompatMode?: boolean) => NativePaintCannon;
 }
 
 export type PaintNode = DivElement | TextNode;
@@ -63,7 +64,7 @@ export class PaintCannon {
   };
 
   constructor(options: PaintCannonOptions = {}) {
-    this.binding = new native.PaintCannon();
+    this.binding = new native.PaintCannon(options.forceCompatMode ?? false);
     this.frameIntervalMs = fpsToInterval(options.fps ?? 60);
     if (options.syntheticKeyupDelayMs !== undefined) {
       this.setSyntheticKeyupDelay(options.syntheticKeyupDelayMs);
