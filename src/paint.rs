@@ -639,10 +639,11 @@ fn image_pixel(rgb: &[u8], width_px: u32, x: u32, y: u32) -> Option<[u8; 3]> {
 }
 
 fn ascii_pixel_char(red: u8, green: u8, blue: u8) -> char {
-    const CHARS: &[u8] = b" .:-=+*#%@";
-    let luminance = 0.2126 * f32::from(red) + 0.7152 * f32::from(green) + 0.0722 * f32::from(blue);
-    let index = ((luminance / 255.0) * (CHARS.len() - 1) as f32).round() as usize;
-    CHARS[index.min(CHARS.len() - 1)] as char
+    const CHARS: &[u8] =
+        b"$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ";
+    let intensity = (f32::from(red) + f32::from(green) + f32::from(blue) + 255.0) / (255.0 * 4.0);
+    let offset = (intensity * (CHARS.len() - 1) as f32).floor() as usize;
+    CHARS[CHARS.len() - 1 - offset.min(CHARS.len() - 1)] as char
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1001,24 +1002,31 @@ mod tests {
     #[test]
     fn paints_ascii_image_pixels() {
         let mut arena = LayoutArena::new();
-        let mut style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        let mut style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
         style.image_rendering = ImageRendering::Ascii;
-        let image = arena.create_image(style, 2, 1, 8, 16);
-        arena.set_image_pixels(image, 2, 1, vec![0, 0, 0, 255, 255, 255]);
+        let image = arena.create_image(style, 4, 1, 8, 16);
+        arena.set_image_pixels(
+            image,
+            4,
+            1,
+            vec![0, 0, 0, 64, 64, 64, 128, 128, 128, 255, 255, 255],
+        );
 
         arena.compute_layout(
             image,
             Size {
-                width: AvailableSpace::Definite(2.0),
+                width: AvailableSpace::Definite(4.0),
                 height: AvailableSpace::Definite(1.0),
             },
         );
-        let output = paint_arena(&arena, image, 2, 1, false);
+        let output = paint_arena(&arena, image, 4, 1, false);
 
-        assert_eq!(output.frame.cell(0, 0).unwrap().character, ' ');
-        assert_eq!(output.frame.cell(1, 0).unwrap().character, '@');
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, '_');
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, 't');
+        assert_eq!(output.frame.cell(2, 0).unwrap().character, 'J');
+        assert_eq!(output.frame.cell(3, 0).unwrap().character, '$');
         assert_eq!(
-            output.frame.cell(1, 0).unwrap().foreground,
+            output.frame.cell(3, 0).unwrap().foreground,
             Background::Rgb(255, 255, 255)
         );
     }
