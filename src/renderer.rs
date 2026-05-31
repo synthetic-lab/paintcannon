@@ -7,7 +7,7 @@ use taffy::prelude::*;
 
 use crate::style::*;
 use crate::terminal::{
-    query_terminal_size, reset_terminal, write_synchronized_output_begin,
+    copy_text_to_clipboard, query_terminal_size, reset_terminal, write_synchronized_output_begin,
     write_synchronized_output_end, TerminalSize,
 };
 
@@ -139,6 +139,10 @@ pub(crate) enum RenderCommand {
         id: u32,
         background: Background,
     },
+    SetSelectionBackground {
+        id: u32,
+        background: Background,
+    },
     SetGridTemplateColumns {
         id: u32,
         tracks: Vec<CssGridTemplateTrack>,
@@ -192,6 +196,9 @@ pub(crate) enum RenderCommand {
         y: u32,
         response: Sender<Option<u32>>,
     },
+    HandleTextSelection {
+        event: SelectionMouseEvent,
+    },
     InvalidateFrame,
     Render,
     Shutdown,
@@ -231,6 +238,21 @@ pub struct ScrollMetrics {
     pub scroll_height: u32,
     pub client_width: u32,
     pub client_height: u32,
+}
+
+pub(crate) struct SelectionMouseEvent {
+    pub(crate) event_type: SelectionMouseEventType,
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) button: u32,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum SelectionMouseEventType {
+    Down,
+    Drag,
+    Scroll,
+    Up,
 }
 
 #[derive(Clone)]
@@ -304,8 +326,10 @@ struct Renderer {
     root: Option<u32>,
     nodes: HashMap<u32, DomNode>,
     previous_frame: Option<Frame>,
+    content_frame: Option<Frame>,
     hit_regions: Vec<HitRegion>,
     scroll_metrics: HashMap<u32, ScrollMetrics>,
+    selection: Option<Selection>,
 }
 
 impl Renderer {
@@ -314,8 +338,10 @@ impl Renderer {
             root: None,
             nodes: HashMap::new(),
             previous_frame: None,
+            content_frame: None,
             hit_regions: Vec::new(),
             scroll_metrics: HashMap::new(),
+            selection: None,
         }
     }
 
@@ -493,6 +519,11 @@ impl Renderer {
                     node.background = background;
                 }
             }
+            RenderCommand::SetSelectionBackground { id, background } => {
+                if let Some(node) = self.style_mut(id) {
+                    node.selection_background = Some(background);
+                }
+            }
             RenderCommand::SetGridTemplateColumns { id, tracks } => {
                 if let Some(node) = self.style_mut(id) {
                     node.grid_template_columns = tracks;
@@ -553,6 +584,9 @@ impl Renderer {
             }
             RenderCommand::HitTestPoint { x, y, response } => {
                 let _ = response.send(self.hit_test_id(x, y));
+            }
+            RenderCommand::HandleTextSelection { event } => {
+                self.handle_text_selection(event);
             }
             RenderCommand::Render => {
                 self.render();
@@ -686,10 +720,15 @@ impl Renderer {
             &taffy_ids,
             &mut frame,
             &mut hit_regions,
+            None,
             ClipBounds::unbounded(),
         );
-        let _ = frame.write_diff_to_stdout(self.previous_frame.as_ref());
-        self.previous_frame = Some(frame);
+        self.refresh_active_selection_focus(&frame);
+        self.content_frame = Some(frame.clone());
+        let mut output_frame = frame;
+        output_frame.apply_selection(self.selection.as_ref());
+        let _ = output_frame.write_diff_to_stdout(self.previous_frame.as_ref());
+        self.previous_frame = Some(output_frame);
         self.hit_regions = hit_regions;
     }
 
@@ -861,6 +900,7 @@ impl Renderer {
         taffy_ids: &HashMap<u32, NodeId>,
         frame: &mut Frame,
         hit_regions: &mut Vec<HitRegion>,
+        selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
         let Some(dom_node) = self.nodes.get(&id) else {
@@ -884,6 +924,10 @@ impl Renderer {
 
         match dom_node {
             DomNode::Div(node) => {
+                let selection_background = effective_selection_background(
+                    node.style.selection_background,
+                    selection_background,
+                );
                 push_hit_region(hit_regions, id, bounds, clip);
                 frame.fill_rect(
                     x.round() as i32,
@@ -891,6 +935,7 @@ impl Renderer {
                     layout.size.width.round() as i32,
                     layout.size.height.round() as i32,
                     node.style.background,
+                    selection_background,
                     clip,
                 );
 
@@ -907,6 +952,7 @@ impl Renderer {
                         frame,
                         hit_regions,
                         Some(id),
+                        selection_background,
                         child_clip,
                     );
                 } else {
@@ -919,12 +965,17 @@ impl Renderer {
                             taffy_ids,
                             frame,
                             hit_regions,
+                            selection_background,
                             child_clip,
                         );
                     }
                 }
             }
             DomNode::Span(node) => {
+                let selection_background = effective_selection_background(
+                    node.style.selection_background,
+                    selection_background,
+                );
                 push_hit_region(hit_regions, id, bounds, clip);
                 frame.fill_rect(
                     x.round() as i32,
@@ -932,6 +983,7 @@ impl Renderer {
                     layout.size.width.round() as i32,
                     layout.size.height.round() as i32,
                     node.style.background,
+                    selection_background,
                     clip,
                 );
                 let child_clip =
@@ -947,6 +999,7 @@ impl Renderer {
                         frame,
                         hit_regions,
                         Some(id),
+                        selection_background,
                         child_clip,
                     );
                 } else {
@@ -959,13 +1012,20 @@ impl Renderer {
                             taffy_ids,
                             frame,
                             hit_regions,
+                            selection_background,
                             child_clip,
                         );
                     }
                 }
             }
             DomNode::Text(node) => {
-                frame.write_text(x.round() as i32, y.round() as i32, &node.text, clip);
+                frame.write_text(
+                    x.round() as i32,
+                    y.round() as i32,
+                    &node.text,
+                    selection_background,
+                    clip,
+                );
             }
         }
     }
@@ -1000,6 +1060,7 @@ impl Renderer {
         frame: &mut Frame,
         hit_regions: &mut Vec<HitRegion>,
         hit_target: Option<u32>,
+        selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
         let mut cursor = InlineCursor {
@@ -1018,6 +1079,7 @@ impl Renderer {
                 frame,
                 hit_regions,
                 hit_target,
+                selection_background,
                 clip,
             );
         }
@@ -1031,6 +1093,7 @@ impl Renderer {
         frame: &mut Frame,
         hit_regions: &mut Vec<HitRegion>,
         hit_target: Option<u32>,
+        selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
         match self.nodes.get(&id) {
@@ -1042,6 +1105,7 @@ impl Renderer {
                     frame,
                     hit_regions,
                     hit_target,
+                    selection_background,
                     clip,
                 );
             }
@@ -1051,6 +1115,10 @@ impl Renderer {
                 } else {
                     node.style.background
                 };
+                let selection_background = effective_selection_background(
+                    node.style.selection_background,
+                    selection_background,
+                );
 
                 for child in &node.children {
                     self.paint_inline_node(
@@ -1060,6 +1128,7 @@ impl Renderer {
                         frame,
                         hit_regions,
                         Some(id),
+                        selection_background,
                         clip,
                     );
                 }
@@ -1070,6 +1139,10 @@ impl Renderer {
                 } else {
                     node.style.background
                 };
+                let selection_background = effective_selection_background(
+                    node.style.selection_background,
+                    selection_background,
+                );
 
                 for child in &node.children {
                     self.paint_inline_node(
@@ -1079,6 +1152,7 @@ impl Renderer {
                         frame,
                         hit_regions,
                         Some(id),
+                        selection_background,
                         clip,
                     );
                 }
@@ -1110,6 +1184,131 @@ impl Renderer {
             .find(|region| region.contains(x as i32, y as i32))
             .map(|region| region.id)
     }
+
+    fn handle_text_selection(&mut self, event: SelectionMouseEvent) {
+        let Some(frame) = self.content_frame.as_ref() else {
+            return;
+        };
+
+        match event.event_type {
+            SelectionMouseEventType::Down => {
+                let Some(point) = frame.selection_point_for(event.x, event.y) else {
+                    self.selection = None;
+                    self.redraw_selection();
+                    return;
+                };
+                self.selection = Some(Selection {
+                    anchor: point,
+                    focus: point,
+                    selecting: true,
+                    moved: false,
+                    last_x: event.x,
+                    last_y: event.y,
+                });
+                self.redraw_selection();
+            }
+            SelectionMouseEventType::Drag => {
+                let Some(point) = self
+                    .content_frame
+                    .as_ref()
+                    .and_then(|frame| frame.selection_point_for(event.x, event.y))
+                else {
+                    return;
+                };
+                if let Some(selection) = self
+                    .selection
+                    .as_mut()
+                    .filter(|selection| selection.selecting && event.button == 0)
+                {
+                    selection.moved = selection.moved || selection.focus != point;
+                    selection.focus = point;
+                    selection.last_x = event.x;
+                    selection.last_y = event.y;
+                    self.redraw_selection();
+                }
+            }
+            SelectionMouseEventType::Scroll => {
+                if let Some(selection) = self
+                    .selection
+                    .as_mut()
+                    .filter(|selection| selection.selecting)
+                {
+                    selection.last_x = event.x;
+                    selection.last_y = event.y;
+                    if let Some(point) = self
+                        .content_frame
+                        .as_ref()
+                        .and_then(|frame| frame.selection_point_for(event.x, event.y))
+                    {
+                        selection.moved = selection.moved || selection.focus != point;
+                        selection.focus = point;
+                    }
+                    self.redraw_selection();
+                }
+            }
+            SelectionMouseEventType::Up => {
+                let point = self
+                    .content_frame
+                    .as_ref()
+                    .and_then(|frame| frame.selection_point_for(event.x, event.y));
+                let mut should_copy = false;
+                if let Some(selection) = self
+                    .selection
+                    .as_mut()
+                    .filter(|selection| selection.selecting && event.button == 0)
+                {
+                    if let Some(point) = point {
+                        selection.moved = selection.moved || selection.focus != point;
+                        selection.focus = point;
+                    }
+                    selection.last_x = event.x;
+                    selection.last_y = event.y;
+                    selection.selecting = false;
+                    should_copy = selection.moved;
+                }
+
+                if should_copy {
+                    let selected_text = self.selection.as_ref().and_then(|selection| {
+                        self.content_frame
+                            .as_ref()
+                            .and_then(|frame| frame.selected_text(selection))
+                    });
+                    if let Some(text) = selected_text {
+                        copy_text_to_clipboard(&text);
+                    }
+                    self.selection = None;
+                } else {
+                    self.selection = None;
+                }
+
+                self.redraw_selection();
+            }
+        }
+    }
+
+    fn redraw_selection(&mut self) {
+        let Some(content_frame) = self.content_frame.as_ref() else {
+            return;
+        };
+
+        let mut output_frame = content_frame.clone();
+        output_frame.apply_selection(self.selection.as_ref());
+        let _ = output_frame.write_diff_to_stdout(self.previous_frame.as_ref());
+        self.previous_frame = Some(output_frame);
+    }
+
+    fn refresh_active_selection_focus(&mut self, frame: &Frame) {
+        if let Some(selection) = self
+            .selection
+            .as_mut()
+            .filter(|selection| selection.selecting)
+        {
+            if let Some(point) = frame.selection_point_for(selection.last_x, selection.last_y) {
+                selection.moved = selection.moved || selection.focus != point;
+                selection.focus = point;
+            }
+        }
+    }
 }
 
 struct HitRegion {
@@ -1118,6 +1317,28 @@ struct HitRegion {
     top: i32,
     right: i32,
     bottom: i32,
+}
+
+struct Selection {
+    anchor: SelectionPoint,
+    focus: SelectionPoint,
+    selecting: bool,
+    moved: bool,
+    last_x: u32,
+    last_y: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SelectionPoint {
+    order: usize,
+}
+
+fn normalized_selection(selection: &Selection) -> (SelectionPoint, SelectionPoint) {
+    if selection.anchor.order <= selection.focus.order {
+        (selection.anchor, selection.focus)
+    } else {
+        (selection.focus, selection.anchor)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1257,8 +1478,12 @@ fn scroll_offset(overflow: LayoutOverflow, value: u32) -> f32 {
     }
 }
 
-fn row_may_intersect_clip(row: i32, clip: ClipBounds) -> bool {
-    clip.top.is_none_or(|top| row >= top) && clip.bottom.is_none_or(|bottom| row < bottom)
+fn effective_selection_background(
+    own: Option<Background>,
+    inherited: Option<Background>,
+) -> Option<Background> {
+    own.filter(|background| *background != Background::Default)
+        .or(inherited)
 }
 
 fn axis_max_scroll(overflow: LayoutOverflow, value: u32) -> u32 {
@@ -1300,6 +1525,7 @@ fn write_inline_text(
     frame: &mut Frame,
     hit_regions: &mut Vec<HitRegion>,
     hit_target: Option<u32>,
+    selection_background: Option<Background>,
     clip: ClipBounds,
 ) {
     for character in text.chars() {
@@ -1316,7 +1542,7 @@ fn write_inline_text(
 
         let x = cursor.x + cursor.col;
         let y = cursor.y + cursor.row;
-        frame.write_char(x, y, character, background, clip);
+        frame.write_char(x, y, character, background, selection_background, clip);
         if let Some(hit_target) = hit_target {
             push_hit_region(hit_regions, hit_target, ClipRect::new(x, y, 1, 1), clip);
         }
@@ -1324,10 +1550,13 @@ fn write_inline_text(
     }
 }
 
+#[derive(Clone)]
 struct Frame {
     width: usize,
     height: usize,
     cells: Vec<Cell>,
+    selection_units: Vec<SelectionUnit>,
+    next_selection_order: usize,
 }
 
 impl Frame {
@@ -1336,6 +1565,8 @@ impl Frame {
             width,
             height,
             cells: vec![Cell::default(); width * height],
+            selection_units: Vec::new(),
+            next_selection_order: 0,
         }
     }
 
@@ -1346,9 +1577,13 @@ impl Frame {
         width: i32,
         height: i32,
         background: Background,
+        selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
-        if background == Background::Default || width <= 0 || height <= 0 {
+        if (background == Background::Default && selection_background.is_none())
+            || width <= 0
+            || height <= 0
+        {
             return;
         }
 
@@ -1367,30 +1602,40 @@ impl Frame {
                 self.cells[start + col] = Cell {
                     background,
                     character: ' ',
+                    selection_background,
+                    selection_order: None,
+                    reversed: false,
                 };
             }
         }
     }
 
-    fn write_text(&mut self, x: i32, y: i32, text: &str, clip: ClipBounds) {
+    fn write_text(
+        &mut self,
+        x: i32,
+        y: i32,
+        text: &str,
+        selection_background: Option<Background>,
+        clip: ClipBounds,
+    ) {
         for (line_offset, line) in text.lines().enumerate() {
             let row = y + line_offset as i32;
-            if row < 0 || row >= self.height as i32 {
-                continue;
-            }
-            if !row_may_intersect_clip(row, clip) {
-                continue;
-            }
-
             let mut col = x;
             for character in line.chars() {
-                if col >= self.width as i32 {
-                    break;
-                }
+                let selection_order = self.push_selection_unit(row, character);
 
-                if col >= 0 && clip.contains(col, row) {
+                if row >= 0
+                    && row < self.height as i32
+                    && col >= 0
+                    && col < self.width as i32
+                    && clip.contains(col, row)
+                {
                     let index = row as usize * self.width + col as usize;
                     self.cells[index].character = character;
+                    self.cells[index].selection_order = Some(selection_order);
+                    if selection_background.is_some() {
+                        self.cells[index].selection_background = selection_background;
+                    }
                 }
                 col += 1;
             }
@@ -1403,8 +1648,11 @@ impl Frame {
         y: i32,
         character: char,
         background: Background,
+        selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
+        let selection_order = self.push_selection_unit(y, character);
+
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
             return;
         }
@@ -1414,8 +1662,12 @@ impl Frame {
 
         let index = y as usize * self.width + x as usize;
         self.cells[index].character = character;
+        self.cells[index].selection_order = Some(selection_order);
         if background != Background::Default {
             self.cells[index].background = background;
+        }
+        if selection_background.is_some() {
+            self.cells[index].selection_background = selection_background;
         }
     }
 
@@ -1469,6 +1721,111 @@ impl Frame {
         flush_result
     }
 
+    fn apply_selection(&mut self, selection: Option<&Selection>) {
+        let Some(selection) = selection else {
+            return;
+        };
+
+        let (start, end) = normalized_selection(selection);
+        for cell in &mut self.cells {
+            if cell
+                .selection_order
+                .is_some_and(|order| order >= start.order && order <= end.order)
+            {
+                if let Some(background) = cell.selection_background {
+                    cell.background = background;
+                    cell.reversed = false;
+                } else {
+                    cell.reversed = true;
+                }
+            }
+        }
+    }
+
+    fn selected_text(&self, selection: &Selection) -> Option<String> {
+        let (start, end) = normalized_selection(selection);
+        let mut lines = Vec::new();
+        let mut current_row = None;
+        let mut current_line = String::new();
+
+        for unit in &self.selection_units {
+            if unit.order < start.order || unit.order > end.order {
+                continue;
+            }
+
+            match current_row {
+                Some(row) if row == unit.row => {}
+                Some(_) => {
+                    lines.push(current_line.trim_end().to_string());
+                    current_line.clear();
+                    current_row = Some(unit.row);
+                }
+                None => current_row = Some(unit.row),
+            }
+
+            current_line.push(unit.character);
+        }
+
+        if current_row.is_some() {
+            lines.push(current_line.trim_end().to_string());
+        }
+
+        let text = lines.join("\n");
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+
+    fn selection_point_for(&self, x: u32, y: u32) -> Option<SelectionPoint> {
+        if self.width == 0 || self.height == 0 {
+            return None;
+        }
+
+        let row = (y as usize).min(self.height - 1);
+        let col = (x as usize).min(self.width - 1);
+        let row_start = row * self.width;
+
+        if let Some(order) = self.cells[row_start + col].selection_order {
+            return Some(SelectionPoint { order });
+        }
+
+        let selectable_cols = (0..self.width)
+            .filter_map(|candidate_col| {
+                self.cells[row_start + candidate_col]
+                    .selection_order
+                    .map(|order| (candidate_col, order))
+            })
+            .collect::<Vec<_>>();
+
+        let (first_col, first_order) = *selectable_cols.first()?;
+        let (last_col, last_order) = *selectable_cols.last()?;
+
+        if col <= first_col {
+            return Some(SelectionPoint { order: first_order });
+        }
+        if col >= last_col {
+            return Some(SelectionPoint { order: last_order });
+        }
+
+        selectable_cols
+            .into_iter()
+            .min_by_key(|(candidate_col, _)| candidate_col.abs_diff(col))
+            .map(|(_, order)| SelectionPoint { order })
+    }
+
+    fn push_selection_unit(&mut self, row: i32, character: char) -> usize {
+        let order = self.next_selection_order;
+        self.next_selection_order += 1;
+        self.selection_units.push(SelectionUnit {
+            order,
+            row,
+            character,
+        });
+        order
+    }
+
     fn write_full_to(&self, out: &mut impl Write) -> io::Result<()> {
         write!(out, "\x1b[H")?;
 
@@ -1492,24 +1849,43 @@ impl Frame {
 
         write!(out, "\x1b[{};{}H", row + 1, start_col + 1)?;
 
-        let mut current = Background::Default;
+        let mut current_background = Background::Default;
+        let mut current_reversed = false;
         for col in start_col..end_col {
             let cell = self.cells[row * self.width + col];
             let background = cell.background;
-            if background != current {
+            if cell.reversed != current_reversed {
+                if cell.reversed {
+                    write!(out, "\x1b[7m")?;
+                } else {
+                    write!(out, "\x1b[27m")?;
+                }
+                current_reversed = cell.reversed;
+            }
+            if background != current_background {
                 write!(out, "{}", background.ansi_bg())?;
-                current = background;
+                current_background = background;
             }
             write!(out, "{}", cell.character)?;
         }
 
-        write!(out, "\x1b[49m")
+        write!(out, "\x1b[27m\x1b[49m")
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Cell {
     background: Background,
+    character: char,
+    selection_background: Option<Background>,
+    selection_order: Option<usize>,
+    reversed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct SelectionUnit {
+    order: usize,
+    row: i32,
     character: char,
 }
 
@@ -1518,6 +1894,9 @@ impl Default for Cell {
         Self {
             background: Background::Default,
             character: ' ',
+            selection_background: None,
+            selection_order: None,
+            reversed: false,
         }
     }
 }

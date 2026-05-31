@@ -26,8 +26,8 @@ row.style.width = '52px';
 row.style.height = '9px';
 
 const viewport = pc.createElement('div');
-viewport.style.width = '46px';
-viewport.style.height = '9px';
+viewport.style.width = '88%';
+viewport.style.height = '100%';
 viewport.style.overflowY = 'scroll';
 viewport.style.overflowX = 'hidden';
 viewport.style.backgroundColor = 'blue';

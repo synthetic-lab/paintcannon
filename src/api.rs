@@ -41,6 +41,7 @@ impl PaintCannon {
             force_compat_mode.unwrap_or(false),
             alternate_screen.unwrap_or(false),
             capture_mouse.unwrap_or(false),
+            Some(tx.clone()),
         );
         let kitty_keyboard_enabled = input
             .as_ref()
@@ -196,6 +197,12 @@ impl PaintCannon {
                     Error::from_reason(format!("unsupported background: {value}"))
                 })?;
                 RenderCommand::SetBackground { id, background }
+            }
+            "selection-background-color" | "selectionBackgroundColor" => {
+                let background = Background::parse(&value).ok_or_else(|| {
+                    Error::from_reason(format!("unsupported selection background: {value}"))
+                })?;
+                RenderCommand::SetSelectionBackground { id, background }
             }
             "grid-template-columns" | "gridTemplateColumns" => {
                 RenderCommand::SetGridTemplateColumns {

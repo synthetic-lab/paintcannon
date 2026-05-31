@@ -1221,6 +1221,14 @@ export class CSSStyleDeclaration {
     this.setProperty('background-color', value);
   }
 
+  get selectionBackgroundColor(): string {
+    return this.getPropertyValue('selection-background-color');
+  }
+
+  set selectionBackgroundColor(value: string) {
+    this.setProperty('selection-background-color', value);
+  }
+
   get gridTemplateColumns(): string {
     return this.getPropertyValue('grid-template-columns');
   }

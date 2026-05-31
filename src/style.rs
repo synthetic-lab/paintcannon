@@ -31,6 +31,7 @@ pub(crate) struct DivStyle {
     pub(crate) grid_column: CssGridLine,
     pub(crate) grid_row: CssGridLine,
     pub(crate) background: Background,
+    pub(crate) selection_background: Option<Background>,
     pub(crate) overflow_x: LayoutOverflow,
     pub(crate) overflow_y: LayoutOverflow,
 }
@@ -62,6 +63,7 @@ impl Default for DivStyle {
             grid_column: CssGridLine::default(),
             grid_row: CssGridLine::default(),
             background: Background::Default,
+            selection_background: None,
             overflow_x: LayoutOverflow::Visible,
             overflow_y: LayoutOverflow::Visible,
         }
