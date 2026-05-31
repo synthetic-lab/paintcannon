@@ -1,5 +1,7 @@
 use crate::frame::{Frame, Selection, SelectionPoint};
 
+const MIN_SELECTION_DRAG_DELTA_CELLS: u32 = 1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SelectionMouseEvent {
     pub(crate) event_type: SelectionMouseEventType,
@@ -34,6 +36,8 @@ struct ActiveSelection {
     focus: SelectionPoint,
     selecting: bool,
     moved: bool,
+    origin_x: u32,
+    origin_y: u32,
     last_x: u32,
     last_y: u32,
 }
@@ -67,6 +71,8 @@ impl SelectionState {
                     focus: point,
                     selecting: true,
                     moved: false,
+                    origin_x: event.x,
+                    origin_y: event.y,
                     last_x: event.x,
                     last_y: event.y,
                 });
@@ -89,9 +95,18 @@ impl SelectionState {
                     return SelectionAction::None;
                 };
 
-                let changed = selection.focus != point;
+                let reached_threshold = selection.moved
+                    || selection_drag_delta_reached(
+                        selection.origin_x,
+                        selection.origin_y,
+                        event.x,
+                        event.y,
+                    );
+                let changed = reached_threshold && selection.focus != point;
                 selection.moved = selection.moved || changed;
-                selection.focus = point;
+                if reached_threshold {
+                    selection.focus = point;
+                }
                 selection.last_x = event.x;
                 selection.last_y = event.y;
                 if changed {
@@ -111,12 +126,21 @@ impl SelectionState {
                 selection.last_x = event.x;
                 selection.last_y = event.y;
                 let mut changed = false;
-                if let Some(point) =
-                    frame.and_then(|frame| frame.selection_point_for(event.x, event.y))
-                {
-                    changed = selection.focus != point;
-                    selection.moved = selection.moved || changed;
-                    selection.focus = point;
+                let reached_threshold = selection.moved
+                    || selection_drag_delta_reached(
+                        selection.origin_x,
+                        selection.origin_y,
+                        event.x,
+                        event.y,
+                    );
+                if reached_threshold {
+                    if let Some(point) =
+                        frame.and_then(|frame| frame.selection_point_for(event.x, event.y))
+                    {
+                        changed = selection.focus != point;
+                        selection.moved = selection.moved || changed;
+                        selection.focus = point;
+                    }
                 }
                 if changed {
                     SelectionAction::Redraw
@@ -137,8 +161,17 @@ impl SelectionState {
                     .filter(|selection| selection.selecting)
                 {
                     if let Some(point) = point {
-                        selection.moved = selection.moved || selection.focus != point;
-                        selection.focus = point;
+                        let reached_threshold = selection.moved
+                            || selection_drag_delta_reached(
+                                selection.origin_x,
+                                selection.origin_y,
+                                event.x,
+                                event.y,
+                            );
+                        if reached_threshold {
+                            selection.moved = selection.moved || selection.focus != point;
+                            selection.focus = point;
+                        }
                     }
                     selection.last_x = event.x;
                     selection.last_y = event.y;
@@ -174,12 +207,26 @@ impl SelectionState {
         let Some(point) = frame.selection_point_for(selection.last_x, selection.last_y) else {
             return false;
         };
+        if !selection.moved
+            && !selection_drag_delta_reached(
+                selection.origin_x,
+                selection.origin_y,
+                selection.last_x,
+                selection.last_y,
+            )
+        {
+            return false;
+        }
 
         let changed = selection.focus != point;
         selection.moved = selection.moved || changed;
         selection.focus = point;
         changed
     }
+}
+
+fn selection_drag_delta_reached(origin_x: u32, origin_y: u32, x: u32, y: u32) -> bool {
+    origin_x.abs_diff(x).max(origin_y.abs_diff(y)) >= MIN_SELECTION_DRAG_DELTA_CELLS
 }
 
 #[cfg(test)]
@@ -338,6 +385,56 @@ mod tests {
                 Some(&frame),
             ),
             SelectionAction::Redraw
+        );
+        assert_eq!(state.active_selection(), None);
+    }
+
+    #[test]
+    fn one_cell_drag_starts_selection() {
+        let frame = text_frame("hello");
+        let mut state = SelectionState::default();
+
+        state.handle_event(
+            SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Down,
+                x: 1,
+                y: 0,
+                button: 0,
+            },
+            Some(&frame),
+        );
+
+        assert_eq!(
+            state.handle_event(
+                SelectionMouseEvent {
+                    event_type: SelectionMouseEventType::Drag,
+                    x: 2,
+                    y: 0,
+                    button: 0,
+                },
+                Some(&frame),
+            ),
+            SelectionAction::Redraw
+        );
+        assert_eq!(
+            state.active_selection(),
+            Some(Selection {
+                anchor: SelectionPoint { order: 1 },
+                focus: SelectionPoint { order: 2 },
+            })
+        );
+
+        assert_eq!(
+            state.handle_event(
+                SelectionMouseEvent {
+                    event_type: SelectionMouseEventType::Up,
+                    x: 2,
+                    y: 0,
+                    button: 0,
+                },
+                Some(&frame),
+            ),
+            SelectionAction::CopyToClipboard("el".to_string())
         );
         assert_eq!(state.active_selection(), None);
     }
