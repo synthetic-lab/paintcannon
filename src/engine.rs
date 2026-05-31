@@ -101,6 +101,7 @@ pub(crate) enum StyleMutation {
     BorderLeft(BorderStyle),
     BorderColor(Background),
     Color(Background),
+    PlaceholderColor(Background),
     Background(Background),
     SelectionBackground(Background),
     Cursor(CursorStyle),
@@ -195,6 +196,10 @@ pub(crate) enum EngineCommand {
         node: DomId,
         focused: bool,
     },
+    SetInputPlaceholder {
+        node: DomId,
+        placeholder: String,
+    },
     SetTextAreaValue {
         node: DomId,
         value: String,
@@ -203,6 +208,10 @@ pub(crate) enum EngineCommand {
     SetTextAreaFocused {
         node: DomId,
         focused: bool,
+    },
+    SetTextAreaPlaceholder {
+        node: DomId,
+        placeholder: String,
     },
     MoveTextAreaCursorVertically {
         node: DomId,
@@ -646,6 +655,20 @@ impl PaintEngine {
         true
     }
 
+    pub(crate) fn set_input_placeholder(
+        &mut self,
+        node: DomId,
+        placeholder: impl Into<String>,
+    ) -> bool {
+        let Some(node) = self.node_for(node) else {
+            return false;
+        };
+        let placeholder = placeholder.into();
+        self.arena.set_input_placeholder(node, placeholder.clone());
+        self.arena.set_textarea_placeholder(node, placeholder);
+        true
+    }
+
     pub(crate) fn set_textarea_value(
         &mut self,
         node: DomId,
@@ -665,6 +688,18 @@ impl PaintEngine {
             return false;
         };
         self.arena.set_textarea_focused(node, focused);
+        true
+    }
+
+    pub(crate) fn set_textarea_placeholder(
+        &mut self,
+        node: DomId,
+        placeholder: impl Into<String>,
+    ) -> bool {
+        let Some(node) = self.node_for(node) else {
+            return false;
+        };
+        self.arena.set_textarea_placeholder(node, placeholder);
         true
     }
 
@@ -1063,6 +1098,7 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
         StyleMutation::BorderLeft(border) => style.border_left = border,
         StyleMutation::BorderColor(color) => style.border_color = color,
         StyleMutation::Color(color) => style.color = color,
+        StyleMutation::PlaceholderColor(color) => style.placeholder_color = color,
         StyleMutation::Background(background) => style.background = background,
         StyleMutation::SelectionBackground(background) => {
             style.selection_background = Some(background);
@@ -1191,6 +1227,9 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         EngineCommand::SetInputFocused { node, focused } => {
             engine.set_input_focused(node, focused);
         }
+        EngineCommand::SetInputPlaceholder { node, placeholder } => {
+            engine.set_input_placeholder(node, placeholder);
+        }
         EngineCommand::SetTextAreaValue {
             node,
             value,
@@ -1200,6 +1239,9 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         }
         EngineCommand::SetTextAreaFocused { node, focused } => {
             engine.set_textarea_focused(node, focused);
+        }
+        EngineCommand::SetTextAreaPlaceholder { node, placeholder } => {
+            engine.set_textarea_placeholder(node, placeholder);
         }
         EngineCommand::MoveTextAreaCursorVertically {
             node,

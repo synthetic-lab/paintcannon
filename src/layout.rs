@@ -35,6 +35,7 @@ pub(crate) struct ImageLayoutData {
 #[derive(Clone)]
 pub(crate) struct InputLayoutData {
     pub(crate) value: String,
+    pub(crate) placeholder: String,
     pub(crate) cursor: u32,
     pub(crate) focused: bool,
 }
@@ -42,6 +43,7 @@ pub(crate) struct InputLayoutData {
 #[derive(Clone)]
 pub(crate) struct TextAreaLayoutData {
     pub(crate) value: String,
+    pub(crate) placeholder: String,
     pub(crate) cursor: u32,
     pub(crate) focused: bool,
 }
@@ -185,6 +187,7 @@ impl LayoutArena {
         self.push_node(
             LayoutNodeKind::Input(InputLayoutData {
                 value: value.into(),
+                placeholder: String::new(),
                 cursor: 0,
                 focused: false,
             }),
@@ -196,6 +199,7 @@ impl LayoutArena {
         self.push_node(
             LayoutNodeKind::TextArea(TextAreaLayoutData {
                 value: value.into(),
+                placeholder: String::new(),
                 cursor: 0,
                 focused: false,
             }),
@@ -257,6 +261,12 @@ impl LayoutArena {
         }
     }
 
+    pub(crate) fn set_input_placeholder(&mut self, node: NodeId, placeholder: impl Into<String>) {
+        if let LayoutNodeKind::Input(input) = &mut self.nodes[node_index(node)].kind {
+            input.placeholder = placeholder.into();
+        }
+    }
+
     pub(crate) fn set_textarea_value(
         &mut self,
         node: NodeId,
@@ -274,6 +284,16 @@ impl LayoutArena {
     pub(crate) fn set_textarea_focused(&mut self, node: NodeId, focused: bool) {
         if let LayoutNodeKind::TextArea(textarea) = &mut self.nodes[node_index(node)].kind {
             textarea.focused = focused;
+        }
+    }
+
+    pub(crate) fn set_textarea_placeholder(
+        &mut self,
+        node: NodeId,
+        placeholder: impl Into<String>,
+    ) {
+        if let LayoutNodeKind::TextArea(textarea) = &mut self.nodes[node_index(node)].kind {
+            textarea.placeholder = placeholder.into();
         }
     }
 

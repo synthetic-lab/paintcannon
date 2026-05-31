@@ -75,6 +75,7 @@ pub struct BatchCommand {
     pub src: Option<String>,
     pub cursor: Option<u32>,
     pub focused: Option<bool>,
+    pub placeholder: Option<String>,
     pub property: Option<String>,
     pub value: Option<String>,
 }
@@ -221,6 +222,14 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn set_input_placeholder(&self, id: u32, placeholder: String) -> Result<()> {
+        self.send(EngineCommand::SetInputPlaceholder {
+            node: DomId(id),
+            placeholder,
+        })
+    }
+
+    #[napi]
     pub fn set_text_area_value(&self, id: u32, value: String, cursor: u32) -> Result<()> {
         self.send(EngineCommand::SetTextAreaValue {
             node: DomId(id),
@@ -234,6 +243,14 @@ impl PaintCannon {
         self.send(EngineCommand::SetTextAreaFocused {
             node: DomId(id),
             focused,
+        })
+    }
+
+    #[napi]
+    pub fn set_text_area_placeholder(&self, id: u32, placeholder: String) -> Result<()> {
+        self.send(EngineCommand::SetTextAreaPlaceholder {
+            node: DomId(id),
+            placeholder,
         })
     }
 
@@ -410,6 +427,15 @@ impl PaintCannon {
                         focused,
                     });
                 }
+                "setInputPlaceholder" => {
+                    let id = resolve_batch_id(command.id, "id", "setInputPlaceholder", &id_map)?;
+                    let placeholder =
+                        required_string(command.placeholder, "placeholder", "setInputPlaceholder")?;
+                    render_commands.push(EngineCommand::SetInputPlaceholder {
+                        node: DomId(id),
+                        placeholder,
+                    });
+                }
                 "setTextAreaValue" => {
                     let id = resolve_batch_id(command.id, "id", "setTextAreaValue", &id_map)?;
                     let value = required_string(command.value, "value", "setTextAreaValue")?;
@@ -426,6 +452,18 @@ impl PaintCannon {
                     render_commands.push(EngineCommand::SetTextAreaFocused {
                         node: DomId(id),
                         focused,
+                    });
+                }
+                "setTextAreaPlaceholder" => {
+                    let id = resolve_batch_id(command.id, "id", "setTextAreaPlaceholder", &id_map)?;
+                    let placeholder = required_string(
+                        command.placeholder,
+                        "placeholder",
+                        "setTextAreaPlaceholder",
+                    )?;
+                    render_commands.push(EngineCommand::SetTextAreaPlaceholder {
+                        node: DomId(id),
+                        placeholder,
                     });
                 }
                 "setRoot" => {
@@ -867,6 +905,12 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
             let color = Background::parse(value)
                 .ok_or_else(|| Error::from_reason(format!("unsupported color: {value}")))?;
             StyleMutation::Color(color)
+        }
+        "placeholder-color" | "placeholderColor" => {
+            let color = Background::parse(value).ok_or_else(|| {
+                Error::from_reason(format!("unsupported placeholder color: {value}"))
+            })?;
+            StyleMutation::PlaceholderColor(color)
         }
         "transition" => {
             return Ok(EngineCommand::SetTransition {

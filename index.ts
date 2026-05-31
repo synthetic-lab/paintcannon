@@ -161,6 +161,7 @@ export interface NativeBatchCommand {
   src?: string;
   cursor?: number;
   focused?: boolean;
+  placeholder?: string;
   property?: string;
   value?: string;
 }
@@ -181,8 +182,10 @@ export interface NativePaintCannon {
   setImageSource(id: number, src: string): void;
   setInputValue(id: number, value: string, cursor: number): void;
   setInputFocused(id: number, focused: boolean): void;
+  setInputPlaceholder(id: number, placeholder: string): void;
   setTextAreaValue(id: number, value: string, cursor: number): void;
   setTextAreaFocused(id: number, focused: boolean): void;
+  setTextAreaPlaceholder(id: number, placeholder: string): void;
   moveTextAreaCursorVertically(id: number, direction: number): number | null;
   setRoot(id: number): void;
   appendChild(parent: number, child: number): void;
@@ -338,6 +341,7 @@ export class PaintCannon {
         this.createNativeInput(),
         (id, value, cursor) => this.setNativeInputValue(id, value, cursor),
         (id, focused) => this.setNativeInputFocused(id, focused),
+        (id, placeholder) => this.setNativeInputPlaceholder(id, placeholder),
         (id, property, value) => this.setNativeStyleProperty(id, property, value),
       );
       this.registerElement(element);
@@ -350,6 +354,7 @@ export class PaintCannon {
         this.createNativeTextArea(),
         (id, value, cursor) => this.setNativeTextAreaValue(id, value, cursor),
         (id, focused) => this.setNativeTextAreaFocused(id, focused),
+        (id, placeholder) => this.setNativeTextAreaPlaceholder(id, placeholder),
         (id, direction) => this.binding.moveTextAreaCursorVertically(id, direction),
         (id, property, value) => this.setNativeStyleProperty(id, property, value),
       );
@@ -711,6 +716,15 @@ export class PaintCannon {
     this.binding.setInputFocused(id, focused);
   }
 
+  private setNativeInputPlaceholder(id: number, placeholder: string): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'setInputPlaceholder', id, placeholder });
+      return;
+    }
+
+    this.binding.setInputPlaceholder(id, placeholder);
+  }
+
   private setNativeTextAreaValue(id: number, value: string, cursor: number): void {
     if (this.isTransactionActive()) {
       this.batchCommands.push({ type: 'setTextAreaValue', id, value, cursor });
@@ -727,6 +741,15 @@ export class PaintCannon {
     }
 
     this.binding.setTextAreaFocused(id, focused);
+  }
+
+  private setNativeTextAreaPlaceholder(id: number, placeholder: string): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'setTextAreaPlaceholder', id, placeholder });
+      return;
+    }
+
+    this.binding.setTextAreaPlaceholder(id, placeholder);
   }
 
   private setNativeRoot(id: number): void {
@@ -1938,6 +1961,7 @@ export class InputElement {
   id: number;
   private inputType = 'text';
   private inputValue = '';
+  private placeholderValue = '';
   private cursor = 0;
   private focused = false;
 
@@ -1946,6 +1970,7 @@ export class InputElement {
     id: number,
     private readonly setNativeInputValue: (id: number, value: string, cursor: number) => void,
     private readonly setNativeInputFocused: (id: number, focused: boolean) => void,
+    private readonly setNativeInputPlaceholder: (id: number, placeholder: string) => void,
     setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {
     this.ownerDocument = owner;
@@ -1976,6 +2001,15 @@ export class InputElement {
     this.inputValue = String(value);
     this.cursor = Array.from(this.inputValue).length;
     this.syncValue();
+  }
+
+  get placeholder(): string {
+    return this.placeholderValue;
+  }
+
+  set placeholder(value: string) {
+    this.placeholderValue = String(value);
+    this.setNativeInputPlaceholder(this.id, this.placeholderValue);
   }
 
   get cursorPosition(): number {
@@ -2143,10 +2177,11 @@ export class TextAreaElement extends InputElement {
     id: number,
     setNativeInputValue: (id: number, value: string, cursor: number) => void,
     setNativeInputFocused: (id: number, focused: boolean) => void,
+    setNativeInputPlaceholder: (id: number, placeholder: string) => void,
     private readonly moveNativeTextAreaCursorVertically: (id: number, direction: number) => number | null,
     setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {
-    super(owner, id, setNativeInputValue, setNativeInputFocused, setNativeStyleProperty);
+    super(owner, id, setNativeInputValue, setNativeInputFocused, setNativeInputPlaceholder, setNativeStyleProperty);
   }
 
   override get type(): string {
@@ -2482,6 +2517,14 @@ export class CSSStyleDeclaration {
 
   set color(value: string) {
     this.setProperty('color', value);
+  }
+
+  get placeholderColor(): string {
+    return this.getPropertyValue('placeholder-color');
+  }
+
+  set placeholderColor(value: string) {
+    this.setProperty('placeholder-color', value);
   }
 
   get backgroundColor(): string {

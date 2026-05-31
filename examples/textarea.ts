@@ -25,11 +25,13 @@ title.appendChild(pc.createTextNode('Textarea: auto height, minHeight=5. Enter i
 
 const textarea = pc.createElement('textarea');
 textarea.value = 'paintcannon textarea with enough text to soft-wrap inside a forty-eight cell box';
+textarea.placeholder = 'type a long message here';
 textarea.cursorToEnd();
 textarea.style.width = 48;
 textarea.style.minHeight = 5;
 textarea.style.backgroundColor = '#020617';
 textarea.style.color = '#f8fafc';
+textarea.style.placeholderColor = '#64748b';
 textarea.style.border = 'rounded';
 textarea.style.borderColor = '#64748b';
 

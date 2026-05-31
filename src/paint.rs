@@ -281,6 +281,8 @@ impl<'a, 'out> Painter<'a, 'out> {
             self.paint_color(id, ColorTransitionProperty::Color, style.color),
             state.foreground,
         );
+        let placeholder_foreground =
+            effective_background(style.placeholder_color, state.foreground);
         let selection_background = style.selection_background.or(state.selection_background);
         let content = content_box_rect(bounds, style);
 
@@ -298,6 +300,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             background,
             selection_background,
             foreground,
+            placeholder_foreground,
             state.clip,
         );
         let border_color =
@@ -331,6 +334,8 @@ impl<'a, 'out> Painter<'a, 'out> {
             self.paint_color(id, ColorTransitionProperty::Color, style.color),
             state.foreground,
         );
+        let placeholder_foreground =
+            effective_background(style.placeholder_color, state.foreground);
         let selection_background = style.selection_background.or(state.selection_background);
         let content = content_box_rect(bounds, style);
 
@@ -348,6 +353,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             background,
             selection_background,
             foreground,
+            placeholder_foreground,
             state.clip,
         );
         let border_color =
@@ -641,6 +647,7 @@ fn paint_input(
     background: Background,
     selection_background: Option<Background>,
     foreground: Background,
+    placeholder_foreground: Background,
     clip: ClipBounds,
 ) {
     if rect.width() <= 0 || rect.height() <= 0 {
@@ -649,17 +656,31 @@ fn paint_input(
     frame.fill_rect(rect, background, selection_background, clip);
 
     let width = rect.width() as usize;
-    let chars = input.value.chars().collect::<Vec<_>>();
+    let is_placeholder = input.value.is_empty();
+    let visible_text = if is_placeholder {
+        input.placeholder.as_str()
+    } else {
+        input.value.as_str()
+    };
+    let chars = visible_text.chars().collect::<Vec<_>>();
     let cursor = (input.cursor as usize).min(chars.len());
-    let start = if input.focused && cursor >= width {
+    let start = if input.focused && !input.value.is_empty() && cursor >= width {
         cursor + 1 - width
     } else {
         0
     };
-    let cursor_col = input.focused.then_some(cursor.saturating_sub(start));
+    let cursor_col = input.focused.then_some(
+        (input.cursor as usize)
+            .min(input.value.chars().count())
+            .saturating_sub(start),
+    );
     let glyph_style = GlyphStyle {
         background,
-        foreground,
+        foreground: if is_placeholder {
+            placeholder_foreground
+        } else {
+            foreground
+        },
         selection_background,
     };
 
@@ -688,6 +709,7 @@ fn paint_textarea(
     background: Background,
     selection_background: Option<Background>,
     foreground: Background,
+    placeholder_foreground: Background,
     clip: ClipBounds,
 ) {
     if rect.width() <= 0 || rect.height() <= 0 {
@@ -695,15 +717,26 @@ fn paint_textarea(
     }
     frame.fill_rect(rect, background, selection_background, clip);
 
-    let layout = WrappedText::new(&textarea.value, rect.width() as usize);
+    let is_placeholder = textarea.value.is_empty();
+    let visible_text = if is_placeholder {
+        textarea.placeholder.as_str()
+    } else {
+        textarea.value.as_str()
+    };
+    let layout = WrappedText::new(visible_text, rect.width() as usize);
     let glyph_style = GlyphStyle {
         background,
-        foreground,
+        foreground: if is_placeholder {
+            placeholder_foreground
+        } else {
+            foreground
+        },
         selection_background,
     };
-    let cursor_position = textarea
-        .focused
-        .then(|| layout.cursor_position(textarea.cursor as usize));
+    let cursor_position = textarea.focused.then(|| {
+        WrappedText::new(&textarea.value, rect.width() as usize)
+            .cursor_position(textarea.cursor as usize)
+    });
     let scroll_top = cursor_position
         .map(|(row, _)| textarea_scroll_top(row, rect.height() as usize))
         .unwrap_or(0);
@@ -1293,6 +1326,37 @@ mod tests {
     }
 
     #[test]
+    fn empty_input_paints_placeholder() {
+        let mut arena = LayoutArena::new();
+        let input = arena.create_input(
+            block_style(CssDimension::Length(8.0), CssDimension::Length(1.0)),
+            "",
+        );
+        arena.set_input_placeholder(input, "search");
+
+        arena.compute_layout(
+            input,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, input, 8, 1, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 's');
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().foreground,
+            Background::Rgb(100, 116, 139)
+        );
+        assert_eq!(output.frame.cell(5, 0).unwrap().character, 'h');
+
+        arena.set_input_value(input, "ok", 2);
+        let output = paint_arena(&arena, input, 8, 1, false);
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'o');
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, 'k');
+    }
+
+    #[test]
     fn paints_input_own_background_color_and_border() {
         let mut arena = LayoutArena::new();
         let mut style = block_style(CssDimension::Length(8.0), CssDimension::Length(3.0));
@@ -1353,6 +1417,41 @@ mod tests {
         assert_eq!(output.frame.cell(4, 0).unwrap().character, 'o');
         assert_eq!(output.frame.cell(0, 1).unwrap().character, 'w');
         assert!(output.frame.cell(0, 1).unwrap().reversed);
+    }
+
+    #[test]
+    fn empty_textarea_paints_wrapped_placeholder() {
+        let mut arena = LayoutArena::new();
+        let mut style = block_style(CssDimension::Length(5.0), CssDimension::Length(2.0));
+        style.placeholder_color = Background::Magenta;
+        let textarea = arena.create_textarea(style, "");
+        arena.set_textarea_placeholder(textarea, "hello world");
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+        let output = paint_arena(&arena, textarea, 5, 2, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'h');
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().foreground,
+            Background::Magenta
+        );
+        assert_eq!(output.frame.cell(4, 0).unwrap().character, 'o');
+        assert_eq!(output.frame.cell(0, 1).unwrap().character, 'w');
+
+        arena.set_textarea_value(textarea, "ok", 2);
+        let output = paint_arena(&arena, textarea, 5, 2, false);
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'o');
+        assert_ne!(
+            output.frame.cell(0, 0).unwrap().foreground,
+            Background::Magenta
+        );
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, 'k');
     }
 
     #[test]

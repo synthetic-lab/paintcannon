@@ -23,8 +23,8 @@ const title = pc.createElement('div');
 title.style.color = '#93c5fd';
 title.appendChild(pc.createTextNode('Tab and Shift-Tab move focus. Escape exits.'));
 
-const first = field('name', 'paintcannon');
-const second = field('command', 'render fast');
+const first = field('name', '', 'your name');
+const second = field('command', '', 'render fast');
 
 root.appendChild(title);
 root.appendChild(first.row);
@@ -40,7 +40,7 @@ pc.addEventListener('keydown', (event) => {
   }
 });
 
-function field(labelText: string, initialValue: string) {
+function field(labelText: string, initialValue: string, placeholder: string) {
   const row = pc.createElement('div');
   row.style.display = 'flex';
   row.style.flexDirection = 'row';
@@ -52,14 +52,16 @@ function field(labelText: string, initialValue: string) {
   label.style.color = '#cbd5e1';
   label.appendChild(pc.createTextNode(labelText));
 
-const input = pc.createElement('input');
+  const input = pc.createElement('input');
   input.type = 'text';
   input.value = initialValue;
+  input.placeholder = placeholder;
   input.cursorPosition = input.value.length;
   input.style.width = 32;
   input.style.height = 3;
   input.style.backgroundColor = '#020617';
   input.style.color = '#f8fafc';
+  input.style.placeholderColor = '#64748b';
   input.style.border = 'rounded';
   input.style.borderColor = '#64748b';
 
