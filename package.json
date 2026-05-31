@@ -9,6 +9,7 @@
     "build": "napi build --release --dts dist/native.d.ts && tsc",
     "build:debug": "napi build --dts dist/native.d.ts && tsc",
     "demo": "npm run build:debug && node dist/examples/basic.js",
+    "demo:alt-restart": "npm run build:debug && node dist/examples/alt-screen-restart.js",
     "demo:borders": "npm run build:debug && node dist/examples/borders.js",
     "demo:counter": "npm run build:debug && node dist/examples/counter-button.js",
     "demo:chunky-rounded": "npm run build:debug && node dist/examples/chunky-rounded-hover.js",

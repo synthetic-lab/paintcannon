@@ -568,7 +568,7 @@ impl Frame {
     ) -> io::Result<()> {
         write!(out, "\x1b[H")?;
 
-        for row in 0..self.height {
+        for row in 0..self.trailing_empty_rows_start() {
             self.write_span_to(out, row, 0, self.width, color_profile)?;
         }
 
@@ -617,6 +617,18 @@ impl Frame {
         }
 
         write!(out, "\x1b[27m\x1b[39m\x1b[49m")
+    }
+
+    fn trailing_empty_rows_start(&self) -> usize {
+        if self.width == 0 {
+            return 0;
+        }
+
+        self.cells
+            .chunks(self.width)
+            .rposition(|row| row.iter().any(|cell| *cell != Cell::default()))
+            .map(|row| row + 1)
+            .unwrap_or(0)
     }
 
     fn write_border_cell(
@@ -1075,6 +1087,23 @@ mod tests {
         assert!(output.contains("\x1b[?7h"));
         assert!(output.find("\x1b[?7l") < output.find("x"));
         assert!(output.find("x") < output.find("\x1b[?7h"));
+    }
+
+    #[test]
+    fn full_frame_write_skips_trailing_empty_rows() {
+        let mut frame = Frame::new(4, 4, false);
+        frame.write_glyph(0, 1, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
+
+        let mut bytes = Vec::new();
+        frame
+            .write_full_to(&mut bytes, TermProfile::NoColor)
+            .unwrap();
+        let output = String::from_utf8(bytes).unwrap();
+
+        assert!(output.contains("\x1b[1;1H"));
+        assert!(output.contains("\x1b[2;1H"));
+        assert!(!output.contains("\x1b[3;1H"));
+        assert!(!output.contains("\x1b[4;1H"));
     }
 
     #[test]
