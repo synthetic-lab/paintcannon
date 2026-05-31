@@ -42,6 +42,7 @@ pub(crate) struct DivStyle {
     pub(crate) border_bottom: BorderStyle,
     pub(crate) border_left: BorderStyle,
     pub(crate) border_color: Background,
+    pub(crate) cursor: CursorStyle,
     pub(crate) overflow_x: LayoutOverflow,
     pub(crate) overflow_y: LayoutOverflow,
 }
@@ -80,6 +81,7 @@ impl Default for DivStyle {
             border_bottom: BorderStyle::None,
             border_left: BorderStyle::None,
             border_color: Background::Default,
+            cursor: CursorStyle::Auto,
             overflow_x: LayoutOverflow::Visible,
             overflow_y: LayoutOverflow::Visible,
         }
@@ -110,6 +112,79 @@ pub(crate) enum BorderStyle {
     Rounded,
     ChunkyRounded,
     Ascii,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CursorStyle {
+    Auto,
+    Alias,
+    Cell,
+    Copy,
+    Crosshair,
+    Default,
+    EResize,
+    EwResize,
+    Grab,
+    Grabbing,
+    Help,
+    Move,
+    NResize,
+    NeResize,
+    NeswResize,
+    NoDrop,
+    NotAllowed,
+    NsResize,
+    NwResize,
+    NwseResize,
+    Pointer,
+    Progress,
+    SResize,
+    SeResize,
+    SwResize,
+    Text,
+    VerticalText,
+    WResize,
+    Wait,
+    ZoomIn,
+    ZoomOut,
+}
+
+impl CursorStyle {
+    pub(crate) fn osc_shape(self) -> Option<&'static str> {
+        match self {
+            Self::Auto => None,
+            Self::Alias => Some("alias"),
+            Self::Cell => Some("cell"),
+            Self::Copy => Some("copy"),
+            Self::Crosshair => Some("crosshair"),
+            Self::Default => Some("default"),
+            Self::EResize => Some("e-resize"),
+            Self::EwResize => Some("ew-resize"),
+            Self::Grab => Some("grab"),
+            Self::Grabbing => Some("grabbing"),
+            Self::Help => Some("help"),
+            Self::Move => Some("move"),
+            Self::NResize => Some("n-resize"),
+            Self::NeResize => Some("ne-resize"),
+            Self::NeswResize => Some("nesw-resize"),
+            Self::NoDrop => Some("no-drop"),
+            Self::NotAllowed => Some("not-allowed"),
+            Self::NsResize => Some("ns-resize"),
+            Self::NwResize => Some("nw-resize"),
+            Self::NwseResize => Some("nwse-resize"),
+            Self::Pointer => Some("pointer"),
+            Self::Progress => Some("progress"),
+            Self::SResize => Some("s-resize"),
+            Self::SeResize => Some("se-resize"),
+            Self::SwResize => Some("sw-resize"),
+            Self::Text => Some("text"),
+            Self::VerticalText => Some("vertical-text"),
+            Self::WResize => Some("w-resize"),
+            Self::Wait => Some("wait"),
+            Self::ZoomIn => Some("zoom-in"),
+            Self::ZoomOut => Some("zoom-out"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -553,6 +628,43 @@ pub(crate) fn parse_border_style(value: &str) -> Result<BorderStyle> {
         value => Err(Error::from_reason(format!(
             "unsupported border style: {value}"
         ))),
+    }
+}
+
+pub(crate) fn parse_cursor(value: &str) -> Result<CursorStyle> {
+    match value.trim() {
+        "auto" => Ok(CursorStyle::Auto),
+        "alias" => Ok(CursorStyle::Alias),
+        "cell" => Ok(CursorStyle::Cell),
+        "copy" => Ok(CursorStyle::Copy),
+        "crosshair" => Ok(CursorStyle::Crosshair),
+        "default" => Ok(CursorStyle::Default),
+        "e-resize" => Ok(CursorStyle::EResize),
+        "ew-resize" => Ok(CursorStyle::EwResize),
+        "grab" => Ok(CursorStyle::Grab),
+        "grabbing" => Ok(CursorStyle::Grabbing),
+        "help" => Ok(CursorStyle::Help),
+        "move" => Ok(CursorStyle::Move),
+        "n-resize" => Ok(CursorStyle::NResize),
+        "ne-resize" => Ok(CursorStyle::NeResize),
+        "nesw-resize" => Ok(CursorStyle::NeswResize),
+        "no-drop" => Ok(CursorStyle::NoDrop),
+        "not-allowed" => Ok(CursorStyle::NotAllowed),
+        "ns-resize" => Ok(CursorStyle::NsResize),
+        "nw-resize" => Ok(CursorStyle::NwResize),
+        "nwse-resize" => Ok(CursorStyle::NwseResize),
+        "pointer" => Ok(CursorStyle::Pointer),
+        "progress" => Ok(CursorStyle::Progress),
+        "s-resize" => Ok(CursorStyle::SResize),
+        "se-resize" => Ok(CursorStyle::SeResize),
+        "sw-resize" => Ok(CursorStyle::SwResize),
+        "text" => Ok(CursorStyle::Text),
+        "vertical-text" => Ok(CursorStyle::VerticalText),
+        "w-resize" => Ok(CursorStyle::WResize),
+        "wait" => Ok(CursorStyle::Wait),
+        "zoom-in" => Ok(CursorStyle::ZoomIn),
+        "zoom-out" => Ok(CursorStyle::ZoomOut),
+        value => Err(Error::from_reason(format!("unsupported cursor: {value}"))),
     }
 }
 

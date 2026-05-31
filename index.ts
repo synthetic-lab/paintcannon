@@ -30,6 +30,38 @@ export type ScrollEventListener = (event: PaintScrollEvent) => void;
 export type TransitionEventListener = (event: PaintTransitionEvent) => void;
 type ElementEventListener = MouseEventListener | ScrollEventListener | TransitionEventListener;
 export type ClickEventListener = MouseEventListener;
+export type CSSCursor =
+  | 'auto'
+  | 'alias'
+  | 'cell'
+  | 'copy'
+  | 'crosshair'
+  | 'default'
+  | 'e-resize'
+  | 'ew-resize'
+  | 'grab'
+  | 'grabbing'
+  | 'help'
+  | 'move'
+  | 'n-resize'
+  | 'ne-resize'
+  | 'nesw-resize'
+  | 'no-drop'
+  | 'not-allowed'
+  | 'ns-resize'
+  | 'nw-resize'
+  | 'nwse-resize'
+  | 'pointer'
+  | 'progress'
+  | 's-resize'
+  | 'se-resize'
+  | 'sw-resize'
+  | 'text'
+  | 'vertical-text'
+  | 'w-resize'
+  | 'wait'
+  | 'zoom-in'
+  | 'zoom-out';
 
 export interface KeyboardEvent {
   type: KeyboardEventType;
@@ -1693,6 +1725,14 @@ export class CSSStyleDeclaration {
 
   set transition(value: string) {
     this.setProperty('transition', value);
+  }
+
+  get cursor(): CSSCursor | string {
+    return this.getPropertyValue('cursor');
+  }
+
+  set cursor(value: CSSCursor | string) {
+    this.setProperty('cursor', value);
   }
 
   get gridTemplateColumns(): string {

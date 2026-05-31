@@ -30,6 +30,7 @@ function button(label: string, base: string, baseText: string, hover: string, ho
   element.style.backgroundColor = base;
   element.style.borderColor = base;
   element.style.color = baseText;
+  element.style.cursor = 'pointer';
   element.style.transition = 'background-color 220ms, border-color 220ms, color 220ms';
   element.appendChild(pc.createTextNode(`  ${label}  `));
 

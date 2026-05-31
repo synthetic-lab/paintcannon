@@ -16,8 +16,8 @@ use termprofile::{DetectorSettings, TermProfile};
 
 use crate::style::*;
 use crate::terminal::{
-    copy_text_to_clipboard, query_terminal_size, reset_terminal, write_synchronized_output_begin,
-    write_synchronized_output_end, TerminalSize,
+    copy_text_to_clipboard, query_terminal_size, reset_terminal, write_pointer_shape,
+    write_synchronized_output_begin, write_synchronized_output_end, TerminalSize,
 };
 
 pub(crate) enum RenderCommand {
@@ -187,6 +187,10 @@ pub(crate) enum RenderCommand {
         id: u32,
         background: Background,
     },
+    SetCursor {
+        id: u32,
+        cursor: CursorStyle,
+    },
     SetGridTemplateColumns {
         id: u32,
         tracks: Vec<CssGridTemplateTrack>,
@@ -242,6 +246,10 @@ pub(crate) enum RenderCommand {
     },
     HandleTextSelection {
         event: SelectionMouseEvent,
+    },
+    HandlePointerMove {
+        x: u32,
+        y: u32,
     },
     InvalidateFrame,
     Render {
@@ -411,6 +419,8 @@ struct Renderer {
     active_transitions: HashMap<TransitionKey, ActiveColorTransition>,
     transition_events: Arc<Mutex<VecDeque<TransitionEvent>>>,
     color_profile: TermProfile,
+    current_pointer_shape: Option<&'static str>,
+    last_pointer_position: Option<(u32, u32)>,
     selection: Option<Selection>,
 }
 
@@ -438,6 +448,8 @@ impl Renderer {
             active_transitions: HashMap::new(),
             transition_events,
             color_profile,
+            current_pointer_shape: None,
+            last_pointer_position: None,
             selection: None,
         }
     }
@@ -637,6 +649,10 @@ impl Renderer {
             RenderCommand::SetSelectionBackground { id, background } => {
                 self.update_visual_style(id, |node| node.selection_background = Some(background));
             }
+            RenderCommand::SetCursor { id, cursor } => {
+                self.update_visual_style(id, |node| node.cursor = cursor);
+                self.refresh_pointer_shape();
+            }
             RenderCommand::SetGridTemplateColumns { id, tracks } => {
                 self.update_style(id, |node| node.grid_template_columns = tracks);
             }
@@ -678,6 +694,10 @@ impl Renderer {
             }
             RenderCommand::HandleTextSelection { event } => {
                 self.handle_text_selection(event);
+            }
+            RenderCommand::HandlePointerMove { x, y } => {
+                self.last_pointer_position = Some((x, y));
+                self.refresh_pointer_shape();
             }
             RenderCommand::Render { pending } => {
                 self.render();
@@ -1073,6 +1093,7 @@ impl Renderer {
         let _ = output_frame.write_diff_to_stdout(self.previous_frame.as_ref(), self.color_profile);
         self.previous_frame = Some(output_frame);
         self.hit_regions = hit_regions;
+        self.refresh_pointer_shape();
         self.finish_completed_transitions(Instant::now());
     }
 
@@ -1636,6 +1657,38 @@ impl Renderer {
             .rev()
             .find(|region| region.contains(x as i32, y as i32))
             .map(|region| region.id)
+    }
+
+    fn refresh_pointer_shape(&mut self) {
+        let Some((x, y)) = self.last_pointer_position else {
+            return;
+        };
+
+        let shape = self.pointer_shape_for_point(x, y);
+        if shape == self.current_pointer_shape {
+            return;
+        }
+
+        let mut out = io::stdout().lock();
+        if write_pointer_shape(&mut out, shape).is_ok() && out.flush().is_ok() {
+            self.current_pointer_shape = shape;
+        }
+    }
+
+    fn pointer_shape_for_point(&self, x: u32, y: u32) -> Option<&'static str> {
+        let mut current = self.hit_test_id(x, y);
+        while let Some(id) = current {
+            if let Some(shape) = self
+                .nodes
+                .get(&id)
+                .and_then(node_style)
+                .and_then(|style| style.cursor.osc_shape())
+            {
+                return Some(shape);
+            }
+            current = self.parent_by_child.get(&id).copied();
+        }
+        Some("default")
     }
 
     fn handle_text_selection(&mut self, event: SelectionMouseEvent) {

@@ -23,7 +23,7 @@ use crossterm::{
 use napi_derive::napi;
 
 use crate::renderer::{RenderCommand, SelectionMouseEvent, SelectionMouseEventType};
-use crate::terminal::reset_terminal;
+use crate::terminal::{reset_pointer_shape, reset_terminal};
 
 const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
 
@@ -345,6 +345,7 @@ fn release_terminal_state(
     }
 
     if swap_bool(mouse_capture_enabled, false) {
+        reset_pointer_shape();
         let _ = execute!(io::stdout(), DisableMouseCapture);
     }
     if swap_bool(keyboard_enhancement_pushed, false) {
@@ -499,6 +500,7 @@ fn handle_terminal_mouse_event(
     match event.kind {
         MouseEventKind::Down(button) => {
             *mouse_down = Some(MouseDown { button });
+            send_pointer_event(renderer_tx, &event);
             send_selection_event(renderer_tx, SelectionMouseEventType::Down, &event, button);
             push_mouse_event(
                 events,
@@ -507,11 +509,13 @@ fn handle_terminal_mouse_event(
         }
         MouseEventKind::Up(button) => {
             let button = mouse_down.take().map(|down| down.button).unwrap_or(button);
+            send_pointer_event(renderer_tx, &event);
             send_selection_event(renderer_tx, SelectionMouseEventType::Up, &event, button);
             push_mouse_event(events, mouse_event_from_terminal("mouseup", event, button));
             push_mouse_event(events, mouse_event_from_terminal("click", event, button));
         }
         MouseEventKind::Drag(button) => {
+            send_pointer_event(renderer_tx, &event);
             send_selection_event(renderer_tx, SelectionMouseEventType::Drag, &event, button);
             push_mouse_event(
                 events,
@@ -519,24 +523,29 @@ fn handle_terminal_mouse_event(
             );
         }
         MouseEventKind::Moved => {
+            send_pointer_event(renderer_tx, &event);
             push_mouse_event(
                 events,
                 mouse_event_from_terminal("mousemove", event, MouseButton::Left),
             );
         }
         MouseEventKind::ScrollUp => {
+            send_pointer_event(renderer_tx, &event);
             send_selection_cursor_event(renderer_tx, &event);
             push_mouse_event(events, wheel_event_from_terminal(event, 0, -1));
         }
         MouseEventKind::ScrollDown => {
+            send_pointer_event(renderer_tx, &event);
             send_selection_cursor_event(renderer_tx, &event);
             push_mouse_event(events, wheel_event_from_terminal(event, 0, 1));
         }
         MouseEventKind::ScrollLeft => {
+            send_pointer_event(renderer_tx, &event);
             send_selection_cursor_event(renderer_tx, &event);
             push_mouse_event(events, wheel_event_from_terminal(event, -1, 0));
         }
         MouseEventKind::ScrollRight => {
+            send_pointer_event(renderer_tx, &event);
             send_selection_cursor_event(renderer_tx, &event);
             push_mouse_event(events, wheel_event_from_terminal(event, 1, 0));
         }
@@ -564,6 +573,20 @@ fn send_selection_event(
             y: u32::from(event.row),
             button: mouse_button_value(button),
         },
+    });
+}
+
+fn send_pointer_event(
+    renderer_tx: Option<&crossbeam_channel::Sender<RenderCommand>>,
+    event: &CrosstermMouseEvent,
+) {
+    let Some(renderer_tx) = renderer_tx else {
+        return;
+    };
+
+    let _ = renderer_tx.try_send(RenderCommand::HandlePointerMove {
+        x: u32::from(event.column),
+        y: u32::from(event.row),
     });
 }
 

@@ -16,11 +16,11 @@ use crate::renderer::{
     renderer_loop, ClickEvent, MouseClick, RenderCommand, ScrollMetrics, TransitionEvent,
 };
 use crate::style::{
-    parse_align_items, parse_border_style, parse_dimension, parse_display, parse_flex_direction,
-    parse_flex_flow, parse_flex_shorthand, parse_flex_wrap, parse_gap, parse_grid_auto_flow,
-    parse_grid_auto_tracks, parse_grid_line, parse_grid_placement, parse_grid_template_tracks,
-    parse_justify_content, parse_length_percentage, parse_non_negative_number, parse_overflow,
-    parse_transition, Background,
+    parse_align_items, parse_border_style, parse_cursor, parse_dimension, parse_display,
+    parse_flex_direction, parse_flex_flow, parse_flex_shorthand, parse_flex_wrap, parse_gap,
+    parse_grid_auto_flow, parse_grid_auto_tracks, parse_grid_line, parse_grid_placement,
+    parse_grid_template_tracks, parse_justify_content, parse_length_percentage,
+    parse_non_negative_number, parse_overflow, parse_transition, Background,
 };
 use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
@@ -581,6 +581,10 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<RenderCommand> 
             })?;
             RenderCommand::SetSelectionBackground { id, background }
         }
+        "cursor" => RenderCommand::SetCursor {
+            id,
+            cursor: parse_cursor(value)?,
+        },
         "grid-template-columns" | "gridTemplateColumns" => RenderCommand::SetGridTemplateColumns {
             id,
             tracks: parse_grid_template_tracks(value)?,
