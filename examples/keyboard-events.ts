@@ -44,7 +44,7 @@ let eventCount = 0;
 
 function onKeyboardEvent(event: KeyboardEvent) {
   eventCount += 1;
-  statusText.nodeValue = `${eventCount}: type=${event.type} key=${event.key} code=${event.code} repeat=${event.repeat} alt=${event.altKey} meta=${event.metaKey} shift=${event.shiftKey}`;
+  statusText.nodeValue = `${eventCount}: type=${event.type} key=${event.key} code=${event.code} repeat=${event.repeat} ctrl=${event.ctrlKey} alt=${event.altKey} meta=${event.metaKey} shift=${event.shiftKey}`;
 
   if (event.key === 'q' || event.key === 'Escape') {
     pc.stop();

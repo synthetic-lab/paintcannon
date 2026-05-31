@@ -154,6 +154,7 @@ pub(crate) enum RenderCommand {
         id: u32,
         placement: CssGridPlacement,
     },
+    InvalidateFrame,
     Render,
     Shutdown,
 }
@@ -413,6 +414,9 @@ impl Renderer {
             }
             RenderCommand::Render => {
                 self.render();
+            }
+            RenderCommand::InvalidateFrame => {
+                self.previous_frame = None;
             }
             RenderCommand::Shutdown => return false,
         }

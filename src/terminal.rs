@@ -12,7 +12,11 @@ pub struct TerminalSize {
 }
 
 pub(crate) fn reset_terminal() {
-    let _ = write!(io::stdout().lock(), "\x1b[0m\x1b[?25h\n");
+    let rows = query_terminal_size().rows;
+    let _ = write!(
+        io::stdout().lock(),
+        "\x1b[0m\x1b[?25h\x1b[{rows};1H\x1b[2K\n"
+    );
 }
 
 pub(crate) fn query_terminal_size() -> TerminalSize {

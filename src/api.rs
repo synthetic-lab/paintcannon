@@ -12,7 +12,7 @@ use crate::style::{
     parse_grid_line, parse_grid_placement, parse_grid_template_tracks, parse_justify_content,
     parse_length_percentage, parse_non_negative_number, Background,
 };
-use crate::terminal::{query_terminal_size, TerminalSize};
+use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
 const RENDER_QUEUE_CAPACITY: usize = 32 * 1024;
 const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
@@ -258,10 +258,55 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn release_terminal(&self) {
+        if let Some(input) = self.input.as_ref() {
+            input.release_terminal();
+        }
+        reset_terminal();
+        let _ = self.tx.send(RenderCommand::InvalidateFrame);
+    }
+
+    #[napi]
+    pub fn capture_terminal(&self) {
+        if let Some(input) = self.input.as_ref() {
+            input.capture_terminal();
+        }
+    }
+
+    #[napi]
+    pub fn interrupt_process_group(&self) -> Result<()> {
+        signal_process_group(libc::SIGINT)
+    }
+
+    #[napi]
+    pub fn suspend_process_group(&self) -> Result<()> {
+        signal_process_group(libc::SIGTSTP)
+    }
+
+    #[napi]
     pub fn stop(&mut self) -> Result<()> {
         self.shutdown();
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn signal_process_group(signal: libc::c_int) -> Result<()> {
+    let result = unsafe { libc::kill(0, signal) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Error::from_reason(
+            std::io::Error::last_os_error().to_string(),
+        ))
+    }
+}
+
+#[cfg(not(unix))]
+fn signal_process_group(_signal: libc::c_int) -> Result<()> {
+    Err(Error::from_reason(
+        "process group signals are not supported on this platform",
+    ))
 }
 
 impl PaintCannon {

@@ -6,6 +6,8 @@ export interface PaintCannonOptions {
   fps?: number;
   syntheticKeyupDelayMs?: number;
   forceCompatMode?: boolean;
+  captureCtrlC?: boolean;
+  captureCtrlZ?: boolean;
 }
 
 export interface TerminalSize {
@@ -21,6 +23,7 @@ export interface KeyboardEvent {
   type: KeyboardEventType;
   key: string;
   code: string;
+  ctrlKey: boolean;
   altKey: boolean;
   metaKey: boolean;
   shiftKey: boolean;
@@ -39,6 +42,10 @@ export interface NativePaintCannon {
   render(): void;
   drainKeyboardEvents(): KeyboardEvent[];
   setSyntheticKeyupDelay(delayMs: number): void;
+  releaseTerminal(): void;
+  captureTerminal(): void;
+  interruptProcessGroup(): void;
+  suspendProcessGroup(): void;
   stop(): void;
 }
 
@@ -57,18 +64,35 @@ export class PaintCannon {
   private nextAnimationFrameId = 1;
   private animationFrameTimer: NodeJS.Timeout | undefined;
   private keyboardEventTimer: NodeJS.Timeout | undefined;
+  private suspendedByPaintCannon = false;
+  private readonly captureCtrlC: boolean;
+  private readonly captureCtrlZ: boolean;
   private readonly animationFrameCallbacks = new Map<number, AnimationFrameCallback>();
   private readonly keyboardEventListeners: Record<KeyboardEventType, Set<KeyboardEventListener>> = {
     keydown: new Set(),
     keyup: new Set(),
   };
+  private readonly handleSigcont = () => {
+    if (!this.suspendedByPaintCannon || this.stopped) {
+      return;
+    }
+
+    this.suspendedByPaintCannon = false;
+    this.binding.captureTerminal();
+    this.binding.render();
+    this.scheduleKeyboardEventPump();
+  };
 
   constructor(options: PaintCannonOptions = {}) {
     this.binding = new native.PaintCannon(options.forceCompatMode ?? false);
     this.frameIntervalMs = fpsToInterval(options.fps ?? 60);
+    this.captureCtrlC = options.captureCtrlC ?? false;
+    this.captureCtrlZ = options.captureCtrlZ ?? false;
+    process.on('SIGCONT', this.handleSigcont);
     if (options.syntheticKeyupDelayMs !== undefined) {
       this.setSyntheticKeyupDelay(options.syntheticKeyupDelayMs);
     }
+    this.scheduleKeyboardEventPump();
   }
 
   createElement(tagName: 'div'): DivElement;
@@ -181,6 +205,7 @@ export class PaintCannon {
     this.animationFrameCallbacks.clear();
     this.keyboardEventListeners.keydown.clear();
     this.keyboardEventListeners.keyup.clear();
+    process.off('SIGCONT', this.handleSigcont);
     this.binding.stop();
   }
 
@@ -214,7 +239,7 @@ export class PaintCannon {
     if (
       this.stopped ||
       this.keyboardEventTimer !== undefined ||
-      this.keyboardListenerCount() === 0
+      !this.shouldPumpKeyboardEvents()
     ) {
       return;
     }
@@ -233,6 +258,10 @@ export class PaintCannon {
     const events = this.binding.drainKeyboardEvents();
     if (events.length > 0) {
       for (const event of events) {
+        if (this.handleDefaultControlEvent(event)) {
+          return;
+        }
+
         const listeners = Array.from(this.keyboardEventListeners[event.type] ?? []);
         for (const listener of listeners) {
           listener(event);
@@ -246,6 +275,37 @@ export class PaintCannon {
 
   private keyboardListenerCount(): number {
     return this.keyboardEventListeners.keydown.size + this.keyboardEventListeners.keyup.size;
+  }
+
+  private shouldPumpKeyboardEvents(): boolean {
+    return this.keyboardListenerCount() > 0 || !this.captureCtrlC || !this.captureCtrlZ;
+  }
+
+  private handleDefaultControlEvent(event: KeyboardEvent): boolean {
+    if (event.type !== 'keydown' || !event.ctrlKey) {
+      return false;
+    }
+
+    if (!this.captureCtrlC && event.code === 'KeyC') {
+      this.stop();
+      this.binding.interruptProcessGroup();
+      return true;
+    }
+
+    if (!this.captureCtrlZ && event.code === 'KeyZ') {
+      this.binding.releaseTerminal();
+      this.suspendedByPaintCannon = true;
+      try {
+        this.binding.suspendProcessGroup();
+      } catch (error) {
+        this.suspendedByPaintCannon = false;
+        this.binding.captureTerminal();
+        throw error;
+      }
+      return true;
+    }
+
+    return false;
   }
 }
 

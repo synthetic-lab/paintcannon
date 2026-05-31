@@ -26,6 +26,7 @@ pub struct KeyboardEvent {
     pub r#type: String,
     pub key: String,
     pub code: String,
+    pub ctrl_key: bool,
     pub alt_key: bool,
     pub meta_key: bool,
     pub shift_key: bool,
@@ -37,6 +38,9 @@ pub(crate) struct TerminalInput {
     stop: Arc<AtomicBool>,
     synthetic_keyup_delay_ms: Arc<Mutex<u32>>,
     kitty_keyboard_enabled: bool,
+    force_compat_mode: bool,
+    keyboard_enhancement_pushed: Arc<Mutex<bool>>,
+    terminal_captured: Arc<Mutex<bool>>,
     thread: JoinHandle<()>,
 }
 
@@ -48,6 +52,7 @@ impl TerminalInput {
 
         let kitty_keyboard_enabled =
             !force_compat_mode && supports_keyboard_enhancement().unwrap_or(false);
+        let keyboard_enhancement_pushed = Arc::new(Mutex::new(false));
         if kitty_keyboard_enabled {
             let _ = execute!(
                 io::stdout(),
@@ -57,16 +62,19 @@ impl TerminalInput {
                         | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
                 )
             );
+            set_bool(&keyboard_enhancement_pushed, true);
         } else if !force_compat_mode {
             let _ = execute!(
                 io::stdout(),
                 PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
             );
+            set_bool(&keyboard_enhancement_pushed, true);
         }
 
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let synthetic_keyup_delay_ms = Arc::new(Mutex::new(synthetic_keyup_delay_ms));
+        let terminal_captured = Arc::new(Mutex::new(true));
         let thread_events = Arc::clone(&events);
         let thread_stop = Arc::clone(&stop);
         let thread_synthetic_keyup_delay_ms = Arc::clone(&synthetic_keyup_delay_ms);
@@ -107,6 +115,9 @@ impl TerminalInput {
             stop,
             synthetic_keyup_delay_ms,
             kitty_keyboard_enabled,
+            force_compat_mode,
+            keyboard_enhancement_pushed,
+            terminal_captured,
             thread,
         })
     }
@@ -129,18 +140,74 @@ impl TerminalInput {
         self.kitty_keyboard_enabled
     }
 
-    pub(crate) fn shutdown(self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = self.thread.join();
-        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+    pub(crate) fn release_terminal(&self) {
+        if !swap_bool(&self.terminal_captured, false) {
+            return;
+        }
+
+        if swap_bool(&self.keyboard_enhancement_pushed, false) {
+            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+        }
         let _ = disable_raw_mode();
     }
+
+    pub(crate) fn capture_terminal(&self) {
+        if swap_bool(&self.terminal_captured, true) {
+            return;
+        }
+
+        if enable_raw_mode().is_err() {
+            set_bool(&self.terminal_captured, false);
+            return;
+        }
+
+        if self.kitty_keyboard_enabled {
+            let _ = execute!(
+                io::stdout(),
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                )
+            );
+            set_bool(&self.keyboard_enhancement_pushed, true);
+        } else if !self.force_compat_mode {
+            let _ = execute!(
+                io::stdout(),
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            );
+            set_bool(&self.keyboard_enhancement_pushed, true);
+        }
+    }
+
+    pub(crate) fn shutdown(self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.release_terminal();
+        let _ = self.thread.join();
+    }
+}
+
+fn set_bool(value: &Arc<Mutex<bool>>, next: bool) {
+    if let Ok(mut value) = value.lock() {
+        *value = next;
+    }
+}
+
+fn swap_bool(value: &Arc<Mutex<bool>>, next: bool) -> bool {
+    let Ok(mut value) = value.lock() else {
+        return false;
+    };
+
+    let previous = *value;
+    *value = next;
+    previous
 }
 
 #[derive(Clone)]
 struct PressedKey {
     key: String,
     code: String,
+    ctrl_key: bool,
     alt_key: bool,
     meta_key: bool,
     shift_key: bool,
@@ -247,6 +314,12 @@ fn push_keyboard_event(events: &Arc<Mutex<VecDeque<KeyboardEvent>>>, event: Opti
 }
 
 fn pressed_key_from_terminal(event: TerminalKeyEvent) -> Option<PressedKey> {
+    if let KeyCode::Char(character) = event.code {
+        if let Some(pressed_key) = control_character_key(character, event.modifiers) {
+            return Some(pressed_key);
+        }
+    }
+
     let key = key_value(event.code)?;
     let code = code_value(event.code);
     let modifiers = event.modifiers;
@@ -254,6 +327,26 @@ fn pressed_key_from_terminal(event: TerminalKeyEvent) -> Option<PressedKey> {
     Some(PressedKey {
         key,
         code,
+        ctrl_key: modifiers.contains(KeyModifiers::CONTROL),
+        alt_key: modifiers.contains(KeyModifiers::ALT),
+        meta_key: modifiers
+            .intersects(KeyModifiers::META | KeyModifiers::SUPER | KeyModifiers::HYPER),
+        shift_key: modifiers.contains(KeyModifiers::SHIFT),
+        synthetic_keyup_at: None,
+    })
+}
+
+fn control_character_key(character: char, modifiers: KeyModifiers) -> Option<PressedKey> {
+    let value = character as u32;
+    if !(1..=26).contains(&value) {
+        return None;
+    }
+
+    let letter = char::from_u32(u32::from(b'a') + value - 1)?;
+    Some(PressedKey {
+        key: letter.to_string(),
+        code: format!("Key{}", letter.to_ascii_uppercase()),
+        ctrl_key: true,
         alt_key: modifiers.contains(KeyModifiers::ALT),
         meta_key: modifiers
             .intersects(KeyModifiers::META | KeyModifiers::SUPER | KeyModifiers::HYPER),
@@ -271,6 +364,7 @@ fn keyboard_event_from_pressed_key(
         r#type: event_type.to_string(),
         key: pressed_key.key.clone(),
         code: pressed_key.code.clone(),
+        ctrl_key: pressed_key.ctrl_key,
         alt_key: pressed_key.alt_key,
         meta_key: pressed_key.meta_key,
         shift_key: pressed_key.shift_key,
