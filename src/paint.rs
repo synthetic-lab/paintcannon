@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::ops::Range;
 use std::time::Instant;
 
 use taffy::NodeId;
@@ -10,7 +11,10 @@ use crate::layout::{
     ImageLayoutData, InlineFragmentKind, InputLayoutData, LayoutArena, LayoutNodeKind,
     TextAreaLayoutData,
 };
-use crate::style::{Background, ColorTransitionProperty, DivStyle, ImageRendering, LayoutOverflow};
+use crate::style::{
+    Background, ColorTransitionProperty, DivStyle, ImageRendering, LayoutDisplay,
+    LayoutFlexDirection, LayoutFlexWrap, LayoutOverflow,
+};
 use crate::transition::TransitionState;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,6 +93,7 @@ pub(crate) fn paint_arena_with_options(
         let mut painter = Painter {
             arena,
             options,
+            capture_hidden_selection_units,
             output: &mut output,
         };
         painter.paint_node(
@@ -109,6 +114,7 @@ pub(crate) fn paint_arena_with_options(
 struct Painter<'a, 'out> {
     arena: &'a LayoutArena,
     options: PaintOptions<'a>,
+    capture_hidden_selection_units: bool,
     output: &'out mut PaintOutput,
 }
 
@@ -179,7 +185,10 @@ impl<'a, 'out> Painter<'a, 'out> {
         };
 
         if self.arena.inline_fragments(id).is_empty() {
-            for child in self.arena.children(id) {
+            let children = self.arena.children(id);
+            let child_range =
+                self.visible_child_range(style, children, child_state.parent_y, child_clip);
+            for child in &children[child_range] {
                 self.paint_node(*child, child_state);
             }
         } else {
@@ -417,6 +426,67 @@ impl<'a, 'out> Painter<'a, 'out> {
                 );
             }
         }
+    }
+
+    fn visible_child_range(
+        &self,
+        style: &DivStyle,
+        children: &[NodeId],
+        parent_y: i32,
+        clip: ClipBounds,
+    ) -> Range<usize> {
+        if self.capture_hidden_selection_units || !can_cull_vertical_children(style) {
+            return 0..children.len();
+        }
+
+        self.vertical_visible_child_range(children, parent_y, clip)
+            .unwrap_or(0..children.len())
+    }
+
+    fn vertical_visible_child_range(
+        &self,
+        children: &[NodeId],
+        parent_y: i32,
+        clip: ClipBounds,
+    ) -> Option<Range<usize>> {
+        let (clip_top, clip_bottom) = clip.vertical_range()?;
+        if children.is_empty() || clip_top >= clip_bottom {
+            return Some(0..0);
+        }
+
+        let mut low = 0;
+        let mut high = children.len();
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let (_, bottom) = self.child_vertical_edges(children[mid], parent_y);
+            if bottom <= clip_top {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        let start = low;
+
+        low = start;
+        high = children.len();
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let (top, _) = self.child_vertical_edges(children[mid], parent_y);
+            if top < clip_bottom {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+
+        Some(start..low)
+    }
+
+    fn child_vertical_edges(&self, child: NodeId, parent_y: i32) -> (i32, i32) {
+        let layout = self.arena.layout(child);
+        let top = parent_y + layout.location.y.round() as i32;
+        let height = layout.size.height.round().max(0.0) as i32;
+        (top, top + height)
     }
 
     fn paint_color(
@@ -811,12 +881,25 @@ fn scroll_offset_cells(overflow: LayoutOverflow, value: u32) -> i32 {
     }
 }
 
+fn can_cull_vertical_children(style: &DivStyle) -> bool {
+    match style.display {
+        LayoutDisplay::Block => true,
+        LayoutDisplay::Flex => {
+            matches!(style.flex_direction, LayoutFlexDirection::Column)
+                && matches!(style.flex_wrap, LayoutFlexWrap::NoWrap)
+        }
+        LayoutDisplay::Inline | LayoutDisplay::Grid => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use taffy::{AvailableSpace, Size};
 
-    use crate::style::{BorderStyle, CssDimension, ImageRendering, LayoutDisplay};
+    use crate::style::{
+        BorderStyle, CssDimension, ImageRendering, LayoutDisplay, LayoutFlexDirection,
+    };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
         let mut style = DivStyle::default();
@@ -919,6 +1002,50 @@ mod tests {
         let second = paint_arena(&arena, viewport, 5, 1, false);
 
         assert_eq!(second.frame.cell(0, 0).unwrap().character, 'b');
+    }
+
+    #[test]
+    fn column_paint_uses_visible_child_range_for_scrolled_content() {
+        let mut arena = LayoutArena::new();
+        let mut content_style = block_style(CssDimension::Length(10.0), CssDimension::Auto);
+        content_style.display = LayoutDisplay::Flex;
+        content_style.flex_direction = LayoutFlexDirection::Column;
+        let content = arena.create_element(content_style);
+        for _ in 0..100 {
+            let row = arena.create_element(block_style(
+                CssDimension::Length(10.0),
+                CssDimension::Length(1.0),
+            ));
+            arena.append_child(content, row);
+        }
+
+        arena.compute_layout(
+            content,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        let mut output = PaintOutput {
+            frame: Frame::new(10, 5, false),
+            hit_regions: Vec::new(),
+        };
+        let painter = Painter {
+            arena: &arena,
+            options: PaintOptions {
+                transitions: None,
+                now: Instant::now(),
+                truecolor_enabled: false,
+            },
+            capture_hidden_selection_units: false,
+            output: &mut output,
+        };
+        let clip = ClipBounds::from_rect_axes(ClipRect::new(0, 0, 10, 5), true, true);
+        let range =
+            painter.visible_child_range(arena.style(content), arena.children(content), -20, clip);
+
+        assert_eq!(range, 20..25);
     }
 
     #[test]

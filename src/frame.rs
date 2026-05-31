@@ -128,6 +128,10 @@ impl ClipBounds {
             && self.top.is_none_or(|top| y >= top)
             && self.bottom.is_none_or(|bottom| y < bottom)
     }
+
+    pub(crate) fn vertical_range(self) -> Option<(i32, i32)> {
+        Some((self.top?, self.bottom?))
+    }
 }
 
 impl Frame {

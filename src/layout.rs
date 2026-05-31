@@ -47,6 +47,7 @@ pub(crate) struct TextAreaLayoutData {
 pub(crate) struct LayoutArena {
     nodes: Vec<LayoutNode>,
     layout_passes: u64,
+    layout_mode_stack: Vec<RunMode>,
 }
 
 struct LayoutNode {
@@ -54,6 +55,7 @@ struct LayoutNode {
     style: DivStyle,
     taffy_style: Style,
     children: Vec<NodeId>,
+    parent: Option<NodeId>,
     layout: Layout,
     cache: Cache,
     scroll_left: u32,
@@ -102,6 +104,7 @@ impl LayoutArena {
         Self {
             nodes: Vec::new(),
             layout_passes: 0,
+            layout_mode_stack: Vec::new(),
         }
     }
 
@@ -181,7 +184,7 @@ impl LayoutArena {
             image.cell_width_px = cell_width_px.max(1);
             image.cell_height_px = cell_height_px.max(1);
             image.rgb = Some(rgb);
-            self.clear_cache();
+            self.clear_cache_from(node);
         }
     }
 
@@ -189,7 +192,7 @@ impl LayoutArena {
         let item = &mut self.nodes[node_index(node)];
         if let LayoutNodeKind::Text(value) = &mut item.kind {
             *value = text.into();
-            self.clear_cache();
+            self.clear_cache_from(node);
         }
     }
 
@@ -198,7 +201,7 @@ impl LayoutArena {
         if let LayoutNodeKind::Input(input) = &mut item.kind {
             input.value = value.into();
             input.cursor = cursor;
-            self.clear_cache();
+            self.clear_cache_from(node);
         }
     }
 
@@ -218,7 +221,7 @@ impl LayoutArena {
         if let LayoutNodeKind::TextArea(textarea) = &mut item.kind {
             textarea.value = value.into();
             textarea.cursor = cursor;
-            self.clear_cache();
+            self.clear_cache_from(node);
         }
     }
 
@@ -230,22 +233,24 @@ impl LayoutArena {
 
     pub(crate) fn append_child(&mut self, parent: NodeId, child: NodeId) {
         self.nodes[node_index(parent)].children.push(child);
-        self.clear_cache();
+        self.nodes[node_index(child)].parent = Some(parent);
+        self.clear_cache_from(parent);
     }
 
     pub(crate) fn remove_child(&mut self, parent: NodeId, child: NodeId) {
         let children = &mut self.nodes[node_index(parent)].children;
         if let Some(index) = children.iter().position(|id| *id == child) {
             children.remove(index);
-            self.clear_cache();
+            self.nodes[node_index(child)].parent = None;
+            self.clear_cache_from(parent);
         }
     }
 
     pub(crate) fn set_style(&mut self, node: NodeId, style: DivStyle) {
-        let node = &mut self.nodes[node_index(node)];
-        node.taffy_style = style.to_taffy();
-        node.style = style;
-        self.clear_cache();
+        let item = &mut self.nodes[node_index(node)];
+        item.taffy_style = style.to_taffy();
+        item.style = style;
+        self.clear_cache_subtree_and_ancestors(node);
     }
 
     pub(crate) fn compute_layout(&mut self, root: NodeId, available: Size<AvailableSpace>) {
@@ -285,6 +290,7 @@ impl LayoutArena {
             taffy_style: style.to_taffy(),
             style,
             children: Vec::new(),
+            parent: None,
             layout: Layout::new(),
             cache: Cache::new(),
             scroll_left: 0,
@@ -377,6 +383,35 @@ impl LayoutArena {
         for node in &mut self.nodes {
             node.cache.clear();
         }
+    }
+
+    fn clear_cache_from(&mut self, node: NodeId) {
+        let mut current = Some(node);
+        while let Some(node_id) = current {
+            let item = &mut self.nodes[node_index(node_id)];
+            item.cache.clear();
+            current = item.parent;
+        }
+    }
+
+    fn clear_cache_subtree_and_ancestors(&mut self, node: NodeId) {
+        self.clear_cache_subtree(node);
+        self.clear_cache_from(node);
+    }
+
+    fn clear_cache_subtree(&mut self, node: NodeId) {
+        self.nodes[node_index(node)].cache.clear();
+        let children = self.nodes[node_index(node)].children.clone();
+        for child in children {
+            self.clear_cache_subtree(child);
+        }
+    }
+
+    fn should_store_layout(&self) -> bool {
+        !self
+            .layout_mode_stack
+            .iter()
+            .any(|mode| *mode == RunMode::ComputeSize)
     }
 
     fn is_inline_context(&self, node: NodeId) -> bool {
@@ -533,7 +568,7 @@ impl LayoutArena {
             paint_style.white_space,
             content_width.max(1.0).round() as u32,
         );
-        if run_mode == RunMode::PerformLayout {
+        if run_mode == RunMode::PerformLayout && self.should_store_layout() {
             self.compute_inline_fragments(
                 node_id,
                 paint_style.white_space,
@@ -783,35 +818,42 @@ impl LayoutPartialTree for LayoutArena {
     }
 
     fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
-        self.nodes[node_index(node_id)].layout = *layout;
+        if self.should_store_layout() {
+            self.nodes[node_index(node_id)].layout = *layout;
+        }
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
-        if inputs.run_mode == RunMode::PerformHiddenLayout {
-            return compute_hidden_layout(self, node_id);
-        }
-
-        compute_cached_layout(self, node_id, inputs, |tree, node_id, inputs| {
-            if tree.is_inline_context(node_id) {
-                return tree.compute_inline_layout(node_id, inputs);
-            }
-
-            let display = tree.nodes[node_index(node_id)].taffy_style.display;
-            let has_children = tree.child_count(node_id) > 0;
-            match (display, has_children) {
-                (taffy::Display::None, _) => compute_hidden_layout(tree, node_id),
-                (taffy::Display::Block, true) => compute_block_layout(tree, node_id, inputs, None),
-                (taffy::Display::Flex, true) => compute_flexbox_layout(tree, node_id, inputs),
-                (taffy::Display::Grid, true) => compute_grid_layout(tree, node_id, inputs),
-                (_, false) => {
-                    let style = tree.nodes[node_index(node_id)].taffy_style.clone();
-                    let measure = |known_dimensions, available_space| {
-                        tree.measure_leaf_node(node_id, known_dimensions, available_space)
-                    };
-                    compute_leaf_layout(inputs, &style, |_, _| 0.0, measure)
+        self.layout_mode_stack.push(inputs.run_mode);
+        let output = if inputs.run_mode == RunMode::PerformHiddenLayout {
+            compute_hidden_layout(self, node_id)
+        } else {
+            compute_cached_layout(self, node_id, inputs, |tree, node_id, inputs| {
+                if tree.is_inline_context(node_id) {
+                    return tree.compute_inline_layout(node_id, inputs);
                 }
-            }
-        })
+
+                let display = tree.nodes[node_index(node_id)].taffy_style.display;
+                let has_children = tree.child_count(node_id) > 0;
+                match (display, has_children) {
+                    (taffy::Display::None, _) => compute_hidden_layout(tree, node_id),
+                    (taffy::Display::Block, true) => {
+                        compute_block_layout(tree, node_id, inputs, None)
+                    }
+                    (taffy::Display::Flex, true) => compute_flexbox_layout(tree, node_id, inputs),
+                    (taffy::Display::Grid, true) => compute_grid_layout(tree, node_id, inputs),
+                    (_, false) => {
+                        let style = tree.nodes[node_index(node_id)].taffy_style.clone();
+                        let measure = |known_dimensions, available_space| {
+                            tree.measure_leaf_node(node_id, known_dimensions, available_space)
+                        };
+                        compute_leaf_layout(inputs, &style, |_, _| 0.0, measure)
+                    }
+                }
+            })
+        };
+        self.layout_mode_stack.pop();
+        output
     }
 }
 

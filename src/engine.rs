@@ -1226,6 +1226,109 @@ mod tests {
     }
 
     #[test]
+    fn percent_scroll_demo_keeps_widths_after_scroll_text_updates() {
+        let mut engine = PaintEngine::new();
+
+        let mut root_style = block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
+        root_style.display = crate::style::LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        root_style.background = Background::Black;
+        let root = engine.create_element(root_style);
+
+        let mut header_style = block_style(CssDimension::Percent(1.0), CssDimension::Percent(0.1));
+        header_style.background = Background::Cyan;
+        let header = engine.create_element(header_style);
+        let status = engine.create_text(
+            "Percent scroll demo. Resize the terminal; wheel over the panel. Ctrl-C exits.",
+        );
+        engine.append_child(header, status);
+
+        let mut body_style = block_style(CssDimension::Percent(1.0), CssDimension::Percent(0.9));
+        body_style.display = crate::style::LayoutDisplay::Flex;
+        body_style.flex_direction = LayoutFlexDirection::Row;
+        let body = engine.create_element(body_style);
+
+        let mut viewport_style =
+            block_style(CssDimension::Percent(0.85), CssDimension::Percent(1.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.overflow_x = LayoutOverflow::Hidden;
+        viewport_style.background = Background::Blue;
+        let viewport = engine.create_element(viewport_style);
+
+        let mut rail_style = block_style(CssDimension::Percent(0.15), CssDimension::Percent(1.0));
+        rail_style.background = Background::Magenta;
+        rail_style.white_space = CssWhiteSpace::Pre;
+        let rail = engine.create_element(rail_style);
+        let scrollbar = engine.create_text("|");
+        engine.append_child(rail, scrollbar);
+
+        let mut content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        content_style.display = crate::style::LayoutDisplay::Flex;
+        content_style.flex_direction = LayoutFlexDirection::Column;
+        let content = engine.create_element(content_style);
+        let mut row_ids = Vec::new();
+        for index in 1..=200 {
+            let row =
+                engine.create_element(block_style(CssDimension::Percent(1.0), CssDimension::Auto));
+            row_ids.push(row);
+            let text = engine.create_text(format!(
+                "percent row {index:02} - resize changes visible content"
+            ));
+            engine.append_child(row, text);
+            engine.append_child(content, row);
+        }
+
+        engine.append_child(viewport, content);
+        engine.append_child(body, viewport);
+        engine.append_child(body, rail);
+        engine.append_child(root, header);
+        engine.append_child(root, body);
+        engine.set_root(root);
+
+        engine.render_frame(80, 24).unwrap();
+        let viewport_node = engine.node_for(viewport).unwrap();
+        let rail_node = engine.node_for(rail).unwrap();
+        let first_row_node = engine.node_for(row_ids[0]).unwrap();
+        let fourth_row_node = engine.node_for(row_ids[3]).unwrap();
+        let before_viewport = engine.arena.layout(viewport_node);
+        let before_rail = engine.arena.layout(rail_node);
+        assert_eq!(before_viewport.size.width, 68.0);
+        assert_eq!(before_rail.location.x, 68.0);
+        assert_eq!(before_rail.size.width, 12.0);
+        assert_eq!(engine.arena.layout(first_row_node).size.width, 68.0);
+        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 68.0);
+
+        let metrics = engine
+            .set_scroll_offset_for_size(viewport, 0, 3, 80, 24)
+            .unwrap();
+        engine.set_text(
+            status,
+            format!(
+                "scrollTop={}/{}, clientHeight={}",
+                metrics.scroll_top, metrics.scroll_height, metrics.client_height
+            ),
+        );
+        engine.set_text(
+            scrollbar,
+            "|\n|\n#\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|",
+        );
+
+        let frame = engine.render_frame(80, 24).unwrap();
+        let after_viewport = engine.arena.layout(viewport_node);
+        let after_rail = engine.arena.layout(rail_node);
+
+        assert_eq!(after_viewport.size.width, 68.0);
+        assert_eq!(after_rail.location.x, 68.0);
+        assert_eq!(after_rail.size.width, 12.0);
+        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 68.0);
+        let visible_row_prefix: String = (0..11)
+            .map(|x| frame.cell(x, 2).unwrap().character)
+            .collect();
+        assert_eq!(visible_row_prefix, "percent row");
+        assert_eq!(frame.cell(68, 2).unwrap().background, Background::Magenta);
+    }
+
+    #[test]
     fn text_mutation_recomputes_layout() {
         let mut engine = PaintEngine::new();
         let root =
