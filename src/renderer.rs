@@ -5,7 +5,10 @@ use crossbeam_channel::Receiver;
 use taffy::prelude::*;
 
 use crate::style::*;
-use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
+use crate::terminal::{
+    query_terminal_size, reset_terminal, write_synchronized_output_begin,
+    write_synchronized_output_end, TerminalSize,
+};
 
 pub(crate) enum RenderCommand {
     CreateDiv {
@@ -579,42 +582,52 @@ impl Frame {
 
     fn write_diff_to_stdout(&self, previous: Option<&Frame>) -> io::Result<()> {
         let mut out = io::stdout().lock();
-        write!(out, "\x1b[?25l")?;
+        write_synchronized_output_begin(&mut out)?;
+        let result: io::Result<()> = (|| {
+            write!(out, "\x1b[?25l")?;
 
-        let Some(previous) = previous else {
-            self.write_full_to(&mut out)?;
-            return out.flush();
-        };
+            let Some(previous) = previous else {
+                self.write_full_to(&mut out)?;
+                return Ok(());
+            };
 
-        if previous.width != self.width || previous.height != self.height {
-            write!(out, "\x1b[2J")?;
-            self.write_full_to(&mut out)?;
-            return out.flush();
-        }
+            if previous.width != self.width || previous.height != self.height {
+                write!(out, "\x1b[2J")?;
+                self.write_full_to(&mut out)?;
+                return Ok(());
+            }
 
-        for row in 0..self.height {
-            let mut col = 0;
-            while col < self.width {
-                let index = row * self.width + col;
-                if previous.cells[index] == self.cells[index] {
-                    col += 1;
-                    continue;
-                }
-
-                let start = col;
+            for row in 0..self.height {
+                let mut col = 0;
                 while col < self.width {
                     let index = row * self.width + col;
                     if previous.cells[index] == self.cells[index] {
-                        break;
+                        col += 1;
+                        continue;
                     }
-                    col += 1;
+
+                    let start = col;
+                    while col < self.width {
+                        let index = row * self.width + col;
+                        if previous.cells[index] == self.cells[index] {
+                            break;
+                        }
+                        col += 1;
+                    }
+
+                    self.write_span_to(&mut out, row, start, col)?;
                 }
-
-                self.write_span_to(&mut out, row, start, col)?;
             }
-        }
 
-        out.flush()
+            Ok(())
+        })();
+
+        let end_result = write_synchronized_output_end(&mut out);
+        let flush_result = out.flush();
+
+        result?;
+        end_result?;
+        flush_result
     }
 
     fn write_full_to(&self, out: &mut impl Write) -> io::Result<()> {
