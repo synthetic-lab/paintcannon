@@ -4,7 +4,7 @@ use crossbeam_channel::{bounded, Sender};
 use napi::{Error, Result};
 use napi_derive::napi;
 
-use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseClick};
+use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseEvent};
 use crate::renderer::{renderer_loop, ClickEvent, MouseClick, RenderCommand};
 use crate::style::{
     parse_align_items, parse_dimension, parse_display, parse_flex_direction, parse_flex_flow,
@@ -265,10 +265,10 @@ impl PaintCannon {
     }
 
     #[napi]
-    pub fn drain_mouse_clicks(&self) -> Vec<TerminalMouseClick> {
+    pub fn drain_mouse_events(&self) -> Vec<TerminalMouseEvent> {
         self.input
             .as_ref()
-            .map(TerminalInput::drain_mouse_clicks)
+            .map(TerminalInput::drain_mouse_events)
             .unwrap_or_default()
     }
 
@@ -295,6 +295,19 @@ impl PaintCannon {
         let (response_tx, response_rx) = bounded(1);
         self.send(RenderCommand::HitTestClick {
             click,
+            response: response_tx,
+        })?;
+        response_rx
+            .recv()
+            .map_err(|_| Error::from_reason("renderer thread stopped"))
+    }
+
+    #[napi]
+    pub fn target_id_for_point(&self, x: u32, y: u32) -> Result<Option<u32>> {
+        let (response_tx, response_rx) = bounded(1);
+        self.send(RenderCommand::HitTestPoint {
+            x,
+            y,
             response: response_tx,
         })?;
         response_rx

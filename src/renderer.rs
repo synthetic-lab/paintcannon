@@ -165,6 +165,11 @@ pub(crate) enum RenderCommand {
         click: MouseClick,
         response: Sender<Option<ClickEvent>>,
     },
+    HitTestPoint {
+        x: u32,
+        y: u32,
+        response: Sender<Option<u32>>,
+    },
     InvalidateFrame,
     Render,
     Shutdown,
@@ -474,6 +479,9 @@ impl Renderer {
             }
             RenderCommand::HitTestClick { click, response } => {
                 let _ = response.send(self.hit_test_click(click));
+            }
+            RenderCommand::HitTestPoint { x, y, response } => {
+                let _ = response.send(self.hit_test_id(x, y));
             }
             RenderCommand::Render => {
                 self.render();
@@ -793,12 +801,7 @@ impl Renderer {
     }
 
     fn hit_test_click(&self, click: MouseClick) -> Option<ClickEvent> {
-        let target_id = self
-            .hit_regions
-            .iter()
-            .rev()
-            .find(|region| region.contains(click.x as i32, click.y as i32))?
-            .id;
+        let target_id = self.hit_test_id(click.x, click.y)?;
 
         Some(ClickEvent {
             r#type: "click".to_string(),
@@ -811,6 +814,14 @@ impl Renderer {
             meta_key: click.meta_key,
             shift_key: click.shift_key,
         })
+    }
+
+    fn hit_test_id(&self, x: u32, y: u32) -> Option<u32> {
+        self.hit_regions
+            .iter()
+            .rev()
+            .find(|region| region.contains(x as i32, y as i32))
+            .map(|region| region.id)
     }
 }
 

@@ -8,6 +8,7 @@ const pc = new PaintCannon({
 });
 
 let clicks = 0;
+let hovered = 'nothing';
 
 const root = pc.createElement('div');
 root.style.display = 'flex';
@@ -19,7 +20,7 @@ root.style.height = '100%';
 root.style.backgroundColor = 'black';
 pc.setRoot(root);
 
-const status = pc.createTextNode('Click a colored box. Ctrl-C exits.');
+const status = pc.createTextNode('Hover or click a colored box. Ctrl-C exits.');
 
 const row = pc.createElement('div');
 row.style.display = 'flex';
@@ -48,16 +49,40 @@ red.addEventListener('click', (event) => {
   event.stopPropagation();
   status.nodeValue = `red handled click #${clicks}; propagation stopped`;
 });
+red.addEventListener('mouseenter', () => {
+  hovered = 'red';
+  status.nodeValue = `hovering ${hovered}`;
+});
+red.addEventListener('mouseleave', () => {
+  hovered = 'nothing';
+  status.nodeValue = `hovering ${hovered}`;
+});
 
 green.addEventListener('click', (event) => {
   clicks += 1;
   event.preventDefault();
   status.nodeValue = `green handled click #${clicks}; defaultPrevented=${event.defaultPrevented}`;
 });
+green.addEventListener('mouseenter', () => {
+  hovered = 'green';
+  status.nodeValue = `hovering ${hovered}`;
+});
+green.addEventListener('mouseleave', () => {
+  hovered = 'nothing';
+  status.nodeValue = `hovering ${hovered}`;
+});
 
 blue.addEventListener('click', () => {
   clicks += 1;
   status.nodeValue = `blue handled click #${clicks}`;
+});
+blue.addEventListener('mouseenter', () => {
+  hovered = 'blue';
+  status.nodeValue = `hovering ${hovered}`;
+});
+blue.addEventListener('mouseleave', () => {
+  hovered = 'nothing';
+  status.nodeValue = `hovering ${hovered}`;
 });
 
 function button(label: string, color: string) {

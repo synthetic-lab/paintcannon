@@ -20,8 +20,9 @@ export interface TerminalSize {
 export type AnimationFrameCallback = (timestamp: number) => void;
 export type KeyboardEventType = 'keydown' | 'keyup';
 export type KeyboardEventListener = (event: KeyboardEvent) => void;
-export type ElementEventType = 'click';
-export type ClickEventListener = (event: PaintMouseEvent) => void;
+export type ElementEventType = 'click' | 'mouseenter' | 'mouseleave' | 'mousemove';
+export type MouseEventListener = (event: PaintMouseEvent) => void;
+export type ClickEventListener = MouseEventListener;
 
 export interface KeyboardEvent {
   type: KeyboardEventType;
@@ -34,7 +35,8 @@ export interface KeyboardEvent {
   repeat: boolean;
 }
 
-export interface TerminalMouseClick {
+export interface TerminalMouseEvent {
+  type: 'click' | 'mousemove' | string;
   x: number;
   y: number;
   button: number;
@@ -68,7 +70,7 @@ export interface NativePaintCannon {
   readonly kittyKeyboardEnabled: boolean;
   render(): void;
   drainKeyboardEvents(): KeyboardEvent[];
-  drainMouseClicks(): TerminalMouseClick[];
+  drainMouseEvents(): TerminalMouseEvent[];
   clickEventForMouseClick(
     x: number,
     y: number,
@@ -78,6 +80,7 @@ export interface NativePaintCannon {
     metaKey: boolean,
     shiftKey: boolean,
   ): NativeClickEvent | null;
+  targetIdForPoint(x: number, y: number): number | null;
   setSyntheticKeyupDelay(delayMs: number): void;
   releaseTerminal(): void;
   captureTerminal(): void;
@@ -117,7 +120,11 @@ export class PaintCannon {
   };
   private readonly elements = new Map<number, PaintElement>();
   private readonly parents = new Map<number, PaintElement>();
-  private readonly clickEventListeners = new Map<number, Set<ClickEventListener>>();
+  private readonly elementEventListeners = new Map<
+    number,
+    Partial<Record<ElementEventType, Set<MouseEventListener>>>
+  >();
+  private hoveredElement: PaintElement | undefined;
   private readonly handleSigcont = () => {
     if (!this.suspendedByPaintCannon || this.stopped) {
       return;
@@ -242,9 +249,9 @@ export class PaintCannon {
   addElementEventListener(
     element: PaintElement,
     type: ElementEventType,
-    listener: ClickEventListener,
+    listener: MouseEventListener,
   ): void {
-    if (type !== 'click') {
+    if (!isElementEventType(type)) {
       throw new Error(`unsupported event type: ${type}`);
     }
 
@@ -252,10 +259,16 @@ export class PaintCannon {
       throw new Error('paintcannon renderer has been stopped');
     }
 
-    let listeners = this.clickEventListeners.get(element.id);
+    let eventListeners = this.elementEventListeners.get(element.id);
+    if (eventListeners === undefined) {
+      eventListeners = {};
+      this.elementEventListeners.set(element.id, eventListeners);
+    }
+
+    let listeners = eventListeners[type];
     if (listeners === undefined) {
       listeners = new Set();
-      this.clickEventListeners.set(element.id, listeners);
+      eventListeners[type] = listeners;
     }
     listeners.add(listener);
     this.scheduleKeyboardEventPump();
@@ -264,16 +277,20 @@ export class PaintCannon {
   removeElementEventListener(
     element: PaintElement,
     type: ElementEventType,
-    listener: ClickEventListener,
+    listener: MouseEventListener,
   ): void {
-    if (type !== 'click') {
+    if (!isElementEventType(type)) {
       return;
     }
 
-    const listeners = this.clickEventListeners.get(element.id);
+    const eventListeners = this.elementEventListeners.get(element.id);
+    const listeners = eventListeners?.[type];
     listeners?.delete(listener);
     if (listeners?.size === 0) {
-      this.clickEventListeners.delete(element.id);
+      delete eventListeners?.[type];
+    }
+    if (eventListeners !== undefined && Object.keys(eventListeners).length === 0) {
+      this.elementEventListeners.delete(element.id);
     }
     if (!this.shouldPumpInputEvents() && this.keyboardEventTimer !== undefined) {
       clearTimeout(this.keyboardEventTimer);
@@ -306,9 +323,10 @@ export class PaintCannon {
     this.animationFrameCallbacks.clear();
     this.keyboardEventListeners.keydown.clear();
     this.keyboardEventListeners.keyup.clear();
-    this.clickEventListeners.clear();
+    this.elementEventListeners.clear();
     this.elements.clear();
     this.parents.clear();
+    this.hoveredElement = undefined;
     process.off('SIGCONT', this.handleSigcont);
     this.binding.stop();
   }
@@ -381,20 +399,10 @@ export class PaintCannon {
       handledAnyEvent = true;
     }
 
-    if (this.captureMouse && this.clickListenerCount() > 0) {
-      const clicks = this.binding.drainMouseClicks();
-      for (const click of clicks) {
-        const event = this.binding.clickEventForMouseClick(
-          click.x,
-          click.y,
-          click.button,
-          click.ctrlKey,
-          click.altKey,
-          click.metaKey,
-          click.shiftKey,
-        );
-        if (event !== null) {
-          this.dispatchClickEvent(event);
+    if (this.captureMouse && this.elementMouseListenerCount() > 0) {
+      const mouseEvents = this.binding.drainMouseEvents();
+      for (const event of mouseEvents) {
+        if (this.handleTerminalMouseEvent(event)) {
           handledAnyEvent = true;
         }
       }
@@ -411,10 +419,12 @@ export class PaintCannon {
     return this.keyboardEventListeners.keydown.size + this.keyboardEventListeners.keyup.size;
   }
 
-  private clickListenerCount(): number {
+  private elementMouseListenerCount(): number {
     let count = 0;
-    for (const listeners of this.clickEventListeners.values()) {
-      count += listeners.size;
+    for (const eventListeners of this.elementEventListeners.values()) {
+      for (const listeners of Object.values(eventListeners)) {
+        count += listeners?.size ?? 0;
+      }
     }
     return count;
   }
@@ -424,7 +434,7 @@ export class PaintCannon {
       this.keyboardListenerCount() > 0 ||
       !this.captureCtrlC ||
       !this.captureCtrlZ ||
-      (this.captureMouse && this.clickListenerCount() > 0)
+      (this.captureMouse && this.elementMouseListenerCount() > 0)
     );
   }
 
@@ -459,30 +469,155 @@ export class PaintCannon {
     this.elements.set(element.id, element);
   }
 
-  private dispatchClickEvent(nativeEvent: NativeClickEvent): void {
-    const target = this.elements.get(nativeEvent.targetId);
-    if (target === undefined) {
+  private handleTerminalMouseEvent(input: TerminalMouseEvent): boolean {
+    const hasMouseEnter = this.hasElementEventListeners('mouseenter');
+    const hasMouseLeave = this.hasElementEventListeners('mouseleave');
+    const hasMouseMove = this.hasElementEventListeners('mousemove');
+    const hasClick = this.hasElementEventListeners('click');
+
+    if (input.type === 'mousemove' && !hasMouseEnter && !hasMouseLeave && !hasMouseMove) {
+      return false;
+    }
+
+    if (input.type === 'click' && !hasClick) {
+      return false;
+    }
+
+    const targetId = this.binding.targetIdForPoint(input.x, input.y);
+    const target = targetId === null ? undefined : this.elements.get(targetId);
+
+    if (input.type === 'mousemove') {
+      if (hasMouseEnter || hasMouseLeave) {
+        this.dispatchHoverBoundaryEvents(target, input);
+      }
+      if (target !== undefined && hasMouseMove) {
+        this.dispatchMouseEvent('mousemove', target, input, true);
+      }
+      return true;
+    }
+
+    if (input.type === 'click' && target !== undefined) {
+      this.dispatchMouseEvent('click', target, input, true);
+      return true;
+    }
+
+    return false;
+  }
+
+  private dispatchHoverBoundaryEvents(nextHoveredElement: PaintElement | undefined, input: TerminalMouseEvent): void {
+    if (nextHoveredElement === this.hoveredElement) {
       return;
     }
 
-    const event = new PaintMouseEvent(nativeEvent, target);
+    const previousPath = this.elementPath(this.hoveredElement);
+    const nextPath = this.elementPath(nextHoveredElement);
+    const nextIds = new Set(nextPath.map((element) => element.id));
+    const previousIds = new Set(previousPath.map((element) => element.id));
+
+    for (const element of previousPath) {
+      if (!nextIds.has(element.id)) {
+        this.dispatchMouseEvent('mouseleave', element, input, false);
+      }
+    }
+
+    for (const element of nextPath.slice().reverse()) {
+      if (!previousIds.has(element.id)) {
+        this.dispatchMouseEvent('mouseenter', element, input, false);
+      }
+    }
+
+    this.hoveredElement = nextHoveredElement;
+  }
+
+  private hasElementEventListeners(type: ElementEventType): boolean {
+    for (const eventListeners of this.elementEventListeners.values()) {
+      if ((eventListeners[type]?.size ?? 0) > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private dispatchMouseEvent(
+    type: ElementEventType,
+    target: PaintElement,
+    input: TerminalMouseEvent,
+    bubbles: boolean,
+  ): void {
+    const event = new PaintMouseEvent({
+      type,
+      target,
+      clientX: input.x,
+      clientY: input.y,
+      button: input.button,
+      ctrlKey: input.ctrlKey,
+      altKey: input.altKey,
+      metaKey: input.metaKey,
+      shiftKey: input.shiftKey,
+    });
+
     let currentTarget: PaintElement | undefined = target;
     while (currentTarget !== undefined) {
       event.setCurrentTarget(currentTarget);
-      const listeners = Array.from(this.clickEventListeners.get(currentTarget.id) ?? []);
+      const listeners = Array.from(
+        this.elementEventListeners.get(currentTarget.id)?.[type] ?? [],
+      );
       for (const listener of listeners) {
         listener(event);
         if (event.propagationStopped) {
           return;
         }
       }
+      if (!bubbles) {
+        return;
+      }
       currentTarget = this.parents.get(currentTarget.id);
     }
   }
+
+  private dispatchClickEvent(nativeEvent: NativeClickEvent): void {
+    const target = this.elements.get(nativeEvent.targetId);
+    if (target === undefined) {
+      return;
+    }
+
+    this.dispatchMouseEvent('click', target, {
+      type: nativeEvent.type,
+      x: nativeEvent.clientX,
+      y: nativeEvent.clientY,
+      button: nativeEvent.button,
+      ctrlKey: nativeEvent.ctrlKey,
+      altKey: nativeEvent.altKey,
+      metaKey: nativeEvent.metaKey,
+      shiftKey: nativeEvent.shiftKey,
+    }, true);
+  }
+
+  private elementPath(element: PaintElement | undefined): PaintElement[] {
+    const path: PaintElement[] = [];
+    let current = element;
+    while (current !== undefined) {
+      path.push(current);
+      current = this.parents.get(current.id);
+    }
+    return path;
+  }
+}
+
+interface PaintMouseEventInit {
+  type: ElementEventType;
+  target: PaintElement;
+  clientX: number;
+  clientY: number;
+  button: number;
+  ctrlKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
 }
 
 export class PaintMouseEvent {
-  readonly type: 'click';
+  readonly type: ElementEventType;
   readonly target: PaintElement;
   currentTarget: PaintElement;
   readonly clientX: number;
@@ -495,10 +630,10 @@ export class PaintMouseEvent {
   defaultPrevented = false;
   propagationStopped = false;
 
-  constructor(event: NativeClickEvent, target: PaintElement) {
+  constructor(event: PaintMouseEventInit) {
     this.type = event.type;
-    this.target = target;
-    this.currentTarget = target;
+    this.target = event.target;
+    this.currentTarget = event.target;
     this.clientX = event.clientX;
     this.clientY = event.clientY;
     this.button = event.button;
@@ -541,11 +676,11 @@ export class DivElement {
     return child;
   }
 
-  addEventListener(type: ElementEventType, listener: ClickEventListener): void {
+  addEventListener(type: ElementEventType, listener: MouseEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
-  removeEventListener(type: ElementEventType, listener: ClickEventListener): void {
+  removeEventListener(type: ElementEventType, listener: MouseEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
   }
 }
@@ -570,11 +705,11 @@ export class SpanElement {
     return child;
   }
 
-  addEventListener(type: ElementEventType, listener: ClickEventListener): void {
+  addEventListener(type: ElementEventType, listener: MouseEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
-  removeEventListener(type: ElementEventType, listener: ClickEventListener): void {
+  removeEventListener(type: ElementEventType, listener: MouseEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
   }
 }
@@ -887,6 +1022,10 @@ function assertPaintNode(value: unknown): asserts value is PaintNode {
   if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof TextNode)) {
     throw new TypeError('expected a paintcannon node');
   }
+}
+
+function isElementEventType(type: string): type is ElementEventType {
+  return type === 'click' || type === 'mouseenter' || type === 'mouseleave' || type === 'mousemove';
 }
 
 function normalizeStyleName(property: string): string {

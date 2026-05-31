@@ -11,7 +11,7 @@ use crossterm::{
     event::{
         self as terminal_event, DisableMouseCapture, EnableMouseCapture, Event as TerminalEvent,
         KeyCode, KeyEvent as TerminalKeyEvent, KeyEventKind, KeyModifiers,
-        KeyboardEnhancementFlags, MouseButton, MouseEvent as TerminalMouseEvent, MouseEventKind,
+        KeyboardEnhancementFlags, MouseButton, MouseEvent as CrosstermMouseEvent, MouseEventKind,
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
@@ -39,7 +39,8 @@ pub struct KeyboardEvent {
 
 #[derive(Clone)]
 #[napi(object)]
-pub struct TerminalMouseClick {
+pub struct TerminalMouseEvent {
+    pub r#type: String,
     pub x: u32,
     pub y: u32,
     pub button: u32,
@@ -51,7 +52,7 @@ pub struct TerminalMouseClick {
 
 pub(crate) struct TerminalInput {
     keyboard_events: Arc<Mutex<VecDeque<KeyboardEvent>>>,
-    mouse_clicks: Arc<Mutex<VecDeque<TerminalMouseClick>>>,
+    mouse_events: Arc<Mutex<VecDeque<TerminalMouseEvent>>>,
     stop: Arc<AtomicBool>,
     synthetic_keyup_delay_ms: Arc<Mutex<u32>>,
     kitty_keyboard_enabled: bool,
@@ -108,12 +109,12 @@ impl TerminalInput {
         }
 
         let keyboard_events = Arc::new(Mutex::new(VecDeque::new()));
-        let mouse_clicks = Arc::new(Mutex::new(VecDeque::new()));
+        let mouse_events = Arc::new(Mutex::new(VecDeque::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let synthetic_keyup_delay_ms = Arc::new(Mutex::new(synthetic_keyup_delay_ms));
         let terminal_captured = Arc::new(Mutex::new(true));
         let thread_keyboard_events = Arc::clone(&keyboard_events);
-        let thread_mouse_clicks = Arc::clone(&mouse_clicks);
+        let thread_mouse_events = Arc::clone(&mouse_events);
         let thread_stop = Arc::clone(&stop);
         let thread_synthetic_keyup_delay_ms = Arc::clone(&synthetic_keyup_delay_ms);
 
@@ -139,7 +140,7 @@ impl TerminalInput {
                                     handle_terminal_mouse_event(
                                         event,
                                         &mut mouse_down,
-                                        &thread_mouse_clicks,
+                                        &thread_mouse_events,
                                     );
                                 }
                                 _ => {}
@@ -163,7 +164,7 @@ impl TerminalInput {
 
         Some(Self {
             keyboard_events,
-            mouse_clicks,
+            mouse_events,
             stop,
             synthetic_keyup_delay_ms,
             kitty_keyboard_enabled,
@@ -186,8 +187,8 @@ impl TerminalInput {
         events.drain(..).collect()
     }
 
-    pub(crate) fn drain_mouse_clicks(&self) -> Vec<TerminalMouseClick> {
-        let Ok(mut events) = self.mouse_clicks.lock() else {
+    pub(crate) fn drain_mouse_events(&self) -> Vec<TerminalMouseEvent> {
+        let Ok(mut events) = self.mouse_events.lock() else {
             return Vec::new();
         };
 
@@ -396,23 +397,39 @@ fn push_keyboard_event(events: &Arc<Mutex<VecDeque<KeyboardEvent>>>, event: Opti
 }
 
 fn handle_terminal_mouse_event(
-    event: TerminalMouseEvent,
+    event: CrosstermMouseEvent,
     mouse_down: &mut Option<MouseDown>,
-    events: &Arc<Mutex<VecDeque<TerminalMouseClick>>>,
+    events: &Arc<Mutex<VecDeque<TerminalMouseEvent>>>,
 ) {
     match event.kind {
         MouseEventKind::Down(button) => {
             *mouse_down = Some(MouseDown { button });
+            push_mouse_event(
+                events,
+                mouse_event_from_terminal("mousemove", event, button),
+            );
         }
         MouseEventKind::Up(button) => {
             let button = mouse_down.take().map(|down| down.button).unwrap_or(button);
-            push_mouse_click(events, mouse_click_from_terminal(event, button));
+            push_mouse_event(events, mouse_event_from_terminal("click", event, button));
+        }
+        MouseEventKind::Drag(button) => {
+            push_mouse_event(
+                events,
+                mouse_event_from_terminal("mousemove", event, button),
+            );
+        }
+        MouseEventKind::Moved => {
+            push_mouse_event(
+                events,
+                mouse_event_from_terminal("mousemove", event, MouseButton::Left),
+            );
         }
         _ => {}
     }
 }
 
-fn push_mouse_click(events: &Arc<Mutex<VecDeque<TerminalMouseClick>>>, event: TerminalMouseClick) {
+fn push_mouse_event(events: &Arc<Mutex<VecDeque<TerminalMouseEvent>>>, event: TerminalMouseEvent) {
     if let Ok(mut events) = events.lock() {
         events.push_back(event);
         while events.len() > 1024 {
@@ -421,9 +438,14 @@ fn push_mouse_click(events: &Arc<Mutex<VecDeque<TerminalMouseClick>>>, event: Te
     }
 }
 
-fn mouse_click_from_terminal(event: TerminalMouseEvent, button: MouseButton) -> TerminalMouseClick {
+fn mouse_event_from_terminal(
+    event_type: &str,
+    event: CrosstermMouseEvent,
+    button: MouseButton,
+) -> TerminalMouseEvent {
     let modifiers = event.modifiers;
-    TerminalMouseClick {
+    TerminalMouseEvent {
+        r#type: event_type.to_string(),
         x: u32::from(event.column),
         y: u32::from(event.row),
         button: mouse_button_value(button),
