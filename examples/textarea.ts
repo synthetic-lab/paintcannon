@@ -21,10 +21,10 @@ pc.setRoot(root);
 
 const title = pc.createElement('div');
 title.style.color = '#93c5fd';
-title.appendChild(pc.createTextNode('Textarea: Shift-Enter inserts a newline. Enter submits. Escape exits.'));
+title.appendChild(pc.createTextNode('Textarea: auto height, minHeight=5. Enter inserts a newline. Escape exits.'));
 
 const textarea = pc.createElement('textarea');
-textarea.value = 'paintcannon textarea';
+textarea.value = 'paintcannon textarea with enough text to soft-wrap inside a forty-eight cell box';
 textarea.cursorToEnd();
 textarea.style.width = 48;
 textarea.style.minHeight = 5;
@@ -33,16 +33,15 @@ textarea.style.color = '#f8fafc';
 textarea.style.border = 'rounded';
 textarea.style.borderColor = '#64748b';
 
-const submitted = pc.createElement('div');
-submitted.style.width = 48;
-submitted.style.height = 3;
-submitted.style.color = '#cbd5e1';
-const submittedText = pc.createTextNode('submitted: ');
-submitted.appendChild(submittedText);
+const status = pc.createElement('div');
+status.style.width = 48;
+status.style.height = 1;
+status.style.color = '#cbd5e1';
+status.appendChild(pc.createTextNode('type long lines or press Enter to add rows'));
 
 root.appendChild(title);
 root.appendChild(textarea);
-root.appendChild(submitted);
+root.appendChild(status);
 textarea.focus();
 pc.render();
 
@@ -52,11 +51,6 @@ pc.addEventListener('keydown', (event: KeyboardEvent) => {
     process.exit(0);
   }
 
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault();
-    submittedText.nodeValue = `submitted: ${textarea.value.replace(/\n/g, ' / ')}`;
-    textarea.value = '';
-  }
 });
 
 function tick() {

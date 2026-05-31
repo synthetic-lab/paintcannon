@@ -2,7 +2,6 @@
 
 use std::time::Instant;
 
-use taffy::prelude::TaffyMaxContent;
 use taffy::{
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
     compute_hidden_layout, compute_leaf_layout, compute_root_layout, AvailableSpace, Cache,
@@ -12,7 +11,9 @@ use taffy::{
 };
 use unicode_width::UnicodeWidthChar;
 
-use crate::style::{CssDimension, CssWhiteSpace, DivStyle, LayoutDisplay, LayoutOverflow};
+use crate::style::{
+    BorderStyle, CssDimension, CssWhiteSpace, DivStyle, LayoutDisplay, LayoutOverflow,
+};
 
 #[derive(Clone)]
 pub(crate) enum LayoutNodeKind {
@@ -789,7 +790,7 @@ impl LayoutArena {
             LayoutNodeKind::Image(_) | LayoutNodeKind::Input(_) | LayoutNodeKind::TextArea(_)
                 if self.nodes[index].style.display == LayoutDisplay::Inline =>
             {
-                let size = self.replaced_node_size(node_id, Size::NONE, Size::MAX_CONTENT);
+                let size = self.inline_replaced_node_size(node_id);
                 ContentWidths {
                     min: size.width.max(1.0),
                     max: size.width.max(1.0),
@@ -865,7 +866,7 @@ impl LayoutArena {
             LayoutNodeKind::Image(_) | LayoutNodeKind::Input(_) | LayoutNodeKind::TextArea(_)
                 if self.nodes[index].style.display == LayoutDisplay::Inline =>
             {
-                let size = self.replaced_node_size(node, Size::NONE, Size::MAX_CONTENT);
+                let size = self.inline_replaced_node_size(node);
                 measure_inline_replaced(size, cursor);
             }
             LayoutNodeKind::Element
@@ -915,7 +916,7 @@ impl LayoutArena {
             LayoutNodeKind::Image(_) | LayoutNodeKind::Input(_) | LayoutNodeKind::TextArea(_)
                 if item.style.display == LayoutDisplay::Inline =>
             {
-                let size = self.replaced_node_size(node, Size::NONE, Size::MAX_CONTENT);
+                let size = self.inline_replaced_node_size(node);
                 layout_inline_replaced(node, hit_target, size, cursor);
             }
             LayoutNodeKind::Element
@@ -952,8 +953,7 @@ impl LayoutArena {
             LayoutNodeKind::Image(image) => image_natural_size(image),
             LayoutNodeKind::Input(input) => input_natural_size(input),
             LayoutNodeKind::TextArea(textarea) => {
-                let wrap_width = explicit_width_cells(node.style.width)
-                    .or_else(|| available_space.width.into_option().map(float_to_cells));
+                let wrap_width = available_space.width.into_option().map(float_to_cells);
                 textarea_natural_size(textarea, wrap_width)
             }
             LayoutNodeKind::Element | LayoutNodeKind::Text(_) => Size::ZERO,
@@ -966,6 +966,24 @@ impl LayoutArena {
             height: known_dimensions
                 .height
                 .unwrap_or_else(|| styled_or_natural_height(node.style.height, natural.height)),
+        }
+    }
+
+    fn inline_replaced_node_size(&self, node_id: NodeId) -> Size<f32> {
+        let node = &self.nodes[node_index(node_id)];
+        let natural = match &node.kind {
+            LayoutNodeKind::Image(image) => image_natural_size(image),
+            LayoutNodeKind::Input(input) => input_natural_size(input),
+            LayoutNodeKind::TextArea(textarea) => {
+                textarea_natural_size(textarea, explicit_content_width_cells(&node.style))
+            }
+            LayoutNodeKind::Element | LayoutNodeKind::Text(_) => Size::ZERO,
+        };
+        let border = border_size_cells(&node.style);
+
+        Size {
+            width: styled_or_natural_width(node.style.width, natural.width + border.width),
+            height: styled_or_natural_height(node.style.height, natural.height + border.height),
         }
     }
 }
@@ -1240,6 +1258,29 @@ fn explicit_width_cells(width: CssDimension) -> Option<u32> {
     match width {
         CssDimension::Length(value) => Some(float_to_cells(value).max(1)),
         CssDimension::Auto | CssDimension::Percent(_) => None,
+    }
+}
+
+fn explicit_content_width_cells(style: &DivStyle) -> Option<u32> {
+    explicit_width_cells(style.width).map(|width| {
+        width
+            .saturating_sub(border_size_cells(style).width as u32)
+            .max(1)
+    })
+}
+
+fn border_size_cells(style: &DivStyle) -> Size<f32> {
+    Size {
+        width: border_edge_cells(style.border_left) + border_edge_cells(style.border_right),
+        height: border_edge_cells(style.border_top) + border_edge_cells(style.border_bottom),
+    }
+}
+
+fn border_edge_cells(style: BorderStyle) -> f32 {
+    if style == BorderStyle::None {
+        0.0
+    } else {
+        1.0
     }
 }
 
@@ -1550,8 +1591,8 @@ fn effective_white_space(inherited: CssWhiteSpace, own: CssWhiteSpace) -> CssWhi
 mod tests {
     use super::*;
     use crate::style::{
-        BorderStyle, CssDimension, CssGridTemplateTrack, CssTrackSizing, LayoutFlexDirection,
-        LayoutOverflow,
+        BorderStyle, CssDimension, CssGridTemplateTrack, CssTrackSizing, LayoutAlignItems,
+        LayoutFlexDirection, LayoutJustifyContent, LayoutOverflow,
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
@@ -2031,6 +2072,116 @@ mod tests {
         let layout = arena.layout(textarea);
         assert_eq!(layout.size.width, 5.0);
         assert_eq!(layout.size.height, 2.0);
+    }
+
+    #[test]
+    fn bordered_textarea_soft_wrap_measures_against_content_box_width() {
+        let mut arena = LayoutArena::new();
+        let mut style = block_style(CssDimension::Length(8.0), CssDimension::Auto);
+        style.border_top = BorderStyle::Rounded;
+        style.border_right = BorderStyle::Rounded;
+        style.border_bottom = BorderStyle::Rounded;
+        style.border_left = BorderStyle::Rounded;
+        let textarea = arena.create_textarea(style, "abcdefg");
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        let layout = arena.layout(textarea);
+        assert_eq!(layout.size.width, 8.0);
+        assert_eq!(layout.size.height, 4.0);
+    }
+
+    #[test]
+    fn textarea_auto_sizes_inside_centered_flex_column_after_value_change() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(80.0), CssDimension::Length(24.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        root_style.justify_content = Some(LayoutJustifyContent::Center);
+        root_style.align_items = Some(LayoutAlignItems::Center);
+        root_style.row_gap = crate::style::CssLengthPercentage::Length(1.0);
+        let root = arena.create_element(root_style);
+
+        let title = arena.create_element(block_style(CssDimension::Auto, CssDimension::Auto));
+        let mut textarea_style = block_style(CssDimension::Length(48.0), CssDimension::Auto);
+        textarea_style.min_height = CssDimension::Length(5.0);
+        textarea_style.border_top = BorderStyle::Rounded;
+        textarea_style.border_right = BorderStyle::Rounded;
+        textarea_style.border_bottom = BorderStyle::Rounded;
+        textarea_style.border_left = BorderStyle::Rounded;
+        let textarea = arena.create_textarea(textarea_style, "short");
+        let submitted = arena.create_element(block_style(
+            CssDimension::Length(48.0),
+            CssDimension::Length(3.0),
+        ));
+        arena.append_child(root, title);
+        arena.append_child(root, textarea);
+        arena.append_child(root, submitted);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(80.0),
+                height: AvailableSpace::Definite(24.0),
+            },
+        );
+        assert_eq!(arena.layout(textarea).size.height, 5.0);
+
+        arena.set_textarea_value(textarea, "one\ntwo\nthree\nfour\nfive\nsix\nseven", 0);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(80.0),
+                height: AvailableSpace::Definite(24.0),
+            },
+        );
+
+        assert!(arena.layout(textarea).size.height > 5.0);
+    }
+
+    #[test]
+    fn textarea_auto_sizes_for_soft_wrapped_text_inside_centered_flex_column() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(80.0), CssDimension::Length(24.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        root_style.justify_content = Some(LayoutJustifyContent::Center);
+        root_style.align_items = Some(LayoutAlignItems::Center);
+        root_style.row_gap = crate::style::CssLengthPercentage::Length(1.0);
+        let root = arena.create_element(root_style);
+
+        let title = arena.create_element(block_style(CssDimension::Auto, CssDimension::Auto));
+        let mut textarea_style = block_style(CssDimension::Length(48.0), CssDimension::Auto);
+        textarea_style.min_height = CssDimension::Length(5.0);
+        textarea_style.border_top = BorderStyle::Rounded;
+        textarea_style.border_right = BorderStyle::Rounded;
+        textarea_style.border_bottom = BorderStyle::Rounded;
+        textarea_style.border_left = BorderStyle::Rounded;
+        let textarea = arena.create_textarea(textarea_style, "short");
+        let submitted = arena.create_element(block_style(
+            CssDimension::Length(48.0),
+            CssDimension::Length(3.0),
+        ));
+        arena.append_child(root, title);
+        arena.append_child(root, textarea);
+        arena.append_child(root, submitted);
+
+        arena.set_textarea_value(textarea, "word ".repeat(120), 0);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(80.0),
+                height: AvailableSpace::Definite(24.0),
+            },
+        );
+
+        assert!(arena.layout(textarea).size.height > 5.0);
     }
 
     #[test]

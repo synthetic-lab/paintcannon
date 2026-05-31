@@ -221,6 +221,23 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn set_text_area_value(&self, id: u32, value: String, cursor: u32) -> Result<()> {
+        self.send(EngineCommand::SetTextAreaValue {
+            node: DomId(id),
+            value,
+            cursor,
+        })
+    }
+
+    #[napi]
+    pub fn set_text_area_focused(&self, id: u32, focused: bool) -> Result<()> {
+        self.send(EngineCommand::SetTextAreaFocused {
+            node: DomId(id),
+            focused,
+        })
+    }
+
+    #[napi]
     pub fn set_root(&self, id: u32) -> Result<()> {
         self.send(EngineCommand::SetRoot { root: DomId(id) })
     }
@@ -376,6 +393,24 @@ impl PaintCannon {
                     let id = resolve_batch_id(command.id, "id", "setInputFocused", &id_map)?;
                     let focused = command.focused.unwrap_or(false);
                     render_commands.push(EngineCommand::SetInputFocused {
+                        node: DomId(id),
+                        focused,
+                    });
+                }
+                "setTextAreaValue" => {
+                    let id = resolve_batch_id(command.id, "id", "setTextAreaValue", &id_map)?;
+                    let value = required_string(command.value, "value", "setTextAreaValue")?;
+                    let cursor = command.cursor.unwrap_or(0);
+                    render_commands.push(EngineCommand::SetTextAreaValue {
+                        node: DomId(id),
+                        value,
+                        cursor,
+                    });
+                }
+                "setTextAreaFocused" => {
+                    let id = resolve_batch_id(command.id, "id", "setTextAreaFocused", &id_map)?;
+                    let focused = command.focused.unwrap_or(false);
+                    render_commands.push(EngineCommand::SetTextAreaFocused {
                         node: DomId(id),
                         focused,
                     });

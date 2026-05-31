@@ -181,6 +181,8 @@ export interface NativePaintCannon {
   setImageSource(id: number, src: string): void;
   setInputValue(id: number, value: string, cursor: number): void;
   setInputFocused(id: number, focused: boolean): void;
+  setTextAreaValue(id: number, value: string, cursor: number): void;
+  setTextAreaFocused(id: number, focused: boolean): void;
   setRoot(id: number): void;
   appendChild(parent: number, child: number): void;
   detachNode(id: number): void;
@@ -345,8 +347,8 @@ export class PaintCannon {
       const element = new TextAreaElement(
         this,
         this.createNativeTextArea(),
-        (id, value, cursor) => this.setNativeInputValue(id, value, cursor),
-        (id, focused) => this.setNativeInputFocused(id, focused),
+        (id, value, cursor) => this.setNativeTextAreaValue(id, value, cursor),
+        (id, focused) => this.setNativeTextAreaFocused(id, focused),
         (id, property, value) => this.setNativeStyleProperty(id, property, value),
       );
       this.registerElement(element);
@@ -705,6 +707,24 @@ export class PaintCannon {
     }
 
     this.binding.setInputFocused(id, focused);
+  }
+
+  private setNativeTextAreaValue(id: number, value: string, cursor: number): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'setTextAreaValue', id, value, cursor });
+      return;
+    }
+
+    this.binding.setTextAreaValue(id, value, cursor);
+  }
+
+  private setNativeTextAreaFocused(id: number, focused: boolean): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'setTextAreaFocused', id, focused });
+      return;
+    }
+
+    this.binding.setTextAreaFocused(id, focused);
   }
 
   private setNativeRoot(id: number): void {

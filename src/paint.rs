@@ -700,29 +700,52 @@ fn paint_textarea(
         foreground,
         selection_background,
     };
+    let cursor_position = textarea
+        .focused
+        .then(|| layout.cursor_position(textarea.cursor as usize));
+    let scroll_top = cursor_position
+        .map(|(row, _)| textarea_scroll_top(row, rect.height() as usize))
+        .unwrap_or(0);
     for glyph in &layout.glyphs {
-        if glyph.row as i32 >= rect.height() {
+        if glyph.row < scroll_top {
+            continue;
+        }
+        let row = glyph.row - scroll_top;
+        if row as i32 >= rect.height() {
             continue;
         }
         frame.write_glyph(
             rect.left + glyph.col as i32,
-            rect.top + glyph.row as i32,
+            rect.top + row as i32,
             glyph.character,
             glyph.width,
             glyph_style,
             clip,
         );
     }
-    if textarea.focused {
-        let (row, col) = layout.cursor_position(textarea.cursor as usize);
-        if row as i32 >= 0
-            && (row as i32) < rect.height()
+    if let Some((row, col)) = cursor_position {
+        let visible_row = row.saturating_sub(scroll_top);
+        if row >= scroll_top
+            && (visible_row as i32) < rect.height()
             && col as i32 >= 0
             && (col as i32) < rect.width()
         {
-            frame.set_reversed(rect.left + col as i32, rect.top + row as i32, true, clip);
+            frame.set_reversed(
+                rect.left + col as i32,
+                rect.top + visible_row as i32,
+                true,
+                clip,
+            );
         }
     }
+}
+
+fn textarea_scroll_top(cursor_row: usize, viewport_height: usize) -> usize {
+    if viewport_height == 0 {
+        return 0;
+    }
+
+    cursor_row.saturating_add(1).saturating_sub(viewport_height)
 }
 
 fn image_pixel(rgb: &[u8], width_px: u32, x: u32, y: u32) -> Option<[u8; 3]> {
@@ -1434,6 +1457,30 @@ mod tests {
         assert_eq!(output.frame.cell(4, 0).unwrap().character, 'o');
         assert_eq!(output.frame.cell(0, 1).unwrap().character, 'w');
         assert!(output.frame.cell(0, 1).unwrap().reversed);
+    }
+
+    #[test]
+    fn focused_textarea_scrolls_to_keep_cursor_visible() {
+        let mut arena = LayoutArena::new();
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Length(5.0), CssDimension::Length(2.0)),
+            "a\nb\nc",
+        );
+        arena.set_textarea_value(textarea, "a\nb\nc", 5);
+        arena.set_textarea_focused(textarea, true);
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+        let output = paint_arena(&arena, textarea, 5, 2, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'b');
+        assert_eq!(output.frame.cell(0, 1).unwrap().character, 'c');
+        assert!(output.frame.cell(1, 1).unwrap().reversed);
     }
 
     #[test]
