@@ -9,12 +9,16 @@ use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{
-        self as terminal_event, Event as TerminalEvent, KeyCode, KeyEvent as TerminalKeyEvent,
-        KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-        PushKeyboardEnhancementFlags,
+        self as terminal_event, DisableMouseCapture, EnableMouseCapture, Event as TerminalEvent,
+        KeyCode, KeyEvent as TerminalKeyEvent, KeyEventKind, KeyModifiers,
+        KeyboardEnhancementFlags, MouseButton, MouseEvent as TerminalMouseEvent, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
+        LeaveAlternateScreen,
+    },
 };
 use napi_derive::napi;
 
@@ -33,21 +37,53 @@ pub struct KeyboardEvent {
     pub repeat: bool,
 }
 
+#[derive(Clone)]
+#[napi(object)]
+pub struct TerminalMouseClick {
+    pub x: u32,
+    pub y: u32,
+    pub button: u32,
+    pub ctrl_key: bool,
+    pub alt_key: bool,
+    pub meta_key: bool,
+    pub shift_key: bool,
+}
+
 pub(crate) struct TerminalInput {
-    events: Arc<Mutex<VecDeque<KeyboardEvent>>>,
+    keyboard_events: Arc<Mutex<VecDeque<KeyboardEvent>>>,
+    mouse_clicks: Arc<Mutex<VecDeque<TerminalMouseClick>>>,
     stop: Arc<AtomicBool>,
     synthetic_keyup_delay_ms: Arc<Mutex<u32>>,
     kitty_keyboard_enabled: bool,
     force_compat_mode: bool,
+    alternate_screen: bool,
+    capture_mouse: bool,
     keyboard_enhancement_pushed: Arc<Mutex<bool>>,
+    alternate_screen_entered: Arc<Mutex<bool>>,
+    mouse_capture_enabled: Arc<Mutex<bool>>,
     terminal_captured: Arc<Mutex<bool>>,
     thread: JoinHandle<()>,
 }
 
 impl TerminalInput {
-    pub(crate) fn start(synthetic_keyup_delay_ms: u32, force_compat_mode: bool) -> Option<Self> {
+    pub(crate) fn start(
+        synthetic_keyup_delay_ms: u32,
+        force_compat_mode: bool,
+        alternate_screen: bool,
+        capture_mouse: bool,
+    ) -> Option<Self> {
         if enable_raw_mode().is_err() {
             return None;
+        }
+
+        let alternate_screen_entered = Arc::new(Mutex::new(false));
+        if alternate_screen && execute!(io::stdout(), EnterAlternateScreen).is_ok() {
+            set_bool(&alternate_screen_entered, true);
+        }
+
+        let mouse_capture_enabled = Arc::new(Mutex::new(false));
+        if capture_mouse && execute!(io::stdout(), EnableMouseCapture).is_ok() {
+            set_bool(&mouse_capture_enabled, true);
         }
 
         let kitty_keyboard_enabled =
@@ -71,32 +107,47 @@ impl TerminalInput {
             set_bool(&keyboard_enhancement_pushed, true);
         }
 
-        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let keyboard_events = Arc::new(Mutex::new(VecDeque::new()));
+        let mouse_clicks = Arc::new(Mutex::new(VecDeque::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let synthetic_keyup_delay_ms = Arc::new(Mutex::new(synthetic_keyup_delay_ms));
         let terminal_captured = Arc::new(Mutex::new(true));
-        let thread_events = Arc::clone(&events);
+        let thread_keyboard_events = Arc::clone(&keyboard_events);
+        let thread_mouse_clicks = Arc::clone(&mouse_clicks);
         let thread_stop = Arc::clone(&stop);
         let thread_synthetic_keyup_delay_ms = Arc::clone(&synthetic_keyup_delay_ms);
 
         let thread = thread::spawn(move || {
             let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
+            let mut mouse_down: Option<MouseDown> = None;
 
             while !thread_stop.load(Ordering::Relaxed) {
                 match terminal_event::poll(Duration::from_millis(25)) {
                     Ok(true) => {
-                        if let Ok(TerminalEvent::Key(event)) = terminal_event::read() {
-                            handle_terminal_key_event(
-                                event,
-                                &mut pressed_keys,
-                                &thread_events,
-                                &thread_synthetic_keyup_delay_ms,
-                                kitty_keyboard_enabled,
-                            );
+                        if let Ok(event) = terminal_event::read() {
+                            match event {
+                                TerminalEvent::Key(event) => {
+                                    handle_terminal_key_event(
+                                        event,
+                                        &mut pressed_keys,
+                                        &thread_keyboard_events,
+                                        &thread_synthetic_keyup_delay_ms,
+                                        kitty_keyboard_enabled,
+                                    );
+                                }
+                                TerminalEvent::Mouse(event) => {
+                                    handle_terminal_mouse_event(
+                                        event,
+                                        &mut mouse_down,
+                                        &thread_mouse_clicks,
+                                    );
+                                }
+                                _ => {}
+                            }
                         }
                     }
                     Ok(false) => {
-                        synthesize_expired_keyups(&mut pressed_keys, &thread_events);
+                        synthesize_expired_keyups(&mut pressed_keys, &thread_keyboard_events);
                     }
                     Err(_) => break,
                 }
@@ -104,26 +155,39 @@ impl TerminalInput {
 
             for (_, pressed_key) in pressed_keys {
                 push_keyboard_event(
-                    &thread_events,
+                    &thread_keyboard_events,
                     keyboard_event_from_pressed_key("keyup", false, &pressed_key),
                 );
             }
         });
 
         Some(Self {
-            events,
+            keyboard_events,
+            mouse_clicks,
             stop,
             synthetic_keyup_delay_ms,
             kitty_keyboard_enabled,
             force_compat_mode,
+            alternate_screen,
+            capture_mouse,
             keyboard_enhancement_pushed,
+            alternate_screen_entered,
+            mouse_capture_enabled,
             terminal_captured,
             thread,
         })
     }
 
     pub(crate) fn drain(&self) -> Vec<KeyboardEvent> {
-        let Ok(mut events) = self.events.lock() else {
+        let Ok(mut events) = self.keyboard_events.lock() else {
+            return Vec::new();
+        };
+
+        events.drain(..).collect()
+    }
+
+    pub(crate) fn drain_mouse_clicks(&self) -> Vec<TerminalMouseClick> {
+        let Ok(mut events) = self.mouse_clicks.lock() else {
             return Vec::new();
         };
 
@@ -145,8 +209,14 @@ impl TerminalInput {
             return;
         }
 
+        if swap_bool(&self.mouse_capture_enabled, false) {
+            let _ = execute!(io::stdout(), DisableMouseCapture);
+        }
         if swap_bool(&self.keyboard_enhancement_pushed, false) {
             let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+        }
+        if swap_bool(&self.alternate_screen_entered, false) {
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
         }
         let _ = disable_raw_mode();
     }
@@ -159,6 +229,14 @@ impl TerminalInput {
         if enable_raw_mode().is_err() {
             set_bool(&self.terminal_captured, false);
             return;
+        }
+
+        if self.alternate_screen && execute!(io::stdout(), EnterAlternateScreen).is_ok() {
+            set_bool(&self.alternate_screen_entered, true);
+        }
+
+        if self.capture_mouse && execute!(io::stdout(), EnableMouseCapture).is_ok() {
+            set_bool(&self.mouse_capture_enabled, true);
         }
 
         if self.kitty_keyboard_enabled {
@@ -212,6 +290,10 @@ struct PressedKey {
     meta_key: bool,
     shift_key: bool,
     synthetic_keyup_at: Option<Instant>,
+}
+
+struct MouseDown {
+    button: MouseButton,
 }
 
 fn handle_terminal_key_event(
@@ -310,6 +392,54 @@ fn push_keyboard_event(events: &Arc<Mutex<VecDeque<KeyboardEvent>>>, event: Opti
         while events.len() > 1024 {
             events.pop_front();
         }
+    }
+}
+
+fn handle_terminal_mouse_event(
+    event: TerminalMouseEvent,
+    mouse_down: &mut Option<MouseDown>,
+    events: &Arc<Mutex<VecDeque<TerminalMouseClick>>>,
+) {
+    match event.kind {
+        MouseEventKind::Down(button) => {
+            *mouse_down = Some(MouseDown { button });
+        }
+        MouseEventKind::Up(button) => {
+            let button = mouse_down.take().map(|down| down.button).unwrap_or(button);
+            push_mouse_click(events, mouse_click_from_terminal(event, button));
+        }
+        _ => {}
+    }
+}
+
+fn push_mouse_click(events: &Arc<Mutex<VecDeque<TerminalMouseClick>>>, event: TerminalMouseClick) {
+    if let Ok(mut events) = events.lock() {
+        events.push_back(event);
+        while events.len() > 1024 {
+            events.pop_front();
+        }
+    }
+}
+
+fn mouse_click_from_terminal(event: TerminalMouseEvent, button: MouseButton) -> TerminalMouseClick {
+    let modifiers = event.modifiers;
+    TerminalMouseClick {
+        x: u32::from(event.column),
+        y: u32::from(event.row),
+        button: mouse_button_value(button),
+        ctrl_key: modifiers.contains(KeyModifiers::CONTROL),
+        alt_key: modifiers.contains(KeyModifiers::ALT),
+        meta_key: modifiers
+            .intersects(KeyModifiers::META | KeyModifiers::SUPER | KeyModifiers::HYPER),
+        shift_key: modifiers.contains(KeyModifiers::SHIFT),
+    }
+}
+
+fn mouse_button_value(button: MouseButton) -> u32 {
+    match button {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
     }
 }
 

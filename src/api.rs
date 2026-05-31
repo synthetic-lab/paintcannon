@@ -4,8 +4,8 @@ use crossbeam_channel::{bounded, Sender};
 use napi::{Error, Result};
 use napi_derive::napi;
 
-use crate::input::{KeyboardEvent, TerminalInput};
-use crate::renderer::{renderer_loop, RenderCommand};
+use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseClick};
+use crate::renderer::{renderer_loop, ClickEvent, MouseClick, RenderCommand};
 use crate::style::{
     parse_align_items, parse_dimension, parse_display, parse_flex_direction, parse_flex_flow,
     parse_flex_shorthand, parse_flex_wrap, parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks,
@@ -29,12 +29,18 @@ pub struct PaintCannon {
 #[napi]
 impl PaintCannon {
     #[napi(constructor)]
-    pub fn new(force_compat_mode: Option<bool>) -> Self {
+    pub fn new(
+        force_compat_mode: Option<bool>,
+        alternate_screen: Option<bool>,
+        capture_mouse: Option<bool>,
+    ) -> Self {
         let (tx, rx) = bounded(RENDER_QUEUE_CAPACITY);
         let thread = thread::spawn(move || renderer_loop(rx));
         let input = TerminalInput::start(
             DEFAULT_SYNTHETIC_KEYUP_MS,
             force_compat_mode.unwrap_or(false),
+            alternate_screen.unwrap_or(false),
+            capture_mouse.unwrap_or(false),
         );
         let kitty_keyboard_enabled = input
             .as_ref()
@@ -256,6 +262,44 @@ impl PaintCannon {
             .as_ref()
             .map(TerminalInput::drain)
             .unwrap_or_default()
+    }
+
+    #[napi]
+    pub fn drain_mouse_clicks(&self) -> Vec<TerminalMouseClick> {
+        self.input
+            .as_ref()
+            .map(TerminalInput::drain_mouse_clicks)
+            .unwrap_or_default()
+    }
+
+    #[napi]
+    pub fn click_event_for_mouse_click(
+        &self,
+        x: u32,
+        y: u32,
+        button: u32,
+        ctrl_key: bool,
+        alt_key: bool,
+        meta_key: bool,
+        shift_key: bool,
+    ) -> Result<Option<ClickEvent>> {
+        let click = MouseClick {
+            x,
+            y,
+            button,
+            ctrl_key,
+            alt_key,
+            meta_key,
+            shift_key,
+        };
+        let (response_tx, response_rx) = bounded(1);
+        self.send(RenderCommand::HitTestClick {
+            click,
+            response: response_tx,
+        })?;
+        response_rx
+            .recv()
+            .map_err(|_| Error::from_reason("renderer thread stopped"))
     }
 
     #[napi]

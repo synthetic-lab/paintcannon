@@ -8,6 +8,8 @@ export interface PaintCannonOptions {
   forceCompatMode?: boolean;
   captureCtrlC?: boolean;
   captureCtrlZ?: boolean;
+  alternateScreen?: boolean;
+  captureMouse?: boolean;
 }
 
 export interface TerminalSize {
@@ -18,6 +20,8 @@ export interface TerminalSize {
 export type AnimationFrameCallback = (timestamp: number) => void;
 export type KeyboardEventType = 'keydown' | 'keyup';
 export type KeyboardEventListener = (event: KeyboardEvent) => void;
+export type ElementEventType = 'click';
+export type ClickEventListener = (event: PaintMouseEvent) => void;
 
 export interface KeyboardEvent {
   type: KeyboardEventType;
@@ -28,6 +32,28 @@ export interface KeyboardEvent {
   metaKey: boolean;
   shiftKey: boolean;
   repeat: boolean;
+}
+
+export interface TerminalMouseClick {
+  x: number;
+  y: number;
+  button: number;
+  ctrlKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}
+
+export interface NativeClickEvent {
+  type: 'click';
+  targetId: number;
+  clientX: number;
+  clientY: number;
+  button: number;
+  ctrlKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
 }
 
 export interface NativePaintCannon {
@@ -42,6 +68,16 @@ export interface NativePaintCannon {
   readonly kittyKeyboardEnabled: boolean;
   render(): void;
   drainKeyboardEvents(): KeyboardEvent[];
+  drainMouseClicks(): TerminalMouseClick[];
+  clickEventForMouseClick(
+    x: number,
+    y: number,
+    button: number,
+    ctrlKey: boolean,
+    altKey: boolean,
+    metaKey: boolean,
+    shiftKey: boolean,
+  ): NativeClickEvent | null;
   setSyntheticKeyupDelay(delayMs: number): void;
   releaseTerminal(): void;
   captureTerminal(): void;
@@ -51,7 +87,11 @@ export interface NativePaintCannon {
 }
 
 export interface NativeBinding {
-  PaintCannon: new (forceCompatMode?: boolean) => NativePaintCannon;
+  PaintCannon: new (
+    forceCompatMode?: boolean,
+    alternateScreen?: boolean,
+    captureMouse?: boolean,
+  ) => NativePaintCannon;
 }
 
 export type PaintElement = DivElement | SpanElement;
@@ -69,11 +109,15 @@ export class PaintCannon {
   private suspendedByPaintCannon = false;
   private readonly captureCtrlC: boolean;
   private readonly captureCtrlZ: boolean;
+  private readonly captureMouse: boolean;
   private readonly animationFrameCallbacks = new Map<number, AnimationFrameCallback>();
   private readonly keyboardEventListeners: Record<KeyboardEventType, Set<KeyboardEventListener>> = {
     keydown: new Set(),
     keyup: new Set(),
   };
+  private readonly elements = new Map<number, PaintElement>();
+  private readonly parents = new Map<number, PaintElement>();
+  private readonly clickEventListeners = new Map<number, Set<ClickEventListener>>();
   private readonly handleSigcont = () => {
     if (!this.suspendedByPaintCannon || this.stopped) {
       return;
@@ -86,10 +130,15 @@ export class PaintCannon {
   };
 
   constructor(options: PaintCannonOptions = {}) {
-    this.binding = new native.PaintCannon(options.forceCompatMode ?? false);
+    this.binding = new native.PaintCannon(
+      options.forceCompatMode ?? false,
+      options.alternateScreen ?? false,
+      options.captureMouse ?? false,
+    );
     this.frameIntervalMs = fpsToInterval(options.fps ?? 60);
     this.captureCtrlC = options.captureCtrlC ?? false;
     this.captureCtrlZ = options.captureCtrlZ ?? false;
+    this.captureMouse = options.captureMouse ?? false;
     process.on('SIGCONT', this.handleSigcont);
     if (options.syntheticKeyupDelayMs !== undefined) {
       this.setSyntheticKeyupDelay(options.syntheticKeyupDelayMs);
@@ -101,10 +150,14 @@ export class PaintCannon {
   createElement(tagName: 'span'): SpanElement;
   createElement(tagName: string): PaintElement {
     if (tagName === 'div') {
-      return new DivElement(this, this.binding, this.binding.createDiv());
+      const element = new DivElement(this, this.binding, this.binding.createDiv());
+      this.registerElement(element);
+      return element;
     }
     if (tagName === 'span') {
-      return new SpanElement(this, this.binding, this.binding.createSpan());
+      const element = new SpanElement(this, this.binding, this.binding.createSpan());
+      this.registerElement(element);
+      return element;
     }
 
     throw new Error(`paintcannon only supports <div> and <span> right now, got <${tagName}>`);
@@ -180,7 +233,49 @@ export class PaintCannon {
     }
 
     this.keyboardEventListeners[type].delete(listener);
-    if (this.keyboardListenerCount() === 0 && this.keyboardEventTimer !== undefined) {
+    if (!this.shouldPumpInputEvents() && this.keyboardEventTimer !== undefined) {
+      clearTimeout(this.keyboardEventTimer);
+      this.keyboardEventTimer = undefined;
+    }
+  }
+
+  addElementEventListener(
+    element: PaintElement,
+    type: ElementEventType,
+    listener: ClickEventListener,
+  ): void {
+    if (type !== 'click') {
+      throw new Error(`unsupported event type: ${type}`);
+    }
+
+    if (this.stopped) {
+      throw new Error('paintcannon renderer has been stopped');
+    }
+
+    let listeners = this.clickEventListeners.get(element.id);
+    if (listeners === undefined) {
+      listeners = new Set();
+      this.clickEventListeners.set(element.id, listeners);
+    }
+    listeners.add(listener);
+    this.scheduleKeyboardEventPump();
+  }
+
+  removeElementEventListener(
+    element: PaintElement,
+    type: ElementEventType,
+    listener: ClickEventListener,
+  ): void {
+    if (type !== 'click') {
+      return;
+    }
+
+    const listeners = this.clickEventListeners.get(element.id);
+    listeners?.delete(listener);
+    if (listeners?.size === 0) {
+      this.clickEventListeners.delete(element.id);
+    }
+    if (!this.shouldPumpInputEvents() && this.keyboardEventTimer !== undefined) {
       clearTimeout(this.keyboardEventTimer);
       this.keyboardEventTimer = undefined;
     }
@@ -211,8 +306,17 @@ export class PaintCannon {
     this.animationFrameCallbacks.clear();
     this.keyboardEventListeners.keydown.clear();
     this.keyboardEventListeners.keyup.clear();
+    this.clickEventListeners.clear();
+    this.elements.clear();
+    this.parents.clear();
     process.off('SIGCONT', this.handleSigcont);
     this.binding.stop();
+  }
+
+  setParent(child: PaintNode, parent: PaintElement): void {
+    if (child instanceof DivElement || child instanceof SpanElement) {
+      this.parents.set(child.id, parent);
+    }
   }
 
   private scheduleAnimationFrameTick(): void {
@@ -245,7 +349,7 @@ export class PaintCannon {
     if (
       this.stopped ||
       this.keyboardEventTimer !== undefined ||
-      !this.shouldPumpKeyboardEvents()
+      !this.shouldPumpInputEvents()
     ) {
       return;
     }
@@ -262,6 +366,7 @@ export class PaintCannon {
     }
 
     const events = this.binding.drainKeyboardEvents();
+    let handledAnyEvent = false;
     if (events.length > 0) {
       for (const event of events) {
         if (this.handleDefaultControlEvent(event)) {
@@ -273,6 +378,29 @@ export class PaintCannon {
           listener(event);
         }
       }
+      handledAnyEvent = true;
+    }
+
+    if (this.captureMouse && this.clickListenerCount() > 0) {
+      const clicks = this.binding.drainMouseClicks();
+      for (const click of clicks) {
+        const event = this.binding.clickEventForMouseClick(
+          click.x,
+          click.y,
+          click.button,
+          click.ctrlKey,
+          click.altKey,
+          click.metaKey,
+          click.shiftKey,
+        );
+        if (event !== null) {
+          this.dispatchClickEvent(event);
+          handledAnyEvent = true;
+        }
+      }
+    }
+
+    if (handledAnyEvent) {
       this.render();
     }
 
@@ -283,8 +411,21 @@ export class PaintCannon {
     return this.keyboardEventListeners.keydown.size + this.keyboardEventListeners.keyup.size;
   }
 
-  private shouldPumpKeyboardEvents(): boolean {
-    return this.keyboardListenerCount() > 0 || !this.captureCtrlC || !this.captureCtrlZ;
+  private clickListenerCount(): number {
+    let count = 0;
+    for (const listeners of this.clickEventListeners.values()) {
+      count += listeners.size;
+    }
+    return count;
+  }
+
+  private shouldPumpInputEvents(): boolean {
+    return (
+      this.keyboardListenerCount() > 0 ||
+      !this.captureCtrlC ||
+      !this.captureCtrlZ ||
+      (this.captureMouse && this.clickListenerCount() > 0)
+    );
   }
 
   private handleDefaultControlEvent(event: KeyboardEvent): boolean {
@@ -313,6 +454,71 @@ export class PaintCannon {
 
     return false;
   }
+
+  private registerElement(element: PaintElement): void {
+    this.elements.set(element.id, element);
+  }
+
+  private dispatchClickEvent(nativeEvent: NativeClickEvent): void {
+    const target = this.elements.get(nativeEvent.targetId);
+    if (target === undefined) {
+      return;
+    }
+
+    const event = new PaintMouseEvent(nativeEvent, target);
+    let currentTarget: PaintElement | undefined = target;
+    while (currentTarget !== undefined) {
+      event.setCurrentTarget(currentTarget);
+      const listeners = Array.from(this.clickEventListeners.get(currentTarget.id) ?? []);
+      for (const listener of listeners) {
+        listener(event);
+        if (event.propagationStopped) {
+          return;
+        }
+      }
+      currentTarget = this.parents.get(currentTarget.id);
+    }
+  }
+}
+
+export class PaintMouseEvent {
+  readonly type: 'click';
+  readonly target: PaintElement;
+  currentTarget: PaintElement;
+  readonly clientX: number;
+  readonly clientY: number;
+  readonly button: number;
+  readonly ctrlKey: boolean;
+  readonly altKey: boolean;
+  readonly metaKey: boolean;
+  readonly shiftKey: boolean;
+  defaultPrevented = false;
+  propagationStopped = false;
+
+  constructor(event: NativeClickEvent, target: PaintElement) {
+    this.type = event.type;
+    this.target = target;
+    this.currentTarget = target;
+    this.clientX = event.clientX;
+    this.clientY = event.clientY;
+    this.button = event.button;
+    this.ctrlKey = event.ctrlKey;
+    this.altKey = event.altKey;
+    this.metaKey = event.metaKey;
+    this.shiftKey = event.shiftKey;
+  }
+
+  preventDefault(): void {
+    this.defaultPrevented = true;
+  }
+
+  stopPropagation(): void {
+    this.propagationStopped = true;
+  }
+
+  setCurrentTarget(element: PaintElement): void {
+    this.currentTarget = element;
+  }
 }
 
 export class DivElement {
@@ -331,7 +537,16 @@ export class DivElement {
   appendChild(child: PaintNode): PaintNode {
     assertPaintNode(child);
     this.binding.appendChild(this.id, child.id);
+    this.ownerDocument.setParent(child, this);
     return child;
+  }
+
+  addEventListener(type: ElementEventType, listener: ClickEventListener): void {
+    this.ownerDocument.addElementEventListener(this, type, listener);
+  }
+
+  removeEventListener(type: ElementEventType, listener: ClickEventListener): void {
+    this.ownerDocument.removeElementEventListener(this, type, listener);
   }
 }
 
@@ -351,7 +566,16 @@ export class SpanElement {
   appendChild(child: PaintNode): PaintNode {
     assertPaintNode(child);
     this.binding.appendChild(this.id, child.id);
+    this.ownerDocument.setParent(child, this);
     return child;
+  }
+
+  addEventListener(type: ElementEventType, listener: ClickEventListener): void {
+    this.ownerDocument.addElementEventListener(this, type, listener);
+  }
+
+  removeEventListener(type: ElementEventType, listener: ClickEventListener): void {
+    this.ownerDocument.removeElementEventListener(this, type, listener);
   }
 }
 

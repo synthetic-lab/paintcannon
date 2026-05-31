@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
 
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
+use napi_derive::napi;
 use taffy::prelude::*;
 
 use crate::style::*;
@@ -160,9 +161,38 @@ pub(crate) enum RenderCommand {
         id: u32,
         placement: CssGridPlacement,
     },
+    HitTestClick {
+        click: MouseClick,
+        response: Sender<Option<ClickEvent>>,
+    },
     InvalidateFrame,
     Render,
     Shutdown,
+}
+
+#[derive(Clone)]
+pub(crate) struct MouseClick {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) button: u32,
+    pub(crate) ctrl_key: bool,
+    pub(crate) alt_key: bool,
+    pub(crate) meta_key: bool,
+    pub(crate) shift_key: bool,
+}
+
+#[derive(Clone)]
+#[napi(object)]
+pub struct ClickEvent {
+    pub r#type: String,
+    pub target_id: u32,
+    pub client_x: u32,
+    pub client_y: u32,
+    pub button: u32,
+    pub ctrl_key: bool,
+    pub alt_key: bool,
+    pub meta_key: bool,
+    pub shift_key: bool,
 }
 
 #[derive(Clone)]
@@ -228,6 +258,7 @@ struct Renderer {
     root: Option<u32>,
     nodes: HashMap<u32, DomNode>,
     previous_frame: Option<Frame>,
+    hit_regions: Vec<HitRegion>,
 }
 
 impl Renderer {
@@ -236,6 +267,7 @@ impl Renderer {
             root: None,
             nodes: HashMap::new(),
             previous_frame: None,
+            hit_regions: Vec::new(),
         }
     }
 
@@ -440,6 +472,9 @@ impl Renderer {
                     node.grid_row.end = placement;
                 }
             }
+            RenderCommand::HitTestClick { click, response } => {
+                let _ = response.send(self.hit_test_click(click));
+            }
             RenderCommand::Render => {
                 self.render();
             }
@@ -490,9 +525,19 @@ impl Renderer {
         }
 
         let mut frame = Frame::new(cols as usize, rows as usize);
-        self.paint_node(root, 0.0, 0.0, &taffy, &taffy_ids, &mut frame);
+        let mut hit_regions = Vec::new();
+        self.paint_node(
+            root,
+            0.0,
+            0.0,
+            &taffy,
+            &taffy_ids,
+            &mut frame,
+            &mut hit_regions,
+        );
         let _ = frame.write_diff_to_stdout(self.previous_frame.as_ref());
         self.previous_frame = Some(frame);
+        self.hit_regions = hit_regions;
     }
 
     fn build_taffy(
@@ -549,6 +594,7 @@ impl Renderer {
         taffy: &TaffyTree<u32>,
         taffy_ids: &HashMap<u32, NodeId>,
         frame: &mut Frame,
+        hit_regions: &mut Vec<HitRegion>,
     ) {
         let Some(dom_node) = self.nodes.get(&id) else {
             return;
@@ -565,6 +611,14 @@ impl Renderer {
 
         match dom_node {
             DomNode::Div(node) => {
+                push_hit_region(
+                    hit_regions,
+                    id,
+                    x.round() as i32,
+                    y.round() as i32,
+                    layout.size.width.round() as i32,
+                    layout.size.height.round() as i32,
+                );
                 frame.fill_rect(
                     x.round() as i32,
                     y.round() as i32,
@@ -580,14 +634,24 @@ impl Renderer {
                         y.round() as i32,
                         layout.size.width.round() as i32,
                         frame,
+                        hit_regions,
+                        Some(id),
                     );
                 } else {
                     for child in &node.children {
-                        self.paint_node(*child, x, y, taffy, taffy_ids, frame);
+                        self.paint_node(*child, x, y, taffy, taffy_ids, frame, hit_regions);
                     }
                 }
             }
             DomNode::Span(node) => {
+                push_hit_region(
+                    hit_regions,
+                    id,
+                    x.round() as i32,
+                    y.round() as i32,
+                    layout.size.width.round() as i32,
+                    layout.size.height.round() as i32,
+                );
                 frame.fill_rect(
                     x.round() as i32,
                     y.round() as i32,
@@ -602,10 +666,12 @@ impl Renderer {
                         y.round() as i32,
                         layout.size.width.round() as i32,
                         frame,
+                        hit_regions,
+                        Some(id),
                     );
                 } else {
                     for child in &node.children {
-                        self.paint_node(*child, x, y, taffy, taffy_ids, frame);
+                        self.paint_node(*child, x, y, taffy, taffy_ids, frame, hit_regions);
                     }
                 }
             }
@@ -643,6 +709,8 @@ impl Renderer {
         y: i32,
         width: i32,
         frame: &mut Frame,
+        hit_regions: &mut Vec<HitRegion>,
+        hit_target: Option<u32>,
     ) {
         let mut cursor = InlineCursor {
             x,
@@ -653,7 +721,14 @@ impl Renderer {
         };
 
         for child in children {
-            self.paint_inline_node(*child, &mut cursor, Background::Default, frame);
+            self.paint_inline_node(
+                *child,
+                &mut cursor,
+                Background::Default,
+                frame,
+                hit_regions,
+                hit_target,
+            );
         }
     }
 
@@ -663,10 +738,19 @@ impl Renderer {
         cursor: &mut InlineCursor,
         background: Background,
         frame: &mut Frame,
+        hit_regions: &mut Vec<HitRegion>,
+        hit_target: Option<u32>,
     ) {
         match self.nodes.get(&id) {
             Some(DomNode::Text(node)) => {
-                write_inline_text(&node.text, cursor, background, frame);
+                write_inline_text(
+                    &node.text,
+                    cursor,
+                    background,
+                    frame,
+                    hit_regions,
+                    hit_target,
+                );
             }
             Some(DomNode::Span(node)) => {
                 let background = if node.style.background == Background::Default {
@@ -676,7 +760,14 @@ impl Renderer {
                 };
 
                 for child in &node.children {
-                    self.paint_inline_node(*child, cursor, background, frame);
+                    self.paint_inline_node(
+                        *child,
+                        cursor,
+                        background,
+                        frame,
+                        hit_regions,
+                        Some(id),
+                    );
                 }
             }
             Some(DomNode::Div(node)) if node.style.display == LayoutDisplay::Inline => {
@@ -687,12 +778,75 @@ impl Renderer {
                 };
 
                 for child in &node.children {
-                    self.paint_inline_node(*child, cursor, background, frame);
+                    self.paint_inline_node(
+                        *child,
+                        cursor,
+                        background,
+                        frame,
+                        hit_regions,
+                        Some(id),
+                    );
                 }
             }
             Some(DomNode::Div(_)) | None => {}
         }
     }
+
+    fn hit_test_click(&self, click: MouseClick) -> Option<ClickEvent> {
+        let target_id = self
+            .hit_regions
+            .iter()
+            .rev()
+            .find(|region| region.contains(click.x as i32, click.y as i32))?
+            .id;
+
+        Some(ClickEvent {
+            r#type: "click".to_string(),
+            target_id,
+            client_x: click.x,
+            client_y: click.y,
+            button: click.button,
+            ctrl_key: click.ctrl_key,
+            alt_key: click.alt_key,
+            meta_key: click.meta_key,
+            shift_key: click.shift_key,
+        })
+    }
+}
+
+struct HitRegion {
+    id: u32,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+impl HitRegion {
+    fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.left && x < self.right && y >= self.top && y < self.bottom
+    }
+}
+
+fn push_hit_region(
+    hit_regions: &mut Vec<HitRegion>,
+    id: u32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) {
+    if width <= 0 || height <= 0 {
+        return;
+    }
+
+    hit_regions.push(HitRegion {
+        id,
+        left: x,
+        top: y,
+        right: x + width,
+        bottom: y + height,
+    });
 }
 
 struct InlineCursor {
@@ -708,6 +862,8 @@ fn write_inline_text(
     cursor: &mut InlineCursor,
     background: Background,
     frame: &mut Frame,
+    hit_regions: &mut Vec<HitRegion>,
+    hit_target: Option<u32>,
 ) {
     for character in text.chars() {
         if character == '\n' {
@@ -721,12 +877,12 @@ fn write_inline_text(
             cursor.row += 1;
         }
 
-        frame.write_char(
-            cursor.x + cursor.col,
-            cursor.y + cursor.row,
-            character,
-            background,
-        );
+        let x = cursor.x + cursor.col;
+        let y = cursor.y + cursor.row;
+        frame.write_char(x, y, character, background);
+        if let Some(hit_target) = hit_target {
+            push_hit_region(hit_regions, hit_target, x, y, 1, 1);
+        }
         cursor.col += 1;
     }
 }
