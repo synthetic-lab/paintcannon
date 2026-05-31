@@ -25,6 +25,13 @@ paragraph.appendChild(hot);
 
 paragraph.appendChild(pc.createTextNode(' that keep flowing with surrounding text and wrap across terminal cells. '));
 
+const inlineDiv = pc.createElement('div');
+inlineDiv.style.display = 'inline';
+inlineDiv.style.backgroundColor = 'green';
+inlineDiv.appendChild(pc.createTextNode('Inline divs'));
+paragraph.appendChild(inlineDiv);
+paragraph.appendChild(pc.createTextNode(' can flow too. '));
+
 const cool = pc.createElement('span');
 cool.style.backgroundColor = 'cyan';
 cool.appendChild(pc.createTextNode('Nested '));

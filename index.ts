@@ -404,11 +404,11 @@ export class CSSStyleDeclaration {
     return this.values[normalizeStyleName(property)] || '';
   }
 
-  get display(): 'block' | 'flex' | 'grid' | string {
+  get display(): 'inline' | 'block' | 'flex' | 'flexbox' | 'grid' | string {
     return this.getPropertyValue('display');
   }
 
-  set display(value: 'block' | 'flex' | 'grid' | string) {
+  set display(value: 'inline' | 'block' | 'flex' | 'flexbox' | 'grid' | string) {
     this.setProperty('display', value);
   }
 

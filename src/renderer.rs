@@ -195,9 +195,12 @@ struct SpanNode {
 
 impl Default for SpanNode {
     fn default() -> Self {
+        let mut style = DivStyle::default();
+        style.display = LayoutDisplay::Inline;
+
         Self {
             children: Vec::new(),
-            style: DivStyle::default(),
+            style,
         }
     }
 }
@@ -513,7 +516,24 @@ impl Renderer {
                     .new_with_children(node.style.to_taffy(), &children)
                     .ok()?
             }
-            DomNode::Span(node) => taffy.new_leaf(node.style.to_taffy()).ok()?,
+            DomNode::Span(node) => {
+                if node.style.display == LayoutDisplay::Inline {
+                    taffy.new_leaf(node.style.to_taffy()).ok()?
+                } else {
+                    let children = if self.is_inline_children(&node.children) {
+                        Vec::new()
+                    } else {
+                        node.children
+                            .iter()
+                            .filter_map(|child| self.build_taffy(*child, taffy, taffy_ids))
+                            .collect::<Vec<_>>()
+                    };
+
+                    taffy
+                        .new_with_children(node.style.to_taffy(), &children)
+                        .ok()?
+                }
+            }
             DomNode::Text(node) => taffy.new_leaf(node.style()).ok()?,
         };
 
@@ -575,13 +595,19 @@ impl Renderer {
                     layout.size.height.round() as i32,
                     node.style.background,
                 );
-                self.paint_inline_children(
-                    &node.children,
-                    x.round() as i32,
-                    y.round() as i32,
-                    layout.size.width.round() as i32,
-                    frame,
-                );
+                if self.is_inline_children(&node.children) {
+                    self.paint_inline_children(
+                        &node.children,
+                        x.round() as i32,
+                        y.round() as i32,
+                        layout.size.width.round() as i32,
+                        frame,
+                    );
+                } else {
+                    for child in &node.children {
+                        self.paint_node(*child, x, y, taffy, taffy_ids, frame);
+                    }
+                }
             }
             DomNode::Text(node) => {
                 frame.write_text(x.round() as i32, y.round() as i32, &node.text);
@@ -590,15 +616,24 @@ impl Renderer {
     }
 
     fn is_inline_container(&self, node: &DivNode) -> bool {
-        let mut has_span = false;
-        for child in &node.children {
+        self.is_inline_children(&node.children)
+    }
+
+    fn is_inline_children(&self, children: &[u32]) -> bool {
+        let mut has_inline_element = false;
+        for child in children {
             match self.nodes.get(child) {
                 Some(DomNode::Text(_)) => {}
-                Some(DomNode::Span(_)) => has_span = true,
+                Some(DomNode::Div(node)) if node.style.display == LayoutDisplay::Inline => {
+                    has_inline_element = true;
+                }
+                Some(DomNode::Span(node)) if node.style.display == LayoutDisplay::Inline => {
+                    has_inline_element = true;
+                }
                 _ => return false,
             }
         }
-        has_span
+        has_inline_element
     }
 
     fn paint_inline_children(
@@ -634,6 +669,17 @@ impl Renderer {
                 write_inline_text(&node.text, cursor, background, frame);
             }
             Some(DomNode::Span(node)) => {
+                let background = if node.style.background == Background::Default {
+                    background
+                } else {
+                    node.style.background
+                };
+
+                for child in &node.children {
+                    self.paint_inline_node(*child, cursor, background, frame);
+                }
+            }
+            Some(DomNode::Div(node)) if node.style.display == LayoutDisplay::Inline => {
                 let background = if node.style.background == Background::Default {
                     background
                 } else {

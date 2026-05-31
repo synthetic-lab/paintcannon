@@ -62,8 +62,9 @@ impl Default for DivStyle {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LayoutDisplay {
+    Inline,
     Block,
     Flex,
     Grid,
@@ -284,6 +285,7 @@ impl DivStyle {
     pub(crate) fn to_taffy(&self) -> Style {
         Style {
             display: match self.display {
+                LayoutDisplay::Inline => Display::Block,
                 LayoutDisplay::Block => Display::Block,
                 LayoutDisplay::Flex => Display::Flex,
                 LayoutDisplay::Grid => Display::Grid,
@@ -378,8 +380,9 @@ fn layout_align_items_to_taffy(value: LayoutAlignItems) -> AlignItems {
 
 pub(crate) fn parse_display(value: &str) -> Result<LayoutDisplay> {
     match value.trim() {
+        "inline" => Ok(LayoutDisplay::Inline),
         "block" => Ok(LayoutDisplay::Block),
-        "flex" => Ok(LayoutDisplay::Flex),
+        "flex" | "flexbox" => Ok(LayoutDisplay::Flex),
         "grid" => Ok(LayoutDisplay::Grid),
         value => Err(Error::from_reason(format!("unsupported display: {value}"))),
     }
