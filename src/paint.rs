@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::ops::Range;
 use std::time::Instant;
 
@@ -39,6 +37,7 @@ pub(crate) struct PaintOptions<'a> {
 }
 
 impl PaintOutput {
+    #[cfg(test)]
     pub(crate) fn target_at(&self, x: u32, y: u32) -> Option<NodeId> {
         let x = x.min(i32::MAX as u32) as i32;
         let y = y.min(i32::MAX as u32) as i32;
@@ -51,11 +50,13 @@ impl PaintOutput {
 }
 
 impl HitRegion {
+    #[cfg(test)]
     fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.left && x < self.right && y >= self.top && y < self.bottom
     }
 }
 
+#[cfg(test)]
 pub(crate) fn paint_arena(
     arena: &LayoutArena,
     root: NodeId,

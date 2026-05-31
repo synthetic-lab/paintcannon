@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::io::{self, Write};
 
 use termprofile::TermProfile;
@@ -146,14 +144,17 @@ impl Frame {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn width(&self) -> usize {
         self.width
     }
 
+    #[cfg(test)]
     pub(crate) fn height(&self) -> usize {
         self.height
     }
 
+    #[cfg(test)]
     pub(crate) fn cell(&self, x: usize, y: usize) -> Option<Cell> {
         if x >= self.width || y >= self.height {
             return None;

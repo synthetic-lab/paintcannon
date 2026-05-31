@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
 use std::sync::{
@@ -123,6 +121,7 @@ pub(crate) enum EngineCommand {
     Batch {
         commands: Vec<EngineCommand>,
     },
+    #[cfg(test)]
     CreateElement {
         style: DivStyle,
         response: Sender<DomId>,
@@ -131,6 +130,7 @@ pub(crate) enum EngineCommand {
         id: DomId,
         style: DivStyle,
     },
+    #[cfg(test)]
     CreateText {
         text: String,
         response: Sender<DomId>,
@@ -138,14 +138,6 @@ pub(crate) enum EngineCommand {
     CreateTextWithId {
         id: DomId,
         text: String,
-    },
-    CreateImage {
-        style: DivStyle,
-        width_px: u32,
-        height_px: u32,
-        cell_width_px: u32,
-        cell_height_px: u32,
-        response: Sender<DomId>,
     },
     CreateImageWithId {
         id: DomId,
@@ -155,20 +147,10 @@ pub(crate) enum EngineCommand {
         cell_width_px: u32,
         cell_height_px: u32,
     },
-    CreateInput {
-        style: DivStyle,
-        value: String,
-        response: Sender<DomId>,
-    },
     CreateInputWithId {
         id: DomId,
         style: DivStyle,
         value: String,
-    },
-    CreateTextArea {
-        style: DivStyle,
-        value: String,
-        response: Sender<DomId>,
     },
     CreateTextAreaWithId {
         id: DomId,
@@ -188,10 +170,6 @@ pub(crate) enum EngineCommand {
     DetachNode {
         node: DomId,
     },
-    SetStyle {
-        node: DomId,
-        style: DivStyle,
-    },
     MutateStyle {
         node: DomId,
         mutation: StyleMutation,
@@ -203,12 +181,6 @@ pub(crate) enum EngineCommand {
     SetText {
         node: DomId,
         text: String,
-    },
-    SetImagePixels {
-        node: DomId,
-        width_px: u32,
-        height_px: u32,
-        rgb: Vec<u8>,
     },
     SetImageSource {
         node: DomId,
@@ -264,6 +236,7 @@ pub(crate) enum EngineCommand {
         x: u32,
         y: u32,
     },
+    #[cfg(test)]
     RenderFrame {
         width: usize,
         height: usize,
@@ -336,6 +309,7 @@ impl PaintEngine {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn create_element(&mut self, style: DivStyle) -> DomId {
         self.layout_dirty = true;
         let node = self.arena.create_element(style);
@@ -347,16 +321,15 @@ impl PaintEngine {
         let mut append_count = 0;
         for command in commands {
             match command {
-                EngineCommand::CreateElement { .. }
-                | EngineCommand::CreateElementWithId { .. }
-                | EngineCommand::CreateText { .. }
+                EngineCommand::CreateElementWithId { .. }
                 | EngineCommand::CreateTextWithId { .. }
-                | EngineCommand::CreateImage { .. }
                 | EngineCommand::CreateImageWithId { .. }
-                | EngineCommand::CreateInput { .. }
                 | EngineCommand::CreateInputWithId { .. }
-                | EngineCommand::CreateTextArea { .. }
                 | EngineCommand::CreateTextAreaWithId { .. } => create_count += 1,
+                #[cfg(test)]
+                EngineCommand::CreateElement { .. } | EngineCommand::CreateText { .. } => {
+                    create_count += 1
+                }
                 EngineCommand::AppendChild { .. } => append_count += 1,
                 _ => {}
             }
@@ -379,6 +352,7 @@ impl PaintEngine {
         self.register_node_with_id(id, node)
     }
 
+    #[cfg(test)]
     pub(crate) fn create_text(&mut self, text: impl Into<String>) -> DomId {
         self.layout_dirty = true;
         let node = self.arena.create_text(text);
@@ -389,21 +363,6 @@ impl PaintEngine {
         self.layout_dirty = true;
         let node = self.arena.create_text(text);
         self.register_node_with_id(id, node)
-    }
-
-    pub(crate) fn create_image(
-        &mut self,
-        style: DivStyle,
-        width_px: u32,
-        height_px: u32,
-        cell_width_px: u32,
-        cell_height_px: u32,
-    ) -> DomId {
-        self.layout_dirty = true;
-        let node =
-            self.arena
-                .create_image(style, width_px, height_px, cell_width_px, cell_height_px);
-        self.register_node(node)
     }
 
     pub(crate) fn create_image_with_id(
@@ -422,12 +381,6 @@ impl PaintEngine {
         self.register_node_with_id(id, node)
     }
 
-    pub(crate) fn create_input(&mut self, style: DivStyle, value: impl Into<String>) -> DomId {
-        self.layout_dirty = true;
-        let node = self.arena.create_input(style, value);
-        self.register_node(node)
-    }
-
     pub(crate) fn create_input_with_id(
         &mut self,
         id: DomId,
@@ -439,6 +392,7 @@ impl PaintEngine {
         self.register_node_with_id(id, node)
     }
 
+    #[cfg(test)]
     pub(crate) fn create_textarea(&mut self, style: DivStyle, value: impl Into<String>) -> DomId {
         self.layout_dirty = true;
         let node = self.arena.create_textarea(style, value);
@@ -532,6 +486,7 @@ impl PaintEngine {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn set_style(&mut self, node: DomId, style: DivStyle) -> bool {
         self.set_style_at(node, style, Instant::now())
     }
@@ -551,6 +506,7 @@ impl PaintEngine {
         true
     }
 
+    #[cfg(test)]
     fn set_style_at(&mut self, node: DomId, style: DivStyle, now: Instant) -> bool {
         let Some(node) = self.node_for(node) else {
             return false;
@@ -609,21 +565,6 @@ impl PaintEngine {
         };
         self.layout_dirty = true;
         self.arena.set_text(node, text);
-        true
-    }
-
-    pub(crate) fn set_image_pixels(
-        &mut self,
-        node: DomId,
-        width_px: u32,
-        height_px: u32,
-        rgb: Vec<u8>,
-    ) -> bool {
-        let Some(node) = self.node_for(node) else {
-            return false;
-        };
-        self.layout_dirty = true;
-        self.arena.set_image_pixels(node, width_px, height_px, rgb);
         true
     }
 
@@ -942,10 +883,6 @@ impl PaintEngine {
         self.previous_frame = None;
     }
 
-    pub(crate) fn has_active_transitions(&self) -> bool {
-        self.transitions.has_active()
-    }
-
     pub(crate) fn drain_transition_events(&mut self) -> Vec<EngineTransitionEvent> {
         self.transitions
             .drain_events()
@@ -977,6 +914,7 @@ impl PaintEngine {
         }
     }
 
+    #[cfg(test)]
     fn register_node(&mut self, node: NodeId) -> DomId {
         let id = DomId(self.next_dom_id);
         self.next_dom_id = self.next_dom_id.checked_add(1).expect("DOM id overflow");
@@ -1182,33 +1120,19 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
                 ],
             );
         }
+        #[cfg(test)]
         EngineCommand::CreateElement { style, response } => {
             let _ = response.send(engine.create_element(style));
         }
         EngineCommand::CreateElementWithId { id, style } => {
             engine.create_element_with_id(id, style);
         }
+        #[cfg(test)]
         EngineCommand::CreateText { text, response } => {
             let _ = response.send(engine.create_text(text));
         }
         EngineCommand::CreateTextWithId { id, text } => {
             engine.create_text_with_id(id, text);
-        }
-        EngineCommand::CreateImage {
-            style,
-            width_px,
-            height_px,
-            cell_width_px,
-            cell_height_px,
-            response,
-        } => {
-            let _ = response.send(engine.create_image(
-                style,
-                width_px,
-                height_px,
-                cell_width_px,
-                cell_height_px,
-            ));
         }
         EngineCommand::CreateImageWithId {
             id,
@@ -1227,22 +1151,8 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
                 cell_height_px,
             );
         }
-        EngineCommand::CreateInput {
-            style,
-            value,
-            response,
-        } => {
-            let _ = response.send(engine.create_input(style, value));
-        }
         EngineCommand::CreateInputWithId { id, style, value } => {
             engine.create_input_with_id(id, style, value);
-        }
-        EngineCommand::CreateTextArea {
-            style,
-            value,
-            response,
-        } => {
-            let _ = response.send(engine.create_textarea(style, value));
         }
         EngineCommand::CreateTextAreaWithId { id, style, value } => {
             engine.create_textarea_with_id(id, style, value);
@@ -1259,9 +1169,6 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         EngineCommand::DetachNode { node } => {
             engine.detach_node(node);
         }
-        EngineCommand::SetStyle { node, style } => {
-            engine.set_style(node, style);
-        }
         EngineCommand::MutateStyle { node, mutation } => {
             engine.mutate_style(node, mutation);
         }
@@ -1270,14 +1177,6 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         }
         EngineCommand::SetText { node, text } => {
             engine.set_text(node, text);
-        }
-        EngineCommand::SetImagePixels {
-            node,
-            width_px,
-            height_px,
-            rgb,
-        } => {
-            engine.set_image_pixels(node, width_px, height_px, rgb);
         }
         EngineCommand::SetImageSource { node, src } => {
             engine.set_image_source(node, src);
@@ -1369,6 +1268,7 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         EngineCommand::HandlePointerMove { x, y } => {
             engine.handle_pointer_move(x, y);
         }
+        #[cfg(test)]
         EngineCommand::RenderFrame {
             width,
             height,

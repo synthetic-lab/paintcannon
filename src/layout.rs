@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::time::Instant;
 
 use taffy::{
@@ -205,6 +203,7 @@ impl LayoutArena {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn set_image_pixels(
         &mut self,
         node: NodeId,
@@ -518,12 +517,6 @@ impl LayoutArena {
             client_width,
             client_height,
         })
-    }
-
-    fn clear_cache(&mut self) {
-        for node in &mut self.nodes {
-            node.cache.clear();
-        }
     }
 
     fn clear_cache_from(&mut self, node: NodeId) {

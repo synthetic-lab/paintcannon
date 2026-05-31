@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
@@ -158,6 +156,7 @@ impl TransitionState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn has_active(&self) -> bool {
         !self.active.is_empty()
     }

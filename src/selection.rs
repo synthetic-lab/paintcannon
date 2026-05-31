@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::frame::{Frame, Selection, SelectionPoint};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
