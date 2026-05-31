@@ -15,6 +15,8 @@ export interface PaintCannonOptions {
 export interface TerminalSize {
   cols: number;
   rows: number;
+  pixelWidth: number;
+  pixelHeight: number;
 }
 
 export type AnimationFrameCallback = (timestamp: number) => void;
@@ -125,6 +127,7 @@ export interface NativeBatchCommand {
   parent?: number;
   child?: number;
   text?: string;
+  src?: string;
   property?: string;
   value?: string;
 }
@@ -137,8 +140,10 @@ export interface NativeBatchIdMapping {
 export interface NativePaintCannon {
   createDiv(): number;
   createSpan(): number;
+  createImage(): number;
   createTextNode(text: string): number;
   setTextNodeValue(id: number, text: string): void;
+  setImageSource(id: number, src: string): void;
   setRoot(id: number): void;
   appendChild(parent: number, child: number): void;
   setStyleProperty(id: number, property: string, value: string): void;
@@ -180,7 +185,7 @@ export interface NativeBinding {
   ) => NativePaintCannon;
 }
 
-export type PaintElement = DivElement | SpanElement;
+export type PaintElement = DivElement | SpanElement | ImageElement;
 export type PaintNode = PaintElement | TextNode;
 
 export const native: NativeBinding = loadNativeBinding();
@@ -246,6 +251,7 @@ export class PaintCannon {
 
   createElement(tagName: 'div'): DivElement;
   createElement(tagName: 'span'): SpanElement;
+  createElement(tagName: 'img'): ImageElement;
   createElement(tagName: string): PaintElement {
     if (tagName === 'div') {
       const element = new DivElement(
@@ -267,8 +273,18 @@ export class PaintCannon {
       this.registerElement(element);
       return element;
     }
+    if (tagName === 'img') {
+      const element = new ImageElement(
+        this,
+        this.createNativeImage(),
+        (id, src) => this.setNativeImageSource(id, src),
+        (id, property, value) => this.setNativeStyleProperty(id, property, value),
+      );
+      this.registerElement(element);
+      return element;
+    }
 
-    throw new Error(`paintcannon only supports <div> and <span> right now, got <${tagName}>`);
+    throw new Error(`paintcannon only supports <div>, <span>, and <img> right now, got <${tagName}>`);
   }
 
   createTextNode(data: string): TextNode {
@@ -486,7 +502,7 @@ export class PaintCannon {
   }
 
   private setParent(child: PaintNode, parent: PaintElement): void {
-    if (child instanceof DivElement || child instanceof SpanElement) {
+    if (child instanceof DivElement || child instanceof SpanElement || child instanceof ImageElement) {
       this.parents.set(child.id, parent);
     }
   }
@@ -547,6 +563,16 @@ export class PaintCannon {
     return id;
   }
 
+  private createNativeImage(): number {
+    if (!this.isTransactionActive()) {
+      return this.binding.createImage();
+    }
+
+    const id = this.allocateTemporaryId();
+    this.batchCommands.push({ type: 'createImage', id });
+    return id;
+  }
+
   private createNativeTextNode(text: string): number {
     if (!this.isTransactionActive()) {
       return this.binding.createTextNode(text);
@@ -564,6 +590,15 @@ export class PaintCannon {
     }
 
     this.binding.setTextNodeValue(id, text);
+  }
+
+  private setNativeImageSource(id: number, src: string): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'setImageSource', id, src });
+      return;
+    }
+
+    this.binding.setImageSource(id, src);
   }
 
   private setNativeRoot(id: number): void {
@@ -663,7 +698,7 @@ export class PaintCannon {
       this.elements.set(element.id, element);
     }
     for (const node of this.batchNodes.values()) {
-      if (node instanceof DivElement || node instanceof SpanElement) {
+      if (node instanceof DivElement || node instanceof SpanElement || node instanceof ImageElement) {
         this.elements.set(node.id, node);
       }
     }
@@ -1419,6 +1454,48 @@ export class SpanElement {
   }
 }
 
+export class ImageElement {
+  readonly ownerDocument: PaintCannon;
+  readonly style: CSSStyleDeclaration;
+  id: number;
+  private source = '';
+
+  constructor(
+    owner: PaintCannon,
+    id: number,
+    private readonly setNativeImageSource: (id: number, src: string) => void,
+    setNativeStyleProperty: (id: number, property: string, value: string) => void,
+  ) {
+    this.ownerDocument = owner;
+    this.id = id;
+    this.style = new CSSStyleDeclaration(
+      () => this.id,
+      setNativeStyleProperty,
+    );
+  }
+
+  get src(): string {
+    return this.source;
+  }
+
+  set src(value: string) {
+    this.source = String(value);
+    this.setNativeImageSource(this.id, this.source);
+  }
+
+  addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
+  addEventListener(type: ElementEventType, listener: ElementEventListener): void {
+    this.ownerDocument.addElementEventListener(this, type, listener);
+  }
+
+  removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
+  removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
+    this.ownerDocument.removeElementEventListener(this, type, listener);
+  }
+}
+
 export class TextNode {
   readonly ownerDocument: PaintCannon;
 
@@ -1825,13 +1902,13 @@ export class CSSStyleDeclaration {
 }
 
 function assertElement(value: unknown): asserts value is PaintElement {
-  if (!(value instanceof DivElement) && !(value instanceof SpanElement)) {
+  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement)) {
     throw new TypeError('expected a paintcannon element');
   }
 }
 
 function assertPaintNode(value: unknown): asserts value is PaintNode {
-  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof TextNode)) {
+  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement) && !(value instanceof TextNode)) {
     throw new TypeError('expected a paintcannon node');
   }
 }

@@ -34,6 +34,7 @@ pub struct BatchCommand {
     pub parent: Option<i32>,
     pub child: Option<i32>,
     pub text: Option<String>,
+    pub src: Option<String>,
     pub property: Option<String>,
     pub value: Option<String>,
 }
@@ -108,6 +109,13 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn create_image(&mut self) -> Result<u32> {
+        let id = self.allocate_id();
+        self.send(RenderCommand::CreateImage { id })?;
+        Ok(id)
+    }
+
+    #[napi]
     pub fn create_text_node(&mut self, text: String) -> Result<u32> {
         let id = self.allocate_id();
         self.send(RenderCommand::CreateText { id, text })?;
@@ -117,6 +125,11 @@ impl PaintCannon {
     #[napi]
     pub fn set_text_node_value(&self, id: u32, text: String) -> Result<()> {
         self.send(RenderCommand::SetText { id, text })
+    }
+
+    #[napi]
+    pub fn set_image_source(&self, id: u32, src: String) -> Result<()> {
+        self.send(RenderCommand::SetImageSource { id, src })
     }
 
     #[napi]
@@ -164,10 +177,22 @@ impl PaintCannon {
                     mappings.push(BatchIdMapping { temporary_id, id });
                     render_commands.push(RenderCommand::CreateText { id, text });
                 }
+                "createImage" => {
+                    let temporary_id = required_i32(command.id, "id", "createImage")?;
+                    let id = self.allocate_id();
+                    id_map.insert(temporary_id, id);
+                    mappings.push(BatchIdMapping { temporary_id, id });
+                    render_commands.push(RenderCommand::CreateImage { id });
+                }
                 "setText" => {
                     let id = resolve_batch_id(command.id, "id", "setText", &id_map)?;
                     let text = required_string(command.text, "text", "setText")?;
                     render_commands.push(RenderCommand::SetText { id, text });
+                }
+                "setImageSource" => {
+                    let id = resolve_batch_id(command.id, "id", "setImageSource", &id_map)?;
+                    let src = required_string(command.src, "src", "setImageSource")?;
+                    render_commands.push(RenderCommand::SetImageSource { id, src });
                 }
                 "setRoot" => {
                     let id = resolve_batch_id(command.id, "id", "setRoot", &id_map)?;

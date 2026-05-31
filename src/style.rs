@@ -535,6 +535,7 @@ impl DivStyle {
                 width: self.width.to_taffy(),
                 height: self.height.to_taffy(),
             },
+            min_size: Size::zero(),
             border: Rect {
                 left: border_size(self.border_left),
                 right: border_size(self.border_right),

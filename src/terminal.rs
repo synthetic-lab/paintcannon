@@ -11,9 +11,12 @@ use std::os::fd::AsRawFd;
 use napi_derive::napi;
 
 #[napi(object)]
+#[derive(Clone, Copy)]
 pub struct TerminalSize {
     pub cols: u32,
     pub rows: u32,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
 }
 
 pub(crate) fn reset_terminal() {
@@ -22,6 +25,7 @@ pub(crate) fn reset_terminal() {
     let _ = write_synchronized_output_end(&mut out);
     let _ = write_pointer_shape(&mut out, None);
     let _ = write!(out, "\x1b[0m\x1b[?25h\x1b[{rows};1H\x1b[2K\n");
+    let _ = out.flush();
 }
 
 pub(crate) fn copy_text_to_clipboard(text: &str) {
@@ -49,10 +53,10 @@ pub(crate) fn write_synchronized_output_begin(out: &mut impl Write) -> io::Resul
     }
 
     if inside_tmux() {
-        write_tmux_passthrough(out, b"\x1b[?2026h")
-    } else {
-        write!(out, "\x1b[?2026h")
+        return Ok(());
     }
+
+    write!(out, "\x1b[?2026h")
 }
 
 pub(crate) fn write_synchronized_output_end(out: &mut impl Write) -> io::Result<()> {
@@ -61,10 +65,10 @@ pub(crate) fn write_synchronized_output_end(out: &mut impl Write) -> io::Result<
     }
 
     if inside_tmux() {
-        write_tmux_passthrough(out, b"\x1b[?2026l")?;
-    } else {
-        write!(out, "\x1b[?2026l")?;
+        return Ok(());
     }
+
+    write!(out, "\x1b[?2026l")?;
     Ok(())
 }
 
@@ -167,7 +171,7 @@ fn inside_tmux() -> bool {
     env::var_os("TMUX").is_some()
 }
 
-fn base64_encode(bytes: &[u8]) -> String {
+pub(crate) fn base64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
 
@@ -198,7 +202,12 @@ pub(crate) fn query_terminal_size() -> TerminalSize {
     query_terminal_size_from(io::stdout())
         .or_else(|| query_terminal_size_from(io::stderr()))
         .or_else(|| query_terminal_size_from(io::stdin()))
-        .unwrap_or(TerminalSize { cols: 80, rows: 24 })
+        .unwrap_or(TerminalSize {
+            cols: 80,
+            rows: 24,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
 }
 
 #[cfg(unix)]
@@ -215,6 +224,8 @@ fn query_terminal_size_from<T: AsRawFd>(stream: T) -> Option<TerminalSize> {
         Some(TerminalSize {
             cols: u32::from(size.ws_col),
             rows: u32::from(size.ws_row),
+            pixel_width: u32::from(size.ws_xpixel),
+            pixel_height: u32::from(size.ws_ypixel),
         })
     } else {
         None

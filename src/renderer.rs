@@ -1,4 +1,6 @@
 use std::collections::{HashMap, VecDeque};
+use std::fs;
+use std::io::Cursor;
 use std::io::{self, Write};
 use std::ops::Range;
 use std::sync::{
@@ -11,6 +13,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::RecvTimeoutError;
 use crossbeam_channel::{Receiver, Sender};
 use napi_derive::napi;
+use taffy::geometry::Point;
 use taffy::prelude::*;
 use termprofile::{DetectorSettings, TermProfile};
 
@@ -30,9 +33,16 @@ pub(crate) enum RenderCommand {
     CreateSpan {
         id: u32,
     },
+    CreateImage {
+        id: u32,
+    },
     CreateText {
         id: u32,
         text: String,
+    },
+    SetImageSource {
+        id: u32,
+        src: String,
     },
     SetText {
         id: u32,
@@ -286,7 +296,7 @@ pub struct ClickEvent {
     pub shift_key: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[napi(object)]
 pub struct ScrollMetrics {
     pub scroll_left: u32,
@@ -324,6 +334,7 @@ pub(crate) enum SelectionMouseEventType {
 enum DomNode {
     Div(DivNode),
     Span(SpanNode),
+    Image(ImageNode),
     Text(TextNode),
 }
 
@@ -366,6 +377,30 @@ impl Default for SpanNode {
             scroll_top: 0,
         }
     }
+}
+
+#[derive(Clone)]
+struct ImageNode {
+    style: DivStyle,
+    src: Option<String>,
+    image: Option<ImageData>,
+}
+
+impl Default for ImageNode {
+    fn default() -> Self {
+        Self {
+            style: DivStyle::default(),
+            src: None,
+            image: None,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ImageData {
+    width_px: u32,
+    height_px: u32,
+    rgb: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -477,6 +512,13 @@ impl Renderer {
                 }
                 self.nodes.insert(id, DomNode::Span(node));
             }
+            RenderCommand::CreateImage { id } => {
+                let node = ImageNode::default();
+                if let Ok(taffy_id) = self.taffy.new_leaf(node.style.to_taffy()) {
+                    self.taffy_ids.insert(id, taffy_id);
+                }
+                self.nodes.insert(id, DomNode::Image(node));
+            }
             RenderCommand::CreateText { id, text } => {
                 let node = TextNode {
                     metrics: measure_text(&text),
@@ -489,6 +531,9 @@ impl Renderer {
             }
             RenderCommand::SetText { id, text } => {
                 self.set_text(id, text);
+            }
+            RenderCommand::SetImageSource { id, src } => {
+                self.set_image_source(id, src);
             }
             RenderCommand::SetRoot { id } => {
                 self.root = Some(id);
@@ -528,10 +573,12 @@ impl Renderer {
                 scroll_top,
                 response,
             } => {
+                self.ensure_layout_and_scroll_metrics();
                 let metrics = self.set_scroll_offset(id, scroll_left, scroll_top);
                 let _ = response.send(metrics);
             }
             RenderCommand::GetScrollMetrics { id, response } => {
+                self.ensure_layout_and_scroll_metrics();
                 let _ = response.send(self.scroll_metrics_for(id));
             }
             RenderCommand::SetFlexDirection { id, direction } => {
@@ -720,6 +767,7 @@ impl Renderer {
         match self.nodes.get_mut(&id)? {
             DomNode::Div(node) => Some(&mut node.children),
             DomNode::Span(node) => Some(&mut node.children),
+            DomNode::Image(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -728,6 +776,7 @@ impl Renderer {
         match self.nodes.get_mut(&id)? {
             DomNode::Div(node) => Some(&mut node.style),
             DomNode::Span(node) => Some(&mut node.style),
+            DomNode::Image(node) => Some(&mut node.style),
             DomNode::Text(_) => None,
         }
     }
@@ -742,6 +791,16 @@ impl Renderer {
         }
 
         if metrics_changed {
+            self.sync_taffy_style(id);
+            self.mark_layout_dirty();
+        }
+    }
+
+    fn set_image_source(&mut self, id: u32, src: String) {
+        let image = load_png_image(&src).ok();
+        if let Some(DomNode::Image(node)) = self.nodes.get_mut(&id) {
+            node.src = Some(src);
+            node.image = image;
             self.sync_taffy_style(id);
             self.mark_layout_dirty();
         }
@@ -887,6 +946,26 @@ impl Renderer {
         }
     }
 
+    fn sync_image_taffy_styles(&mut self, terminal_size: TerminalSize) {
+        let image_ids = self
+            .nodes
+            .iter()
+            .filter_map(|(id, node)| matches!(node, DomNode::Image(_)).then_some(*id))
+            .collect::<Vec<_>>();
+
+        for id in image_ids {
+            let Some(taffy_id) = self.taffy_ids.get(&id).copied() else {
+                continue;
+            };
+            let Some(DomNode::Image(node)) = self.nodes.get(&id) else {
+                continue;
+            };
+            let _ = self
+                .taffy
+                .set_style(taffy_id, image_taffy_style(node, terminal_size));
+        }
+    }
+
     fn sync_appended_taffy_child(&mut self, parent_id: u32, child: u32) {
         if self.can_fast_append_taffy_child(parent_id, child) {
             if let (Some(parent_taffy_id), Some(child_taffy_id)) = (
@@ -920,6 +999,7 @@ impl Renderer {
             DomNode::Span(node) => {
                 node.style.display != LayoutDisplay::Inline && !self.is_inline_child(child)
             }
+            DomNode::Image(_) => false,
             DomNode::Text(_) => false,
         }
     }
@@ -929,6 +1009,7 @@ impl Renderer {
             Some(DomNode::Text(_)) => true,
             Some(DomNode::Div(node)) => node.style.display == LayoutDisplay::Inline,
             Some(DomNode::Span(node)) => node.style.display == LayoutDisplay::Inline,
+            Some(DomNode::Image(node)) => node.style.display == LayoutDisplay::Inline,
             None => false,
         }
     }
@@ -937,6 +1018,7 @@ impl Renderer {
         match self.nodes.get(&id)? {
             DomNode::Div(node) => Some(node.style.to_taffy()),
             DomNode::Span(node) => Some(node.style.to_taffy()),
+            DomNode::Image(node) => Some(image_taffy_style(node, query_terminal_size())),
             DomNode::Text(node) => Some(node.style()),
         }
     }
@@ -959,6 +1041,7 @@ impl Renderer {
                 }
                 &node.children
             }
+            DomNode::Image(_) => return Vec::new(),
             DomNode::Text(_) => return Vec::new(),
         };
 
@@ -972,6 +1055,7 @@ impl Renderer {
         match self.nodes.get_mut(&id)? {
             DomNode::Div(node) => Some((&mut node.scroll_left, &mut node.scroll_top)),
             DomNode::Span(node) => Some((&mut node.scroll_left, &mut node.scroll_top)),
+            DomNode::Image(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -980,6 +1064,7 @@ impl Renderer {
         match self.nodes.get(&id)? {
             DomNode::Div(node) => Some((node.scroll_left, node.scroll_top)),
             DomNode::Span(node) => Some((node.scroll_left, node.scroll_top)),
+            DomNode::Image(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -1013,6 +1098,7 @@ impl Renderer {
                 axis_max_scroll(node.style.overflow_x, max_scroll_left(metrics)),
                 axis_max_scroll(node.style.overflow_y, max_scroll_top(metrics)),
             )),
+            DomNode::Image(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -1036,30 +1122,28 @@ impl Renderer {
         })
     }
 
-    fn render(&mut self) {
-        let Some(root) = self.root else {
-            return;
-        };
-        let Some(root_node) = self.taffy_ids.get(&root).copied() else {
-            return;
-        };
+    fn ensure_layout_and_scroll_metrics(&mut self) -> Option<TerminalSize> {
+        let root = self.root?;
+        let root_node = self.taffy_ids.get(&root).copied()?;
 
-        let TerminalSize { cols, rows } = query_terminal_size();
+        let terminal_size = query_terminal_size();
+        let TerminalSize { cols, rows, .. } = terminal_size;
         let layout_size = (cols, rows);
         if self.last_layout_size != Some(layout_size) {
             self.mark_layout_dirty();
-        }
-
-        let available = Size {
-            width: AvailableSpace::Definite(cols as f32),
-            height: AvailableSpace::Definite(rows as f32),
-        };
-
-        if self.taffy.compute_layout(root_node, available).is_err() {
-            return;
+            self.sync_image_taffy_styles(terminal_size);
         }
 
         if self.scroll_metrics_dirty {
+            let available = Size {
+                width: AvailableSpace::Definite(cols as f32),
+                height: AvailableSpace::Definite(rows as f32),
+            };
+
+            if self.taffy.compute_layout(root_node, available).is_err() {
+                return None;
+            }
+
             let mut scroll_metrics = HashMap::new();
             self.collect_scroll_metrics(root, &mut scroll_metrics);
             self.clamp_scroll_offsets(&mut scroll_metrics);
@@ -1067,6 +1151,18 @@ impl Renderer {
             self.scroll_metrics_dirty = false;
             self.last_layout_size = Some(layout_size);
         }
+
+        Some(terminal_size)
+    }
+
+    fn render(&mut self) {
+        let Some(root) = self.root else {
+            return;
+        };
+        let Some(terminal_size) = self.ensure_layout_and_scroll_metrics() else {
+            return;
+        };
+        let TerminalSize { cols, rows, .. } = terminal_size;
 
         let mut frame = Frame::new(
             cols as usize,
@@ -1131,14 +1227,17 @@ impl Renderer {
         let children = match dom_node {
             DomNode::Div(node) => Some(node.children.clone()),
             DomNode::Span(node) => Some(node.children.clone()),
+            DomNode::Image(_) => None,
             DomNode::Text(_) => None,
         };
         let Some(children) = children else {
             return;
         };
 
-        let client_width = dimension_to_cells(layout.size.width);
-        let client_height = dimension_to_cells(layout.size.height);
+        let content_box = content_box_size(dom_node, layout.size);
+        let content_origin = content_box_origin(dom_node);
+        let client_width = dimension_to_cells(content_box.width);
+        let client_height = dimension_to_cells(content_box.height);
         let mut scroll_width = client_width;
         let mut scroll_height = client_height;
 
@@ -1158,10 +1257,10 @@ impl Renderer {
                 };
 
                 scroll_width = scroll_width.max(edge_to_cells(
-                    child_layout.location.x + child_layout.size.width,
+                    child_layout.location.x + child_layout.size.width - content_origin.x,
                 ));
                 scroll_height = scroll_height.max(edge_to_cells(
-                    child_layout.location.y + child_layout.size.height,
+                    child_layout.location.y + child_layout.size.height - content_origin.y,
                 ));
             }
         }
@@ -1219,6 +1318,7 @@ impl Renderer {
                     metrics.scroll_left = node.scroll_left;
                     metrics.scroll_top = node.scroll_top;
                 }
+                DomNode::Image(_) => {}
                 DomNode::Text(_) => {}
             }
         }
@@ -1412,6 +1512,11 @@ impl Renderer {
                     clip,
                 );
             }
+            DomNode::Image(node) => {
+                push_hit_region(hit_regions, id, bounds, clip);
+                frame.fill_rect(bounds, Background::Default, selection_background, clip);
+                frame.write_ascii_image(node, bounds, selection_background, clip);
+            }
         }
     }
 
@@ -1497,6 +1602,9 @@ impl Renderer {
                     has_inline_element = true;
                 }
                 Some(DomNode::Span(node)) if node.style.display == LayoutDisplay::Inline => {
+                    has_inline_element = true;
+                }
+                Some(DomNode::Image(node)) if node.style.display == LayoutDisplay::Inline => {
                     has_inline_element = true;
                 }
                 _ => return false,
@@ -1631,7 +1739,10 @@ impl Renderer {
                     );
                 }
             }
-            Some(DomNode::Div(_)) | None => {}
+            Some(DomNode::Image(node)) if node.style.display == LayoutDisplay::Inline => {
+                write_inline_image(id, node, cursor, frame, hit_regions, hit_target, clip);
+            }
+            Some(DomNode::Div(_)) | Some(DomNode::Image(_)) | None => {}
         }
     }
 
@@ -1876,6 +1987,10 @@ impl ClipRect {
     fn width(self) -> i32 {
         self.right.saturating_sub(self.left)
     }
+
+    fn height(self) -> i32 {
+        self.bottom.saturating_sub(self.top)
+    }
 }
 
 impl ClipBounds {
@@ -1978,6 +2093,40 @@ fn child_clip_for(
     let clips_x = overflow_x != LayoutOverflow::Visible;
     let clips_y = overflow_y != LayoutOverflow::Visible;
     clip.intersect(ClipBounds::from_rect_axes(bounds, clips_x, clips_y))
+}
+
+fn content_box_size(node: &DomNode, size: Size<f32>) -> Size<f32> {
+    let Some(style) = node_style(node) else {
+        return size;
+    };
+
+    Size {
+        width: (size.width - border_extent(style.border_left) - border_extent(style.border_right))
+            .max(0.0),
+        height: (size.height
+            - border_extent(style.border_top)
+            - border_extent(style.border_bottom))
+        .max(0.0),
+    }
+}
+
+fn content_box_origin(node: &DomNode) -> Point<f32> {
+    let Some(style) = node_style(node) else {
+        return Point::ZERO;
+    };
+
+    Point {
+        x: border_extent(style.border_left),
+        y: border_extent(style.border_top),
+    }
+}
+
+fn border_extent(style: BorderStyle) -> f32 {
+    if style == BorderStyle::None {
+        0.0
+    } else {
+        1.0
+    }
 }
 
 fn can_cull_vertical_children(style: &DivStyle) -> bool {
@@ -2133,10 +2282,21 @@ fn linear_to_srgb(value: f32) -> u8 {
     (value * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
+fn ascii_pixel_char(red: u8, green: u8, blue: u8) -> char {
+    const ASCII_CHARS: &[u8] =
+        b"$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ";
+    let intensity =
+        (u16::from(red) + u16::from(green) + u16::from(blue) + 255) as f32 / (255.0 * 4.0);
+    let index =
+        ASCII_CHARS.len() - 1 - (intensity * (ASCII_CHARS.len() - 1) as f32).floor() as usize;
+    ASCII_CHARS[index] as char
+}
+
 fn node_style(node: &DomNode) -> Option<&DivStyle> {
     match node {
         DomNode::Div(node) => Some(&node.style),
         DomNode::Span(node) => Some(&node.style),
+        DomNode::Image(node) => Some(&node.style),
         DomNode::Text(_) => None,
     }
 }
@@ -2295,6 +2455,75 @@ fn edge_to_cells(value: f32) -> u32 {
     value.max(0.0).round() as u32
 }
 
+fn image_taffy_style(node: &ImageNode, terminal_size: TerminalSize) -> Style {
+    let mut style = node.style.to_taffy();
+    let Some(image) = node.image.as_ref() else {
+        return style;
+    };
+
+    let natural = natural_image_cells(image, terminal_size);
+    style.aspect_ratio = image_cell_aspect_ratio(image, terminal_size);
+
+    if matches!(node.style.width, CssDimension::Auto) {
+        style.size.width = Dimension::length(natural.width);
+    }
+    if matches!(node.style.height, CssDimension::Auto) {
+        style.size.height = Dimension::length(natural.height);
+    }
+
+    style
+}
+
+fn image_cell_size(node: &ImageNode, terminal_size: TerminalSize) -> (u32, u32) {
+    let Some(image) = node.image.as_ref() else {
+        return (0, 0);
+    };
+
+    let natural = natural_image_cells(image, terminal_size);
+    let width = match node.style.width {
+        CssDimension::Length(value) => value.max(0.0).round() as u32,
+        _ => natural.width.round() as u32,
+    };
+    let height = match node.style.height {
+        CssDimension::Length(value) => value.max(0.0).round() as u32,
+        _ => natural.height.round() as u32,
+    };
+
+    (width.max(1), height.max(1))
+}
+
+struct NaturalImageCells {
+    width: f32,
+    height: f32,
+}
+
+fn natural_image_cells(image: &ImageData, terminal_size: TerminalSize) -> NaturalImageCells {
+    let cell_width_px = terminal_size
+        .pixel_width
+        .checked_div(terminal_size.cols.max(1))
+        .filter(|value| *value > 0)
+        .unwrap_or(8);
+    let cell_height_px = terminal_size
+        .pixel_height
+        .checked_div(terminal_size.rows.max(1))
+        .filter(|value| *value > 0)
+        .unwrap_or(16);
+
+    NaturalImageCells {
+        width: (image.width_px as f32 / cell_width_px as f32).max(1.0),
+        height: (image.height_px as f32 / cell_height_px as f32).max(1.0),
+    }
+}
+
+fn image_cell_aspect_ratio(image: &ImageData, terminal_size: TerminalSize) -> Option<f32> {
+    if image.width_px == 0 || image.height_px == 0 {
+        return None;
+    }
+
+    let natural = natural_image_cells(image, terminal_size);
+    Some(natural.width / natural.height)
+}
+
 struct InlineCursor {
     x: i32,
     y: i32,
@@ -2341,6 +2570,43 @@ fn write_inline_text(
             push_hit_region(hit_regions, hit_target, ClipRect::new(x, y, 1, 1), clip);
         }
         cursor.col += 1;
+    }
+}
+
+fn write_inline_image(
+    _id: u32,
+    node: &ImageNode,
+    cursor: &mut InlineCursor,
+    frame: &mut Frame,
+    hit_regions: &mut Vec<HitRegion>,
+    hit_target: Option<u32>,
+    clip: ClipBounds,
+) {
+    let (width, height) = image_cell_size(node, query_terminal_size());
+    if width == 0 || height == 0 {
+        return;
+    }
+    if cursor.col + width as i32 > cursor.width {
+        cursor.col = 0;
+        cursor.row += 1;
+    }
+
+    let x = cursor.x + cursor.col;
+    let y = cursor.y + cursor.row;
+    let rect = ClipRect::new(x, y, width as i32, height as i32);
+    frame.write_ascii_image(node, rect, None, clip);
+    if let Some(hit_target) = hit_target {
+        push_hit_region(hit_regions, hit_target, rect, clip);
+    }
+    cursor.col += width as i32;
+    cursor.max_row(height as i32);
+}
+
+impl InlineCursor {
+    fn max_row(&mut self, height: i32) {
+        if height > 1 {
+            self.row += height - 1;
+        }
     }
 }
 
@@ -2451,6 +2717,61 @@ impl Frame {
         }
 
         self.cells[y as usize * self.width + x as usize] = Cell::default();
+    }
+
+    fn write_ascii_image(
+        &mut self,
+        node: &ImageNode,
+        rect: ClipRect,
+        selection_background: Option<Background>,
+        clip: ClipBounds,
+    ) {
+        let Some(image) = node.image.as_ref() else {
+            return;
+        };
+        let Some(bounds) = clip.clip_rect(rect) else {
+            return;
+        };
+
+        let width_cells = bounds.width().max(0) as u32;
+        let height_cells = bounds.height().max(0) as u32;
+        if width_cells == 0 || height_cells == 0 {
+            return;
+        }
+
+        let rect_width = rect.width().max(1) as u32;
+        let rect_height = rect.height().max(1) as u32;
+        for y in bounds.top..bounds.bottom {
+            for x in bounds.left..bounds.right {
+                if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+                    continue;
+                }
+
+                let local_x = (x - rect.left).max(0) as u32;
+                let local_y = (y - rect.top).max(0) as u32;
+                let source_x = (local_x.saturating_mul(image.width_px) / rect_width)
+                    .min(image.width_px.saturating_sub(1));
+                let source_y = (local_y.saturating_mul(image.height_px) / rect_height)
+                    .min(image.height_px.saturating_sub(1));
+                let pixel_index =
+                    (source_y as usize * image.width_px as usize + source_x as usize) * 3;
+                let Some(pixel) = image.rgb.get(pixel_index..pixel_index + 3) else {
+                    continue;
+                };
+
+                let red = pixel[0];
+                let green = pixel[1];
+                let blue = pixel[2];
+                let index = y as usize * self.width + x as usize;
+                self.cells[index].character = ascii_pixel_char(red, green, blue);
+                self.cells[index].foreground = Background::Rgb(red, green, blue);
+                self.cells[index].background = Background::Default;
+                self.cells[index].selection_order = None;
+                if selection_background.is_some() {
+                    self.cells[index].selection_background = selection_background;
+                }
+            }
+        }
     }
 
     fn write_text(
@@ -2693,7 +3014,6 @@ impl Frame {
 
         let end_result = write_synchronized_output_end(&mut out);
         let flush_result = out.flush();
-
         result?;
         end_result?;
         flush_result
@@ -2858,6 +3178,55 @@ impl Frame {
     }
 }
 
+fn load_png_image(src: &str) -> Result<ImageData, ()> {
+    let bytes = fs::read(src).map_err(|_| ())?;
+    let mut decoder = png::Decoder::new(Cursor::new(&bytes));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().map_err(|_| ())?;
+    let mut decoded = vec![0; reader.output_buffer_size().ok_or(())?];
+    let output = reader.next_frame(&mut decoded).map_err(|_| ())?;
+    if output.width == 0 || output.height == 0 {
+        return Err(());
+    }
+    let rgb = decoded_png_to_rgb(&decoded[..output.buffer_size()], output.color_type)?;
+
+    Ok(ImageData {
+        width_px: output.width,
+        height_px: output.height,
+        rgb,
+    })
+}
+
+fn decoded_png_to_rgb(bytes: &[u8], color_type: png::ColorType) -> Result<Vec<u8>, ()> {
+    let mut rgb = Vec::new();
+    match color_type {
+        png::ColorType::Rgb => {
+            rgb.extend_from_slice(bytes);
+        }
+        png::ColorType::Rgba => {
+            rgb.reserve(bytes.len() / 4 * 3);
+            for pixel in bytes.chunks_exact(4) {
+                rgb.extend_from_slice(&pixel[..3]);
+            }
+        }
+        png::ColorType::Grayscale => {
+            rgb.reserve(bytes.len() * 3);
+            for value in bytes {
+                rgb.extend_from_slice(&[*value, *value, *value]);
+            }
+        }
+        png::ColorType::GrayscaleAlpha => {
+            rgb.reserve(bytes.len() / 2 * 3);
+            for pixel in bytes.chunks_exact(2) {
+                let value = pixel[0];
+                rgb.extend_from_slice(&[value, value, value]);
+            }
+        }
+        png::ColorType::Indexed => return Err(()),
+    }
+    Ok(rgb)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Cell {
     background: Background,
@@ -2963,6 +3332,9 @@ fn measure_inline_node(id: u32, nodes: &HashMap<u32, DomNode>, cursor: &mut Inli
                 measure_inline_node(*child, nodes, cursor);
             }
         }
+        Some(DomNode::Image(node)) if node.style.display == LayoutDisplay::Inline => {
+            measure_inline_image(node, cursor);
+        }
         _ => {}
     }
 }
@@ -2984,6 +3356,24 @@ fn measure_inline_text(text: &str, cursor: &mut InlineMeasureCursor) {
 
         cursor.col += 1;
         cursor.max_col = cursor.max_col.max(cursor.col);
+    }
+}
+
+fn measure_inline_image(node: &ImageNode, cursor: &mut InlineMeasureCursor) {
+    let (width, height) = image_cell_size(node, query_terminal_size());
+    if width == 0 || height == 0 {
+        return;
+    }
+    if cursor.col + width > cursor.width {
+        cursor.max_col = cursor.max_col.max(cursor.col);
+        cursor.col = 0;
+        cursor.row += 1;
+    }
+
+    cursor.col += width;
+    cursor.max_col = cursor.max_col.max(cursor.col);
+    if height > 1 {
+        cursor.row += height - 1;
     }
 }
 
@@ -3022,4 +3412,237 @@ pub(crate) fn renderer_loop(
     }
 
     reset_terminal();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_renderer() -> Renderer {
+        Renderer::new(Arc::new(Mutex::new(VecDeque::new())))
+    }
+
+    fn apply(renderer: &mut Renderer, command: RenderCommand) {
+        assert!(renderer.apply(command));
+    }
+
+    fn div(renderer: &mut Renderer, id: u32) {
+        apply(renderer, RenderCommand::CreateDiv { id });
+    }
+
+    fn append(renderer: &mut Renderer, parent: u32, child: u32) {
+        apply(renderer, RenderCommand::AppendChild { parent, child });
+    }
+
+    fn set_width(renderer: &mut Renderer, id: u32, width: CssDimension) {
+        apply(renderer, RenderCommand::SetWidth { id, width });
+    }
+
+    fn set_height(renderer: &mut Renderer, id: u32, height: CssDimension) {
+        apply(renderer, RenderCommand::SetHeight { id, height });
+    }
+
+    fn set_display(renderer: &mut Renderer, id: u32, display: LayoutDisplay) {
+        apply(renderer, RenderCommand::SetDisplay { id, display });
+    }
+
+    fn set_flex_direction(renderer: &mut Renderer, id: u32, direction: LayoutFlexDirection) {
+        apply(renderer, RenderCommand::SetFlexDirection { id, direction });
+    }
+
+    fn compute_layout(renderer: &mut Renderer, root: u32, width: f32, height: f32) {
+        let root = renderer.taffy_ids[&root];
+        renderer
+            .taffy
+            .compute_layout(
+                root,
+                Size {
+                    width: AvailableSpace::Definite(width),
+                    height: AvailableSpace::Definite(height),
+                },
+            )
+            .unwrap();
+    }
+
+    fn collect_metrics_for(
+        renderer: &mut Renderer,
+        root: u32,
+        viewport: u32,
+        width: f32,
+        height: f32,
+    ) -> ScrollMetrics {
+        compute_layout(renderer, root, width, height);
+        let mut metrics = HashMap::new();
+        renderer.collect_scroll_metrics(root, &mut metrics);
+        metrics.remove(&viewport).unwrap()
+    }
+
+    #[test]
+    fn bordered_scroll_container_uses_content_box_for_scroll_metrics() {
+        let mut renderer = test_renderer();
+
+        div(&mut renderer, 1);
+        set_display(&mut renderer, 1, LayoutDisplay::Flex);
+        set_flex_direction(&mut renderer, 1, LayoutFlexDirection::Column);
+        set_width(&mut renderer, 1, CssDimension::Length(20.0));
+        set_height(&mut renderer, 1, CssDimension::Length(10.0));
+        apply(&mut renderer, RenderCommand::SetRoot { id: 1 });
+
+        div(&mut renderer, 2);
+        set_width(&mut renderer, 2, CssDimension::Length(20.0));
+        set_height(&mut renderer, 2, CssDimension::Length(10.0));
+        apply(
+            &mut renderer,
+            RenderCommand::SetOverflowY {
+                id: 2,
+                overflow: LayoutOverflow::Scroll,
+            },
+        );
+        apply(
+            &mut renderer,
+            RenderCommand::SetOverflowX {
+                id: 2,
+                overflow: LayoutOverflow::Hidden,
+            },
+        );
+        apply(
+            &mut renderer,
+            RenderCommand::SetBorder {
+                id: 2,
+                style: BorderStyle::Rounded,
+            },
+        );
+        append(&mut renderer, 1, 2);
+
+        div(&mut renderer, 3);
+        set_display(&mut renderer, 3, LayoutDisplay::Flex);
+        set_flex_direction(&mut renderer, 3, LayoutFlexDirection::Column);
+        set_width(&mut renderer, 3, CssDimension::Length(18.0));
+        append(&mut renderer, 2, 3);
+
+        for id in 4..20 {
+            div(&mut renderer, id);
+            set_width(&mut renderer, id, CssDimension::Length(18.0));
+            set_height(&mut renderer, id, CssDimension::Length(1.0));
+            append(&mut renderer, 3, id);
+        }
+
+        let viewport_metrics = collect_metrics_for(&mut renderer, 1, 2, 20.0, 10.0);
+
+        assert_eq!(viewport_metrics.client_height, 8);
+        assert_eq!(viewport_metrics.scroll_height, 16);
+        assert_eq!(max_scroll_top(&viewport_metrics), 8);
+    }
+
+    #[test]
+    fn scroll_metrics_query_computes_metrics_before_first_render() {
+        let mut renderer = test_renderer();
+        build_demo_shaped_scroll_tree(&mut renderer);
+
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        apply(
+            &mut renderer,
+            RenderCommand::GetScrollMetrics {
+                id: 4,
+                response: tx,
+            },
+        );
+        let metrics = rx.recv().unwrap().unwrap();
+
+        assert!(metrics.client_height > 0, "{metrics:?}");
+        assert!(metrics.scroll_height > metrics.client_height, "{metrics:?}");
+    }
+
+    #[test]
+    fn demo_shaped_scroll_container_has_nonzero_scroll_metrics() {
+        let mut renderer = test_renderer();
+        build_demo_shaped_scroll_tree(&mut renderer);
+
+        let metrics = collect_metrics_for(&mut renderer, 1, 4, 80.0, 24.0);
+
+        assert_eq!(metrics.client_height, 20);
+        assert!(metrics.scroll_height > metrics.client_height, "{metrics:?}");
+        assert!(max_scroll_top(&metrics) > 0, "{metrics:?}");
+    }
+
+    fn build_demo_shaped_scroll_tree(renderer: &mut Renderer) {
+        div(renderer, 1);
+        set_display(renderer, 1, LayoutDisplay::Flex);
+        set_flex_direction(renderer, 1, LayoutFlexDirection::Column);
+        set_width(renderer, 1, CssDimension::Percent(1.0));
+        set_height(renderer, 1, CssDimension::Percent(1.0));
+        apply(renderer, RenderCommand::SetRoot { id: 1 });
+
+        div(renderer, 2);
+        set_width(renderer, 2, CssDimension::Percent(1.0));
+        set_height(renderer, 2, CssDimension::Length(2.0));
+        append(renderer, 1, 2);
+
+        div(renderer, 3);
+        set_display(renderer, 3, LayoutDisplay::Flex);
+        set_flex_direction(renderer, 3, LayoutFlexDirection::Row);
+        set_width(renderer, 3, CssDimension::Percent(1.0));
+        apply(
+            renderer,
+            RenderCommand::SetFlex {
+                id: 3,
+                flex_grow: 1.0,
+                flex_shrink: 1.0,
+                flex_basis: CssDimension::Length(0.0),
+            },
+        );
+        append(renderer, 1, 3);
+
+        div(renderer, 4);
+        set_width(renderer, 4, CssDimension::Percent(0.8));
+        set_height(renderer, 4, CssDimension::Percent(1.0));
+        apply(
+            renderer,
+            RenderCommand::SetOverflowY {
+                id: 4,
+                overflow: LayoutOverflow::Scroll,
+            },
+        );
+        apply(
+            renderer,
+            RenderCommand::SetOverflowX {
+                id: 4,
+                overflow: LayoutOverflow::Hidden,
+            },
+        );
+        apply(
+            renderer,
+            RenderCommand::SetBorder {
+                id: 4,
+                style: BorderStyle::Rounded,
+            },
+        );
+        append(renderer, 3, 4);
+
+        div(renderer, 5);
+        set_width(renderer, 5, CssDimension::Percent(0.2));
+        set_height(renderer, 5, CssDimension::Percent(1.0));
+        append(renderer, 3, 5);
+
+        div(renderer, 6);
+        set_display(renderer, 6, LayoutDisplay::Flex);
+        set_flex_direction(renderer, 6, LayoutFlexDirection::Column);
+        set_width(renderer, 6, CssDimension::Percent(1.0));
+        apply(
+            renderer,
+            RenderCommand::SetGap {
+                id: 6,
+                row_gap: CssLengthPercentage::Length(1.0),
+                column_gap: CssLengthPercentage::Length(1.0),
+            },
+        );
+        append(renderer, 4, 6);
+
+        for id in 7..31 {
+            div(renderer, id);
+            set_width(renderer, id, CssDimension::Percent(1.0));
+            set_height(renderer, id, CssDimension::Length(1.0));
+            append(renderer, 6, id);
+        }
+    }
 }
