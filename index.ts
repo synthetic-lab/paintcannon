@@ -228,6 +228,54 @@ export class CSSStyleDeclaration {
     this.setProperty('flex-direction', value);
   }
 
+  get flexWrap(): string {
+    return this.getPropertyValue('flex-wrap');
+  }
+
+  set flexWrap(value: string) {
+    this.setProperty('flex-wrap', value);
+  }
+
+  get flexFlow(): string {
+    return this.getPropertyValue('flex-flow');
+  }
+
+  set flexFlow(value: string) {
+    this.setProperty('flex-flow', value);
+  }
+
+  get flexBasis(): string {
+    return this.getPropertyValue('flex-basis');
+  }
+
+  set flexBasis(value: string | number) {
+    this.setProperty('flex-basis', value);
+  }
+
+  get flexGrow(): string {
+    return this.getPropertyValue('flex-grow');
+  }
+
+  set flexGrow(value: string | number) {
+    this.setProperty('flex-grow', value);
+  }
+
+  get flexShrink(): string {
+    return this.getPropertyValue('flex-shrink');
+  }
+
+  set flexShrink(value: string | number) {
+    this.setProperty('flex-shrink', value);
+  }
+
+  get flex(): string {
+    return this.getPropertyValue('flex');
+  }
+
+  set flex(value: string | number) {
+    this.setProperty('flex', value);
+  }
+
   get justifyContent(): string {
     return this.getPropertyValue('justify-content');
   }
@@ -242,6 +290,62 @@ export class CSSStyleDeclaration {
 
   set alignItems(value: string) {
     this.setProperty('align-items', value);
+  }
+
+  get alignSelf(): string {
+    return this.getPropertyValue('align-self');
+  }
+
+  set alignSelf(value: string) {
+    this.setProperty('align-self', value);
+  }
+
+  get alignContent(): string {
+    return this.getPropertyValue('align-content');
+  }
+
+  set alignContent(value: string) {
+    this.setProperty('align-content', value);
+  }
+
+  get justifyItems(): string {
+    return this.getPropertyValue('justify-items');
+  }
+
+  set justifyItems(value: string) {
+    this.setProperty('justify-items', value);
+  }
+
+  get justifySelf(): string {
+    return this.getPropertyValue('justify-self');
+  }
+
+  set justifySelf(value: string) {
+    this.setProperty('justify-self', value);
+  }
+
+  get gap(): string {
+    return this.getPropertyValue('gap');
+  }
+
+  set gap(value: string | number) {
+    this.setProperty('gap', value);
+  }
+
+  get rowGap(): string {
+    return this.getPropertyValue('row-gap');
+  }
+
+  set rowGap(value: string | number) {
+    this.setProperty('row-gap', value);
+  }
+
+  get columnGap(): string {
+    return this.getPropertyValue('column-gap');
+  }
+
+  set columnGap(value: string | number) {
+    this.setProperty('column-gap', value);
   }
 
   get width(): string {
@@ -266,6 +370,94 @@ export class CSSStyleDeclaration {
 
   set backgroundColor(value: string) {
     this.setProperty('background-color', value);
+  }
+
+  get gridTemplateColumns(): string {
+    return this.getPropertyValue('grid-template-columns');
+  }
+
+  set gridTemplateColumns(value: string) {
+    this.setProperty('grid-template-columns', value);
+  }
+
+  get gridTemplateRows(): string {
+    return this.getPropertyValue('grid-template-rows');
+  }
+
+  set gridTemplateRows(value: string) {
+    this.setProperty('grid-template-rows', value);
+  }
+
+  get gridAutoColumns(): string {
+    return this.getPropertyValue('grid-auto-columns');
+  }
+
+  set gridAutoColumns(value: string) {
+    this.setProperty('grid-auto-columns', value);
+  }
+
+  get gridAutoRows(): string {
+    return this.getPropertyValue('grid-auto-rows');
+  }
+
+  set gridAutoRows(value: string) {
+    this.setProperty('grid-auto-rows', value);
+  }
+
+  get gridAutoFlow(): string {
+    return this.getPropertyValue('grid-auto-flow');
+  }
+
+  set gridAutoFlow(value: string) {
+    this.setProperty('grid-auto-flow', value);
+  }
+
+  get gridColumn(): string {
+    return this.getPropertyValue('grid-column');
+  }
+
+  set gridColumn(value: string) {
+    this.setProperty('grid-column', value);
+  }
+
+  get gridRow(): string {
+    return this.getPropertyValue('grid-row');
+  }
+
+  set gridRow(value: string) {
+    this.setProperty('grid-row', value);
+  }
+
+  get gridColumnStart(): string {
+    return this.getPropertyValue('grid-column-start');
+  }
+
+  set gridColumnStart(value: string | number) {
+    this.setProperty('grid-column-start', value);
+  }
+
+  get gridColumnEnd(): string {
+    return this.getPropertyValue('grid-column-end');
+  }
+
+  set gridColumnEnd(value: string | number) {
+    this.setProperty('grid-column-end', value);
+  }
+
+  get gridRowStart(): string {
+    return this.getPropertyValue('grid-row-start');
+  }
+
+  set gridRowStart(value: string | number) {
+    this.setProperty('grid-row-start', value);
+  }
+
+  get gridRowEnd(): string {
+    return this.getPropertyValue('grid-row-end');
+  }
+
+  set gridRowEnd(value: string | number) {
+    this.setProperty('grid-row-end', value);
   }
 }
 
