@@ -515,6 +515,11 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn invalidate_frame(&self) {
+        let _ = self.tx.send(EngineCommand::InvalidateFrame);
+    }
+
+    #[napi]
     pub fn drain_keyboard_events(&self) -> Vec<KeyboardEvent> {
         self.input
             .as_ref()

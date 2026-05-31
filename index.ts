@@ -191,6 +191,7 @@ export interface NativePaintCannon {
   readonly kittyKeyboardEnabled: boolean;
   render(): void;
   renderSync(): void;
+  invalidateFrame(): void;
   drainKeyboardEvents(): NativeKeyboardEvent[];
   drainMouseEvents(): TerminalMouseEvent[];
   drainResizeEvents(): TerminalResizeEvent[];
@@ -269,6 +270,7 @@ export class PaintCannon {
 
     this.suspendedByPaintCannon = false;
     this.binding.captureTerminal();
+    this.binding.invalidateFrame();
     this.binding.render();
     this.scheduleKeyboardEventPump();
   };
