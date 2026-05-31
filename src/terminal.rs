@@ -24,7 +24,7 @@ pub(crate) fn reset_terminal() {
     let mut out = io::stdout().lock();
     let _ = write_synchronized_output_end(&mut out);
     let _ = write_pointer_shape(&mut out, None);
-    let _ = write!(out, "\x1b[0m\x1b[?25h\x1b[{rows};1H\x1b[2K\n");
+    let _ = write!(out, "\x1b[0m\x1b[?7h\x1b[?25h\x1b[{rows};1H\x1b[2K\n");
     let _ = out.flush();
 }
 

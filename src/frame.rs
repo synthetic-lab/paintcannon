@@ -505,6 +505,9 @@ impl Frame {
         }
 
         let result: io::Result<()> = (|| {
+            if synchronized {
+                write!(out, "\x1b[?7l")?;
+            }
             write!(out, "\x1b[?25l")?;
 
             let Some(previous) = previous else {
@@ -543,12 +546,18 @@ impl Frame {
             Ok(())
         })();
 
+        let wrap_result = if synchronized {
+            write!(out, "\x1b[?7h")
+        } else {
+            Ok(())
+        };
         let end_result = if synchronized {
             write_synchronized_output_end(out)
         } else {
             Ok(())
         };
         result?;
+        wrap_result?;
         end_result
     }
 
@@ -910,6 +919,25 @@ mod tests {
     }
 
     #[test]
+    fn full_width_border_paints_right_edge_inside_frame() {
+        let mut frame = Frame::new(80, 4, false);
+        let style = solid_border_style();
+
+        frame.stroke_border(
+            ClipRect::new(0, 0, 80, 4),
+            &style,
+            Background::White,
+            None,
+            ClipBounds::unbounded(),
+        );
+
+        assert_eq!(frame.cell(79, 0).unwrap().character, '┐');
+        assert_eq!(frame.cell(79, 1).unwrap().character, '│');
+        assert_eq!(frame.cell(79, 3).unwrap().character, '┘');
+        assert!(frame.cell(80, 0).is_none());
+    }
+
+    #[test]
     fn chunky_rounded_corners_can_clear_background_bleed() {
         let mut frame = Frame::new(4, 3, false);
         let mut style = DivStyle::default();
@@ -1031,6 +1059,22 @@ mod tests {
         assert!(output.contains("\x1b[2;3Hx"));
         assert!(!output.contains("\x1b[H"));
         assert!(!output.contains("\x1b[2J"));
+    }
+
+    #[test]
+    fn terminal_frame_writes_disable_autowrap_while_flushing() {
+        let mut next = Frame::new(4, 1, false);
+        next.write_glyph(3, 0, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
+
+        let mut bytes = Vec::new();
+        next.write_diff_to(&mut bytes, None, TermProfile::NoColor, true)
+            .unwrap();
+        let output = String::from_utf8(bytes).unwrap();
+
+        assert!(output.contains("\x1b[?7l"));
+        assert!(output.contains("\x1b[?7h"));
+        assert!(output.find("\x1b[?7l") < output.find("x"));
+        assert!(output.find("x") < output.find("\x1b[?7h"));
     }
 
     #[test]

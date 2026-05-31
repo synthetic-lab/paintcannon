@@ -306,7 +306,7 @@ impl LayoutArena {
     }
 
     pub(crate) fn layout(&self, node: NodeId) -> Layout {
-        self.nodes[node_index(node)].layout
+        self.snapped_layout(node)
     }
 
     pub(crate) fn kind(&self, node: NodeId) -> &LayoutNodeKind {
@@ -369,6 +369,55 @@ impl LayoutArena {
         &self.nodes[node_index(node)].fragments
     }
 
+    fn snapped_layout(&self, node: NodeId) -> Layout {
+        let raw = self.nodes[node_index(node)].layout;
+        let parent_origin = self.raw_parent_origin(node);
+        let absolute_origin = Point {
+            x: parent_origin.x + raw.location.x,
+            y: parent_origin.y + raw.location.y,
+        };
+        let absolute_end = Point {
+            x: absolute_origin.x + raw.size.width.max(0.0),
+            y: absolute_origin.y + raw.size.height.max(0.0),
+        };
+
+        let mut layout = raw;
+        layout.location.x = absolute_origin.x.round() - parent_origin.x.round();
+        layout.location.y = absolute_origin.y.round() - parent_origin.y.round();
+        layout.size.width = absolute_end.x.round() - absolute_origin.x.round();
+        layout.size.height = absolute_end.y.round() - absolute_origin.y.round();
+        layout.scrollbar_size.width = raw.scrollbar_size.width.round();
+        layout.scrollbar_size.height = raw.scrollbar_size.height.round();
+        layout.border.left =
+            (absolute_origin.x + raw.border.left).round() - absolute_origin.x.round();
+        layout.border.right = absolute_end.x.round() - (absolute_end.x - raw.border.right).round();
+        layout.border.top =
+            (absolute_origin.y + raw.border.top).round() - absolute_origin.y.round();
+        layout.border.bottom =
+            absolute_end.y.round() - (absolute_end.y - raw.border.bottom).round();
+        layout.padding.left =
+            (absolute_origin.x + raw.padding.left).round() - absolute_origin.x.round();
+        layout.padding.right =
+            absolute_end.x.round() - (absolute_end.x - raw.padding.right).round();
+        layout.padding.top =
+            (absolute_origin.y + raw.padding.top).round() - absolute_origin.y.round();
+        layout.padding.bottom =
+            absolute_end.y.round() - (absolute_end.y - raw.padding.bottom).round();
+        layout
+    }
+
+    fn raw_parent_origin(&self, node: NodeId) -> Point<f32> {
+        let mut origin = Point { x: 0.0, y: 0.0 };
+        let mut current = self.nodes[node_index(node)].parent;
+        while let Some(parent) = current {
+            let parent_node = &self.nodes[node_index(parent)];
+            origin.x += parent_node.layout.location.x;
+            origin.y += parent_node.layout.location.y;
+            current = parent_node.parent;
+        }
+        origin
+    }
+
     pub(crate) fn scroll_metrics(&mut self, node: NodeId) -> Option<ArenaScrollMetrics> {
         self.scroll_metrics_for_node(node)
     }
@@ -400,7 +449,7 @@ impl LayoutArena {
             return None;
         }
 
-        let layout = self.nodes[index].layout;
+        let layout = self.layout(node_id);
         let white_space = self.nodes[index].style.white_space;
         let overflow_x = self.nodes[index].style.overflow_x;
         let overflow_y = self.nodes[index].style.overflow_y;
@@ -425,7 +474,7 @@ impl LayoutArena {
             let child_count = self.nodes[index].children.len();
             for child_index in 0..child_count {
                 let child = self.nodes[index].children[child_index];
-                let child_layout = self.nodes[node_index(child)].layout;
+                let child_layout = self.layout(child);
                 scroll_width = scroll_width.max(float_to_cells(
                     child_layout.location.x + child_layout.size.width - content_origin.x,
                 ));
@@ -1732,6 +1781,61 @@ mod tests {
 
         assert_eq!(arena.layout(child).size.width, 10.0);
         assert_eq!(arena.layout(child).size.height, 5.0);
+    }
+
+    #[test]
+    fn percent_child_inside_fractional_bordered_parent_fits_rounded_content_box() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(81.0), CssDimension::Length(6.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Row;
+        let root = arena.create_element(root_style);
+
+        let mut column_style = block_style(CssDimension::Auto, CssDimension::Percent(1.0));
+        column_style.display = LayoutDisplay::Flex;
+        column_style.flex_direction = LayoutFlexDirection::Column;
+        column_style.flex_grow = 1.0;
+        column_style.flex_shrink = 1.0;
+        column_style.flex_basis = CssDimension::Length(0.0);
+        column_style.border_top = BorderStyle::Rounded;
+        column_style.border_right = BorderStyle::Rounded;
+        column_style.border_bottom = BorderStyle::Rounded;
+        column_style.border_left = BorderStyle::Rounded;
+        let left = arena.create_element(column_style.clone());
+        let right = arena.create_element(column_style);
+        arena.append_child(root, left);
+        arena.append_child(root, right);
+
+        let mut child_style = block_style(CssDimension::Percent(1.0), CssDimension::Length(4.0));
+        child_style.border_top = BorderStyle::ChunkyRounded;
+        child_style.border_right = BorderStyle::ChunkyRounded;
+        child_style.border_bottom = BorderStyle::ChunkyRounded;
+        child_style.border_left = BorderStyle::ChunkyRounded;
+        let child = arena.create_element(child_style);
+        arena.append_child(right, child);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(81.0),
+                height: AvailableSpace::Definite(6.0),
+            },
+        );
+
+        let right_layout = arena.layout(right);
+        let child_layout = arena.layout(child);
+        let rounded_right_content_width =
+            (right_layout.location.x + right_layout.size.width - right_layout.border.right).round()
+                - (right_layout.location.x + right_layout.border.left).round();
+        let rounded_child_width = (child_layout.location.x + child_layout.size.width).round()
+            - child_layout.location.x.round();
+
+        assert_eq!(right_layout.location.x, 41.0);
+        assert_eq!(right_layout.size.width, 40.0);
+        assert_eq!(child_layout.location.x, 1.0);
+        assert_eq!(child_layout.size.width, 38.0);
+        assert_eq!(rounded_right_content_width, 38.0);
+        assert_eq!(rounded_child_width, rounded_right_content_width);
     }
 
     #[test]

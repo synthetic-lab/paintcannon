@@ -131,15 +131,18 @@ struct PaintState {
 impl<'a, 'out> Painter<'a, 'out> {
     fn paint_node(&mut self, id: NodeId, state: PaintState) {
         let layout = self.arena.layout(id);
-        let x = state.parent_x + layout.location.x.round() as i32;
-        let y = state.parent_y + layout.location.y.round() as i32;
-        let width = layout.size.width.round().max(0.0) as i32;
-        let height = layout.size.height.round().max(0.0) as i32;
-        let bounds = ClipRect::new(x, y, width, height);
+        let bounds = snapped_layout_rect(
+            state.parent_x,
+            state.parent_y,
+            layout.location.x,
+            layout.location.y,
+            layout.size.width,
+            layout.size.height,
+        );
 
         match self.arena.kind(id) {
             LayoutNodeKind::Element => self.paint_element(id, bounds, state),
-            LayoutNodeKind::Text(text) => self.paint_text(text, x, y, state),
+            LayoutNodeKind::Text(text) => self.paint_text(text, bounds.left, bounds.top, state),
             LayoutNodeKind::Image(image) => self.paint_image_node(id, image, bounds, state),
             LayoutNodeKind::Input(input) => self.paint_input_node(id, input, bounds, state),
             LayoutNodeKind::TextArea(textarea) => {
@@ -165,6 +168,7 @@ impl<'a, 'out> Painter<'a, 'out> {
         let selection_background = style.selection_background.or(state.selection_background);
 
         push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
+        let content = content_box_rect(bounds, style);
         self.output
             .frame
             .fill_rect(bounds, background, selection_background, state.clip);
@@ -172,7 +176,6 @@ impl<'a, 'out> Painter<'a, 'out> {
             .frame
             .clear_chunky_rounded_corners(bounds, style, state.clip);
 
-        let content = content_box_rect(bounds, style);
         let child_clip = child_clip_for(style.overflow_x, style.overflow_y, content, state.clip);
         let (scroll_left, scroll_top) = self.arena.scroll_offset(id);
         let child_state = PaintState {
@@ -507,6 +510,26 @@ impl<'a, 'out> Painter<'a, 'out> {
                 )
             })
             .unwrap_or(style_color)
+    }
+}
+
+fn snapped_layout_rect(
+    parent_x: i32,
+    parent_y: i32,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> ClipRect {
+    let left = parent_x + x.round() as i32;
+    let top = parent_y + y.round() as i32;
+    let right = parent_x + (x + width.max(0.0)).round() as i32;
+    let bottom = parent_y + (y + height.max(0.0)).round() as i32;
+    ClipRect {
+        left,
+        top,
+        right: right.max(left),
+        bottom: bottom.max(top),
     }
 }
 
@@ -971,6 +994,172 @@ mod tests {
         );
         assert_eq!(output.frame.cell(1, 0).unwrap().character, '─');
         assert_eq!(output.frame.cell(1, 1).unwrap().background, Background::Red);
+    }
+
+    #[test]
+    fn box_background_paints_under_its_border() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(5.0), CssDimension::Length(4.0));
+        root_style.background = Background::Blue;
+        let root = arena.create_element(root_style);
+
+        let mut child_style = block_style(CssDimension::Length(5.0), CssDimension::Length(4.0));
+        child_style.background = Background::Red;
+        child_style.border_color = Background::Green;
+        child_style.border_top = BorderStyle::ChunkyRounded;
+        child_style.border_right = BorderStyle::ChunkyRounded;
+        child_style.border_bottom = BorderStyle::ChunkyRounded;
+        child_style.border_left = BorderStyle::ChunkyRounded;
+        let child = arena.create_element(child_style);
+        arena.append_child(root, child);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(4.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 5, 4, false);
+
+        let top_left = output.frame.cell(0, 0).unwrap();
+        assert_eq!(top_left.character, '🭁');
+        assert_eq!(top_left.foreground, Background::Green);
+        assert_eq!(top_left.background, Background::Default);
+        assert_eq!(output.frame.cell(2, 0).unwrap().background, Background::Red);
+        assert_eq!(output.frame.cell(0, 2).unwrap().background, Background::Red);
+        assert_eq!(output.frame.cell(1, 1).unwrap().background, Background::Red);
+    }
+
+    #[test]
+    fn flex_children_with_borders_fit_full_width_parent() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(80.0), CssDimension::Length(4.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Row;
+        let root = arena.create_element(root_style);
+
+        let mut child_style = block_style(CssDimension::Auto, CssDimension::Percent(1.0));
+        child_style.display = LayoutDisplay::Flex;
+        child_style.flex_grow = 1.0;
+        child_style.flex_shrink = 1.0;
+        child_style.flex_basis = CssDimension::Length(0.0);
+        child_style.border_top = BorderStyle::Rounded;
+        child_style.border_right = BorderStyle::Rounded;
+        child_style.border_bottom = BorderStyle::Rounded;
+        child_style.border_left = BorderStyle::Rounded;
+        let left = arena.create_element(child_style.clone());
+        let right = arena.create_element(child_style);
+        arena.append_child(root, left);
+        arena.append_child(root, right);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(80.0),
+                height: AvailableSpace::Definite(4.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 80, 4, false);
+
+        assert_eq!(arena.layout(left).location.x, 0.0);
+        assert_eq!(arena.layout(left).size.width, 40.0);
+        assert_eq!(arena.layout(right).location.x, 40.0);
+        assert_eq!(arena.layout(right).size.width, 40.0);
+        assert_eq!(output.frame.cell(79, 0).unwrap().character, '╮');
+        assert_eq!(output.frame.cell(79, 1).unwrap().character, '│');
+        assert_eq!(output.frame.cell(79, 3).unwrap().character, '╯');
+    }
+
+    #[test]
+    fn flex_children_with_fractional_widths_keep_right_border_inside_parent() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(79.0), CssDimension::Length(4.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Row;
+        let root = arena.create_element(root_style);
+
+        let mut child_style = block_style(CssDimension::Auto, CssDimension::Percent(1.0));
+        child_style.display = LayoutDisplay::Flex;
+        child_style.flex_grow = 1.0;
+        child_style.flex_shrink = 1.0;
+        child_style.flex_basis = CssDimension::Length(0.0);
+        child_style.border_top = BorderStyle::Rounded;
+        child_style.border_right = BorderStyle::Rounded;
+        child_style.border_bottom = BorderStyle::Rounded;
+        child_style.border_left = BorderStyle::Rounded;
+        let left = arena.create_element(child_style.clone());
+        let right = arena.create_element(child_style);
+        arena.append_child(root, left);
+        arena.append_child(root, right);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(79.0),
+                height: AvailableSpace::Definite(4.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 79, 4, false);
+
+        assert_eq!(arena.layout(left).size.width, 40.0);
+        assert_eq!(arena.layout(right).location.x, 40.0);
+        assert_eq!(arena.layout(right).size.width, 39.0);
+        assert_eq!(output.frame.cell(78, 0).unwrap().character, '╮');
+        assert_eq!(output.frame.cell(78, 1).unwrap().character, '│');
+        assert_eq!(output.frame.cell(78, 3).unwrap().character, '╯');
+    }
+
+    #[test]
+    fn nested_percent_child_uses_rounded_parent_content_width() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(81.0), CssDimension::Length(6.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Row;
+        let root = arena.create_element(root_style);
+
+        let mut column_style = block_style(CssDimension::Auto, CssDimension::Percent(1.0));
+        column_style.display = LayoutDisplay::Flex;
+        column_style.flex_direction = LayoutFlexDirection::Column;
+        column_style.flex_grow = 1.0;
+        column_style.flex_shrink = 1.0;
+        column_style.flex_basis = CssDimension::Length(0.0);
+        column_style.border_top = BorderStyle::Rounded;
+        column_style.border_right = BorderStyle::Rounded;
+        column_style.border_bottom = BorderStyle::Rounded;
+        column_style.border_left = BorderStyle::Rounded;
+        let left = arena.create_element(column_style.clone());
+        let right = arena.create_element(column_style);
+        arena.append_child(root, left);
+        arena.append_child(root, right);
+
+        let mut child_style = block_style(CssDimension::Percent(1.0), CssDimension::Length(4.0));
+        child_style.background = Background::Green;
+        child_style.border_color = Background::Green;
+        child_style.border_top = BorderStyle::ChunkyRounded;
+        child_style.border_right = BorderStyle::ChunkyRounded;
+        child_style.border_bottom = BorderStyle::ChunkyRounded;
+        child_style.border_left = BorderStyle::ChunkyRounded;
+        let child = arena.create_element(child_style);
+        arena.append_child(right, child);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(81.0),
+                height: AvailableSpace::Definite(6.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 81, 6, false);
+
+        assert_eq!(arena.layout(right).location.x, 41.0);
+        assert_eq!(arena.layout(right).size.width, 40.0);
+        assert_eq!(arena.layout(child).location.x, 1.0);
+        assert_eq!(arena.layout(child).size.width, 38.0);
+        assert_eq!(output.frame.cell(79, 1).unwrap().character, '🭌');
+        assert_eq!(output.frame.cell(79, 2).unwrap().character, '█');
+        assert_eq!(output.frame.cell(79, 4).unwrap().character, '🭝');
+        assert_eq!(output.frame.cell(80, 1).unwrap().character, '│');
     }
 
     #[test]
