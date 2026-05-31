@@ -6,6 +6,7 @@ use std::sync::{
     Arc,
 };
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use crossbeam_channel::{bounded, Sender, TrySendError};
 use napi::{Error, Result};
@@ -239,10 +240,13 @@ impl PaintCannon {
 
     #[napi]
     pub fn apply_batch(&mut self, commands: Vec<BatchCommand>) -> Result<Vec<BatchIdMapping>> {
+        let total_start = Instant::now();
+        let input_count = commands.len();
         let mut id_map = HashMap::new();
         let mut mappings = Vec::new();
         let mut render_commands = Vec::with_capacity(commands.len());
 
+        let rewrite_start = Instant::now();
         for command in commands {
             match command.r#type.as_str() {
                 "createDiv" => {
@@ -387,14 +391,27 @@ impl PaintCannon {
                 }
             }
         }
+        profile_log(
+            "napi_apply_batch_rewrite",
+            rewrite_start.elapsed(),
+            &[
+                ("input_commands", input_count.to_string()),
+                ("render_commands", render_commands.len().to_string()),
+                ("mappings", mappings.len().to_string()),
+            ],
+        );
 
         if render_commands.is_empty() {
+            profile_log("napi_apply_batch_total", total_start.elapsed(), &[]);
             return Ok(Vec::new());
         }
 
+        let send_start = Instant::now();
         self.send(EngineCommand::Batch {
             commands: render_commands,
         })?;
+        profile_log("napi_apply_batch_send", send_start.elapsed(), &[]);
+        profile_log("napi_apply_batch_total", total_start.elapsed(), &[]);
         Ok(mappings)
     }
 
@@ -869,6 +886,22 @@ fn resolve_batch_id(
         .get(&value)
         .copied()
         .ok_or_else(|| Error::from_reason(format!("{command} references unknown id {value}")))
+}
+
+fn profile_log(label: &str, duration: std::time::Duration, fields: &[(&str, String)]) {
+    if std::env::var_os("PAINTCANNON_PROFILE").is_none() {
+        return;
+    }
+
+    eprint!(
+        "[paintcannon-profile] event={} duration_ms={:.3}",
+        label,
+        duration.as_secs_f64() * 1000.0
+    );
+    for (key, value) in fields {
+        eprint!(" {key}={value}");
+    }
+    eprintln!();
 }
 
 impl Drop for PaintCannon {

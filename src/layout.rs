@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use std::time::Instant;
+
 use taffy::prelude::TaffyMaxContent;
 use taffy::{
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
@@ -48,6 +50,24 @@ pub(crate) struct LayoutArena {
     nodes: Vec<LayoutNode>,
     layout_passes: u64,
     layout_mode_stack: Vec<RunMode>,
+    profile: LayoutProfileStats,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LayoutProfileStats {
+    pub(crate) inline_width_calls: u64,
+    pub(crate) inline_height_calls: u64,
+    pub(crate) inline_fragment_calls: u64,
+    pub(crate) inline_width_ns: u128,
+    pub(crate) inline_height_ns: u128,
+    pub(crate) inline_fragment_ns: u128,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LayoutStats {
+    pub(crate) node_count: usize,
+    pub(crate) inline_context_count: usize,
+    pub(crate) inline_fragment_count: usize,
 }
 
 struct LayoutNode {
@@ -105,6 +125,7 @@ impl LayoutArena {
             nodes: Vec::new(),
             layout_passes: 0,
             layout_mode_stack: Vec::new(),
+            profile: LayoutProfileStats::default(),
         }
     }
 
@@ -255,6 +276,7 @@ impl LayoutArena {
 
     pub(crate) fn compute_layout(&mut self, root: NodeId, available: Size<AvailableSpace>) {
         self.layout_passes += 1;
+        self.profile = LayoutProfileStats::default();
         compute_root_layout(self, root, available);
     }
 
@@ -281,6 +303,23 @@ impl LayoutArena {
 
     pub(crate) fn layout_passes(&self) -> u64 {
         self.layout_passes
+    }
+
+    pub(crate) fn stats(&self) -> LayoutStats {
+        LayoutStats {
+            node_count: self.nodes.len(),
+            inline_context_count: self
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| self.is_inline_context(NodeId::from(*index)))
+                .count(),
+            inline_fragment_count: self.nodes.iter().map(|node| node.fragments.len()).sum(),
+        }
+    }
+
+    pub(crate) fn profile_stats(&self) -> LayoutProfileStats {
+        self.profile
     }
 
     fn push_node(&mut self, kind: LayoutNodeKind, style: DivStyle) -> NodeId {
@@ -543,7 +582,10 @@ impl LayoutArena {
                 }),
         };
 
+        let inline_width_start = Instant::now();
         let content_widths = self.inline_content_widths(node_id, paint_style.white_space);
+        self.profile.inline_width_calls += 1;
+        self.profile.inline_width_ns += inline_width_start.elapsed().as_nanos();
         let content_width = known_dimensions
             .width
             .map(|width| (width - content_box_inset.horizontal_axis_sum()).max(0.0))
@@ -563,17 +605,23 @@ impl LayoutArena {
                     .unwrap_or(computed)
             });
 
+        let inline_height_start = Instant::now();
         let content_height = self.inline_content_height(
             node_id,
             paint_style.white_space,
             content_width.max(1.0).round() as u32,
         );
+        self.profile.inline_height_calls += 1;
+        self.profile.inline_height_ns += inline_height_start.elapsed().as_nanos();
         if run_mode == RunMode::PerformLayout && self.should_store_layout() {
+            let inline_fragment_start = Instant::now();
             self.compute_inline_fragments(
                 node_id,
                 paint_style.white_space,
                 content_width.max(1.0).round() as u32,
             );
+            self.profile.inline_fragment_calls += 1;
+            self.profile.inline_fragment_ns += inline_fragment_start.elapsed().as_nanos();
         }
 
         let measured_size = Size {
@@ -1162,7 +1210,7 @@ fn measure_inline_text(text: &str, white_space: CssWhiteSpace, cursor: &mut Inli
             index += 1;
             continue;
         }
-        if wrap && !character.is_whitespace() {
+        if wrap && is_word_start(&chars, index) {
             let word_end = next_word_end(&chars, index);
             let word_width = text_width(&chars[index..word_end]);
             if cursor.col > 0 && cursor.col + word_width > cursor.width {
@@ -1211,7 +1259,7 @@ fn layout_inline_text(
             index += 1;
             continue;
         }
-        if wrap && !character.is_whitespace() {
+        if wrap && is_word_start(&chars, index) {
             let word_end = next_word_end(&chars, index);
             let word_width = text_width(&chars[index..word_end]);
             if cursor.col > 0 && cursor.col + word_width > cursor.width {
@@ -1322,6 +1370,10 @@ fn next_word_end(chars: &[char], start: usize) -> usize {
         index += 1;
     }
     index
+}
+
+fn is_word_start(chars: &[char], index: usize) -> bool {
+    !chars[index].is_whitespace() && (index == 0 || chars[index - 1].is_whitespace())
 }
 
 fn text_width(chars: &[char]) -> u32 {

@@ -708,17 +708,31 @@ impl PaintEngine {
         color_profile: TermProfile,
         synchronized: bool,
     ) -> io::Result<()> {
+        let total_start = Instant::now();
         let Some(frame) = self.render_frame(width, height) else {
             return Ok(());
         };
+        let diff_start = Instant::now();
         frame.write_diff_to(
             out,
             self.previous_frame.as_ref(),
             color_profile,
             synchronized,
         )?;
+        profile_log(
+            "frame_write_diff",
+            diff_start.elapsed(),
+            &[("has_previous", self.previous_frame.is_some().to_string())],
+        );
         self.previous_frame = Some(frame);
+        let flush_start = Instant::now();
         out.flush()?;
+        profile_log("stdout_flush", flush_start.elapsed(), &[]);
+        profile_log(
+            "render_to_total",
+            total_start.elapsed(),
+            &[("width", width.to_string()), ("height", height.to_string())],
+        );
         Ok(())
     }
 
@@ -728,9 +742,50 @@ impl PaintEngine {
 
     fn render_frame_at(&mut self, width: usize, height: usize, now: Instant) -> Option<Frame> {
         let root = self.root.and_then(|root| self.node_for(root))?;
+        let total_start = Instant::now();
+        let layout_start = Instant::now();
+        let layout_passes_before = self.layout_passes();
         self.ensure_layout(width, height, root);
+        let stats = self.arena.stats();
+        let layout_profile = self.arena.profile_stats();
+        profile_log(
+            "layout",
+            layout_start.elapsed(),
+            &[
+                (
+                    "dirty",
+                    (layout_passes_before != self.layout_passes()).to_string(),
+                ),
+                ("passes", self.layout_passes().to_string()),
+                ("nodes", stats.node_count.to_string()),
+                ("inline_contexts", stats.inline_context_count.to_string()),
+                ("inline_fragments", stats.inline_fragment_count.to_string()),
+                (
+                    "inline_width_calls",
+                    layout_profile.inline_width_calls.to_string(),
+                ),
+                (
+                    "inline_height_calls",
+                    layout_profile.inline_height_calls.to_string(),
+                ),
+                (
+                    "inline_fragment_calls",
+                    layout_profile.inline_fragment_calls.to_string(),
+                ),
+                ("inline_width_ms", ns_to_ms(layout_profile.inline_width_ns)),
+                (
+                    "inline_height_ms",
+                    ns_to_ms(layout_profile.inline_height_ns),
+                ),
+                (
+                    "inline_fragment_ms",
+                    ns_to_ms(layout_profile.inline_fragment_ns),
+                ),
+            ],
+        );
 
         let capture_hidden_selection_units = self.selection.active_selection().is_some();
+        let paint_start = Instant::now();
         let mut output = paint_arena_with_options(
             &self.arena,
             root,
@@ -743,6 +798,18 @@ impl PaintEngine {
                 truecolor_enabled: self.truecolor_enabled,
             },
         );
+        profile_log(
+            "paint",
+            paint_start.elapsed(),
+            &[
+                ("hit_regions", output.hit_regions.len().to_string()),
+                (
+                    "capture_hidden_selection",
+                    capture_hidden_selection_units.to_string(),
+                ),
+            ],
+        );
+        let bookkeeping_start = Instant::now();
         output
             .frame
             .apply_selection(self.selection.active_selection().as_ref());
@@ -751,6 +818,8 @@ impl PaintEngine {
         self.hit_regions = output.hit_regions;
         self.current_frame = Some(output.frame.clone());
         self.transitions.finish_completed(now);
+        profile_log("frame_bookkeeping", bookkeeping_start.elapsed(), &[]);
+        profile_log("render_frame_total", total_start.elapsed(), &[]);
         Some(output.frame)
     }
 
@@ -1012,11 +1081,29 @@ pub(crate) fn engine_loop(rx: Receiver<EngineCommand>) {
 fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
     match command {
         EngineCommand::Batch { commands } => {
+            let start = Instant::now();
+            let command_count = commands.len();
             for command in commands {
                 if !apply_command(engine, command) {
+                    profile_log(
+                        "batch_apply",
+                        start.elapsed(),
+                        &[
+                            ("commands", command_count.to_string()),
+                            ("shutdown", true.to_string()),
+                        ],
+                    );
                     return false;
                 }
             }
+            profile_log(
+                "batch_apply",
+                start.elapsed(),
+                &[
+                    ("commands", command_count.to_string()),
+                    ("shutdown", false.to_string()),
+                ],
+            );
         }
         EngineCommand::CreateElement { style, response } => {
             let _ = response.send(engine.create_element(style));
@@ -1233,6 +1320,26 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
     }
 
     true
+}
+
+fn profile_log(label: &str, duration: std::time::Duration, fields: &[(&str, String)]) {
+    if std::env::var_os("PAINTCANNON_PROFILE").is_none() {
+        return;
+    }
+
+    eprint!(
+        "[paintcannon-profile] event={} duration_ms={:.3}",
+        label,
+        duration.as_secs_f64() * 1000.0
+    );
+    for (key, value) in fields {
+        eprint!(" {key}={value}");
+    }
+    eprintln!();
+}
+
+fn ns_to_ms(ns: u128) -> String {
+    format!("{:.3}", ns as f64 / 1_000_000.0)
 }
 
 #[cfg(test)]
