@@ -22,7 +22,8 @@ use crossterm::{
 };
 use napi_derive::napi;
 
-use crate::renderer::{RenderCommand, SelectionMouseEvent, SelectionMouseEventType};
+use crate::engine::EngineCommand;
+use crate::selection::{SelectionAction, SelectionMouseEvent, SelectionMouseEventType};
 use crate::terminal::{reset_pointer_shape, reset_terminal};
 
 const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
@@ -86,7 +87,7 @@ impl TerminalInput {
         alternate_screen: bool,
         capture_mouse: bool,
         capture_ctrl_c: bool,
-        renderer_tx: Option<crossbeam_channel::Sender<RenderCommand>>,
+        renderer_tx: Option<crossbeam_channel::Sender<EngineCommand>>,
     ) -> Option<Self> {
         if enable_raw_mode().is_err() {
             return None;
@@ -495,7 +496,7 @@ fn handle_terminal_mouse_event(
     event: CrosstermMouseEvent,
     mouse_down: &mut Option<MouseDown>,
     events: &Arc<Mutex<VecDeque<TerminalMouseEvent>>>,
-    renderer_tx: Option<&crossbeam_channel::Sender<RenderCommand>>,
+    renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
 ) {
     match event.kind {
         MouseEventKind::Down(button) => {
@@ -553,7 +554,7 @@ fn handle_terminal_mouse_event(
 }
 
 fn send_selection_event(
-    renderer_tx: Option<&crossbeam_channel::Sender<RenderCommand>>,
+    renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
     event_type: SelectionMouseEventType,
     event: &CrosstermMouseEvent,
     button: MouseButton,
@@ -566,45 +567,49 @@ fn send_selection_event(
         return;
     };
 
-    let _ = renderer_tx.try_send(RenderCommand::HandleTextSelection {
+    let (response, _rx) = crossbeam_channel::bounded::<SelectionAction>(1);
+    let _ = renderer_tx.try_send(EngineCommand::HandleSelection {
         event: SelectionMouseEvent {
             event_type,
             x: u32::from(event.column),
             y: u32::from(event.row),
             button: mouse_button_value(button),
         },
+        response,
     });
 }
 
 fn send_pointer_event(
-    renderer_tx: Option<&crossbeam_channel::Sender<RenderCommand>>,
+    renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
     event: &CrosstermMouseEvent,
 ) {
     let Some(renderer_tx) = renderer_tx else {
         return;
     };
 
-    let _ = renderer_tx.try_send(RenderCommand::HandlePointerMove {
+    let _ = renderer_tx.try_send(EngineCommand::HandlePointerMove {
         x: u32::from(event.column),
         y: u32::from(event.row),
     });
 }
 
 fn send_selection_cursor_event(
-    renderer_tx: Option<&crossbeam_channel::Sender<RenderCommand>>,
+    renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
     event: &CrosstermMouseEvent,
 ) {
     let Some(renderer_tx) = renderer_tx else {
         return;
     };
 
-    let _ = renderer_tx.try_send(RenderCommand::HandleTextSelection {
+    let (response, _rx) = crossbeam_channel::bounded::<SelectionAction>(1);
+    let _ = renderer_tx.try_send(EngineCommand::HandleSelection {
         event: SelectionMouseEvent {
             event_type: SelectionMouseEventType::Scroll,
             x: u32::from(event.column),
             y: u32::from(event.row),
             button: 0,
         },
+        response,
     });
 }
 

@@ -7,8 +7,6 @@ use termprofile::{
     TermProfile,
 };
 
-use crate::renderer::RenderCommand;
-
 #[derive(Clone)]
 pub(crate) struct DivStyle {
     pub(crate) display: LayoutDisplay,
@@ -170,6 +168,13 @@ pub(crate) enum CursorStyle {
     ZoomOut,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct FlexShorthand {
+    pub(crate) flex_grow: f32,
+    pub(crate) flex_shrink: f32,
+    pub(crate) flex_basis: CssDimension,
+}
+
 impl CursorStyle {
     pub(crate) fn osc_shape(self) -> Option<&'static str> {
         match self {
@@ -208,7 +213,7 @@ impl CursorStyle {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ColorTransitionProperty {
     Color,
     BackgroundColor,
@@ -388,7 +393,7 @@ impl CssGridLine {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Background {
     Default,
     Black,
@@ -818,27 +823,24 @@ pub(crate) fn parse_flex_flow(value: &str) -> Result<(LayoutFlexDirection, Layou
     ))
 }
 
-pub(crate) fn parse_flex_shorthand(id: u32, value: &str) -> Result<RenderCommand> {
+pub(crate) fn parse_flex_shorthand(value: &str) -> Result<FlexShorthand> {
     let value = value.trim();
     if value == "none" {
-        return Ok(RenderCommand::SetFlex {
-            id,
+        return Ok(FlexShorthand {
             flex_grow: 0.0,
             flex_shrink: 0.0,
             flex_basis: CssDimension::Auto,
         });
     }
     if value == "auto" {
-        return Ok(RenderCommand::SetFlex {
-            id,
+        return Ok(FlexShorthand {
             flex_grow: 1.0,
             flex_shrink: 1.0,
             flex_basis: CssDimension::Auto,
         });
     }
     if value == "initial" {
-        return Ok(RenderCommand::SetFlex {
-            id,
+        return Ok(FlexShorthand {
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: CssDimension::Auto,
@@ -847,20 +849,17 @@ pub(crate) fn parse_flex_shorthand(id: u32, value: &str) -> Result<RenderCommand
 
     let parts = value.split_whitespace().collect::<Vec<_>>();
     match parts.as_slice() {
-        [grow] => Ok(RenderCommand::SetFlex {
-            id,
+        [grow] => Ok(FlexShorthand {
             flex_grow: parse_non_negative_number("flex-grow", grow)?,
             flex_shrink: 1.0,
             flex_basis: CssDimension::Length(0.0),
         }),
-        [grow, shrink] => Ok(RenderCommand::SetFlex {
-            id,
+        [grow, shrink] => Ok(FlexShorthand {
             flex_grow: parse_non_negative_number("flex-grow", grow)?,
             flex_shrink: parse_non_negative_number("flex-shrink", shrink)?,
             flex_basis: CssDimension::Length(0.0),
         }),
-        [grow, shrink, basis] => Ok(RenderCommand::SetFlex {
-            id,
+        [grow, shrink, basis] => Ok(FlexShorthand {
             flex_grow: parse_non_negative_number("flex-grow", grow)?,
             flex_shrink: parse_non_negative_number("flex-shrink", shrink)?,
             flex_basis: parse_dimension(basis)?,

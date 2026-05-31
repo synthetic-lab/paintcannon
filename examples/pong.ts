@@ -32,6 +32,7 @@ const panel = pc.createElement('div');
 panel.style.backgroundColor = 'black';
 panel.style.width = `${width}px`;
 panel.style.height = `${height}px`;
+panel.style.whiteSpace = 'pre';
 
 const frame = pc.createTextNode(renderFrame());
 panel.appendChild(frame);
