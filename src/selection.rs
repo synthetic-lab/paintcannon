@@ -40,10 +40,12 @@ struct ActiveSelection {
 
 impl SelectionState {
     pub(crate) fn active_selection(&self) -> Option<Selection> {
-        self.selection.map(|selection| Selection {
-            anchor: selection.anchor,
-            focus: selection.focus,
-        })
+        self.selection
+            .filter(|selection| selection.moved)
+            .map(|selection| Selection {
+                anchor: selection.anchor,
+                focus: selection.focus,
+            })
     }
 
     pub(crate) fn handle_event(
@@ -87,11 +89,16 @@ impl SelectionState {
                     return SelectionAction::None;
                 };
 
-                selection.moved = selection.moved || selection.focus != point;
+                let changed = selection.focus != point;
+                selection.moved = selection.moved || changed;
                 selection.focus = point;
                 selection.last_x = event.x;
                 selection.last_y = event.y;
-                SelectionAction::Redraw
+                if changed {
+                    SelectionAction::Redraw
+                } else {
+                    SelectionAction::None
+                }
             }
             SelectionMouseEventType::Scroll => {
                 let Some(selection) = self
@@ -103,13 +110,19 @@ impl SelectionState {
                 };
                 selection.last_x = event.x;
                 selection.last_y = event.y;
+                let mut changed = false;
                 if let Some(point) =
                     frame.and_then(|frame| frame.selection_point_for(event.x, event.y))
                 {
-                    selection.moved = selection.moved || selection.focus != point;
+                    changed = selection.focus != point;
+                    selection.moved = selection.moved || changed;
                     selection.focus = point;
                 }
-                SelectionAction::Redraw
+                if changed {
+                    SelectionAction::Redraw
+                } else {
+                    SelectionAction::None
+                }
             }
             SelectionMouseEventType::Up => {
                 if event.button != 0 {
@@ -246,6 +259,7 @@ mod tests {
             ),
             SelectionAction::Redraw
         );
+        assert_eq!(state.active_selection(), None);
         assert_eq!(
             state.handle_event(
                 SelectionMouseEvent {
@@ -259,6 +273,13 @@ mod tests {
             SelectionAction::Redraw
         );
         assert_eq!(
+            state.active_selection(),
+            Some(Selection {
+                anchor: SelectionPoint { order: 1 },
+                focus: SelectionPoint { order: 3 },
+            })
+        );
+        assert_eq!(
             state.handle_event(
                 SelectionMouseEvent {
                     event_type: SelectionMouseEventType::Up,
@@ -269,6 +290,54 @@ mod tests {
                 Some(&frame),
             ),
             SelectionAction::CopyToClipboard("ell".to_string())
+        );
+        assert_eq!(state.active_selection(), None);
+    }
+
+    #[test]
+    fn drag_within_same_cell_does_not_show_or_copy_selection() {
+        let frame = text_frame("hello");
+        let mut state = SelectionState::default();
+
+        assert_eq!(
+            state.handle_event(
+                SelectionMouseEvent {
+                    event_type: SelectionMouseEventType::Down,
+                    x: 1,
+                    y: 0,
+                    button: 0,
+                },
+                Some(&frame),
+            ),
+            SelectionAction::Redraw
+        );
+        assert_eq!(state.active_selection(), None);
+
+        assert_eq!(
+            state.handle_event(
+                SelectionMouseEvent {
+                    event_type: SelectionMouseEventType::Drag,
+                    x: 1,
+                    y: 0,
+                    button: 0,
+                },
+                Some(&frame),
+            ),
+            SelectionAction::None
+        );
+        assert_eq!(state.active_selection(), None);
+
+        assert_eq!(
+            state.handle_event(
+                SelectionMouseEvent {
+                    event_type: SelectionMouseEventType::Up,
+                    x: 1,
+                    y: 0,
+                    button: 0,
+                },
+                Some(&frame),
+            ),
+            SelectionAction::Redraw
         );
         assert_eq!(state.active_selection(), None);
     }
