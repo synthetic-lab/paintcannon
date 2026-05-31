@@ -127,9 +127,17 @@ pub(crate) enum EngineCommand {
         style: DivStyle,
         response: Sender<DomId>,
     },
+    CreateElementWithId {
+        id: DomId,
+        style: DivStyle,
+    },
     CreateText {
         text: String,
         response: Sender<DomId>,
+    },
+    CreateTextWithId {
+        id: DomId,
+        text: String,
     },
     CreateImage {
         style: DivStyle,
@@ -139,15 +147,33 @@ pub(crate) enum EngineCommand {
         cell_height_px: u32,
         response: Sender<DomId>,
     },
+    CreateImageWithId {
+        id: DomId,
+        style: DivStyle,
+        width_px: u32,
+        height_px: u32,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    },
     CreateInput {
         style: DivStyle,
         value: String,
         response: Sender<DomId>,
     },
+    CreateInputWithId {
+        id: DomId,
+        style: DivStyle,
+        value: String,
+    },
     CreateTextArea {
         style: DivStyle,
         value: String,
         response: Sender<DomId>,
+    },
+    CreateTextAreaWithId {
+        id: DomId,
+        style: DivStyle,
+        value: String,
     },
     AppendChild {
         parent: DomId,
@@ -308,10 +334,22 @@ impl PaintEngine {
         self.register_node(node)
     }
 
+    pub(crate) fn create_element_with_id(&mut self, id: DomId, style: DivStyle) -> DomId {
+        self.layout_dirty = true;
+        let node = self.arena.create_element(style);
+        self.register_node_with_id(id, node)
+    }
+
     pub(crate) fn create_text(&mut self, text: impl Into<String>) -> DomId {
         self.layout_dirty = true;
         let node = self.arena.create_text(text);
         self.register_node(node)
+    }
+
+    pub(crate) fn create_text_with_id(&mut self, id: DomId, text: impl Into<String>) -> DomId {
+        self.layout_dirty = true;
+        let node = self.arena.create_text(text);
+        self.register_node_with_id(id, node)
     }
 
     pub(crate) fn create_image(
@@ -329,16 +367,54 @@ impl PaintEngine {
         self.register_node(node)
     }
 
+    pub(crate) fn create_image_with_id(
+        &mut self,
+        id: DomId,
+        style: DivStyle,
+        width_px: u32,
+        height_px: u32,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    ) -> DomId {
+        self.layout_dirty = true;
+        let node =
+            self.arena
+                .create_image(style, width_px, height_px, cell_width_px, cell_height_px);
+        self.register_node_with_id(id, node)
+    }
+
     pub(crate) fn create_input(&mut self, style: DivStyle, value: impl Into<String>) -> DomId {
         self.layout_dirty = true;
         let node = self.arena.create_input(style, value);
         self.register_node(node)
     }
 
+    pub(crate) fn create_input_with_id(
+        &mut self,
+        id: DomId,
+        style: DivStyle,
+        value: impl Into<String>,
+    ) -> DomId {
+        self.layout_dirty = true;
+        let node = self.arena.create_input(style, value);
+        self.register_node_with_id(id, node)
+    }
+
     pub(crate) fn create_textarea(&mut self, style: DivStyle, value: impl Into<String>) -> DomId {
         self.layout_dirty = true;
         let node = self.arena.create_textarea(style, value);
         self.register_node(node)
+    }
+
+    pub(crate) fn create_textarea_with_id(
+        &mut self,
+        id: DomId,
+        style: DivStyle,
+        value: impl Into<String>,
+    ) -> DomId {
+        self.layout_dirty = true;
+        let node = self.arena.create_textarea(style, value);
+        self.register_node_with_id(id, node)
     }
 
     pub(crate) fn append_child(&mut self, parent: DomId, child: DomId) -> bool {
@@ -759,6 +835,13 @@ impl PaintEngine {
     fn register_node(&mut self, node: NodeId) -> DomId {
         let id = DomId(self.next_dom_id);
         self.next_dom_id = self.next_dom_id.checked_add(1).expect("DOM id overflow");
+        self.register_node_with_id(id, node)
+    }
+
+    fn register_node_with_id(&mut self, id: DomId, node: NodeId) -> DomId {
+        self.next_dom_id = self
+            .next_dom_id
+            .max(id.0.checked_add(1).expect("DOM id overflow"));
         self.dom_to_node.insert(id, node);
         self.node_to_dom.insert(node, id);
         self.children.insert(id, Vec::new());
@@ -938,8 +1021,14 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         EngineCommand::CreateElement { style, response } => {
             let _ = response.send(engine.create_element(style));
         }
+        EngineCommand::CreateElementWithId { id, style } => {
+            engine.create_element_with_id(id, style);
+        }
         EngineCommand::CreateText { text, response } => {
             let _ = response.send(engine.create_text(text));
+        }
+        EngineCommand::CreateTextWithId { id, text } => {
+            engine.create_text_with_id(id, text);
         }
         EngineCommand::CreateImage {
             style,
@@ -957,6 +1046,23 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
                 cell_height_px,
             ));
         }
+        EngineCommand::CreateImageWithId {
+            id,
+            style,
+            width_px,
+            height_px,
+            cell_width_px,
+            cell_height_px,
+        } => {
+            engine.create_image_with_id(
+                id,
+                style,
+                width_px,
+                height_px,
+                cell_width_px,
+                cell_height_px,
+            );
+        }
         EngineCommand::CreateInput {
             style,
             value,
@@ -964,12 +1070,18 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         } => {
             let _ = response.send(engine.create_input(style, value));
         }
+        EngineCommand::CreateInputWithId { id, style, value } => {
+            engine.create_input_with_id(id, style, value);
+        }
         EngineCommand::CreateTextArea {
             style,
             value,
             response,
         } => {
             let _ = response.send(engine.create_textarea(style, value));
+        }
+        EngineCommand::CreateTextAreaWithId { id, style, value } => {
+            engine.create_textarea_with_id(id, style, value);
         }
         EngineCommand::AppendChild { parent, child } => {
             engine.append_child(parent, child);
@@ -1717,6 +1829,46 @@ mod tests {
         })
         .unwrap();
         assert_eq!(response_rx.recv().unwrap(), Some(root));
+
+        tx.send(EngineCommand::Shutdown).unwrap();
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn command_loop_batches_explicit_id_creates() {
+        let (tx, rx) = bounded(32);
+        let thread = thread::spawn(move || engine_loop(rx));
+
+        tx.send(EngineCommand::Batch {
+            commands: vec![
+                EngineCommand::CreateElementWithId {
+                    id: DomId(1),
+                    style: block_style(CssDimension::Length(4.0), CssDimension::Length(1.0)),
+                },
+                EngineCommand::CreateTextWithId {
+                    id: DomId(2),
+                    text: "ok".to_string(),
+                },
+                EngineCommand::AppendChild {
+                    parent: DomId(1),
+                    child: DomId(2),
+                },
+                EngineCommand::SetRoot { root: DomId(1) },
+            ],
+        })
+        .unwrap();
+
+        let (response_tx, response_rx) = bounded(1);
+        tx.send(EngineCommand::RenderFrame {
+            width: 4,
+            height: 1,
+            response: response_tx,
+        })
+        .unwrap();
+        let frame = response_rx.recv().unwrap().unwrap();
+
+        assert_eq!(frame.cell(0, 0).unwrap().character, 'o');
+        assert_eq!(frame.cell(1, 0).unwrap().character, 'k');
 
         tx.send(EngineCommand::Shutdown).unwrap();
         thread.join().unwrap();

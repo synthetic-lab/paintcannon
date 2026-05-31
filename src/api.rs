@@ -91,6 +91,7 @@ pub struct PaintCannon {
     input: Option<TerminalInput>,
     kitty_keyboard_enabled: bool,
     render_pending: Arc<AtomicBool>,
+    next_dom_id: u32,
     color_profile: TermProfile,
 }
 
@@ -130,58 +131,59 @@ impl PaintCannon {
             input,
             kitty_keyboard_enabled,
             render_pending,
+            next_dom_id: 1,
             color_profile,
         }
     }
 
     #[napi]
-    pub fn create_div(&self) -> Result<u32> {
-        self.create_node(|response| EngineCommand::CreateElement {
+    pub fn create_div(&mut self) -> Result<u32> {
+        self.create_node(|id| EngineCommand::CreateElementWithId {
+            id,
             style: Default::default(),
-            response,
         })
     }
 
     #[napi]
-    pub fn create_span(&self) -> Result<u32> {
+    pub fn create_span(&mut self) -> Result<u32> {
         let mut style = crate::style::DivStyle::default();
         style.display = crate::style::LayoutDisplay::Inline;
-        self.create_node(|response| EngineCommand::CreateElement { style, response })
+        self.create_node(|id| EngineCommand::CreateElementWithId { id, style })
     }
 
     #[napi]
-    pub fn create_image(&self) -> Result<u32> {
-        self.create_node(|response| EngineCommand::CreateImage {
+    pub fn create_image(&mut self) -> Result<u32> {
+        self.create_node(|id| EngineCommand::CreateImageWithId {
+            id,
             style: Default::default(),
             width_px: 1,
             height_px: 1,
             cell_width_px: 1,
             cell_height_px: 1,
-            response,
         })
     }
 
     #[napi]
-    pub fn create_input(&self) -> Result<u32> {
-        self.create_node(|response| EngineCommand::CreateInput {
+    pub fn create_input(&mut self) -> Result<u32> {
+        self.create_node(|id| EngineCommand::CreateInputWithId {
+            id,
             style: Default::default(),
             value: String::new(),
-            response,
         })
     }
 
     #[napi]
-    pub fn create_text_area(&self) -> Result<u32> {
-        self.create_node(|response| EngineCommand::CreateTextArea {
+    pub fn create_text_area(&mut self) -> Result<u32> {
+        self.create_node(|id| EngineCommand::CreateTextAreaWithId {
+            id,
             style: Default::default(),
             value: String::new(),
-            response,
         })
     }
 
     #[napi]
-    pub fn create_text_node(&self, text: String) -> Result<u32> {
-        self.create_node(|response| EngineCommand::CreateText { text, response })
+    pub fn create_text_node(&mut self, text: String) -> Result<u32> {
+        self.create_node(|id| EngineCommand::CreateTextWithId { id, text })
     }
 
     #[napi]
@@ -245,40 +247,84 @@ impl PaintCannon {
             match command.r#type.as_str() {
                 "createDiv" => {
                     let temporary_id = required_i32(command.id, "id", "createDiv")?;
-                    let id = self.create_div()?;
-                    id_map.insert(temporary_id, id);
-                    mappings.push(BatchIdMapping { temporary_id, id });
+                    let id = self.allocate_dom_id()?;
+                    id_map.insert(temporary_id, id.0);
+                    mappings.push(BatchIdMapping {
+                        temporary_id,
+                        id: id.0,
+                    });
+                    render_commands.push(EngineCommand::CreateElementWithId {
+                        id,
+                        style: Default::default(),
+                    });
                 }
                 "createSpan" => {
                     let temporary_id = required_i32(command.id, "id", "createSpan")?;
-                    let id = self.create_span()?;
-                    id_map.insert(temporary_id, id);
-                    mappings.push(BatchIdMapping { temporary_id, id });
+                    let id = self.allocate_dom_id()?;
+                    id_map.insert(temporary_id, id.0);
+                    mappings.push(BatchIdMapping {
+                        temporary_id,
+                        id: id.0,
+                    });
+                    let mut style = crate::style::DivStyle::default();
+                    style.display = crate::style::LayoutDisplay::Inline;
+                    render_commands.push(EngineCommand::CreateElementWithId { id, style });
                 }
                 "createText" => {
                     let temporary_id = required_i32(command.id, "id", "createText")?;
                     let text = required_string(command.text, "text", "createText")?;
-                    let id = self.create_text_node(text)?;
-                    id_map.insert(temporary_id, id);
-                    mappings.push(BatchIdMapping { temporary_id, id });
+                    let id = self.allocate_dom_id()?;
+                    id_map.insert(temporary_id, id.0);
+                    mappings.push(BatchIdMapping {
+                        temporary_id,
+                        id: id.0,
+                    });
+                    render_commands.push(EngineCommand::CreateTextWithId { id, text });
                 }
                 "createImage" => {
                     let temporary_id = required_i32(command.id, "id", "createImage")?;
-                    let id = self.create_image()?;
-                    id_map.insert(temporary_id, id);
-                    mappings.push(BatchIdMapping { temporary_id, id });
+                    let id = self.allocate_dom_id()?;
+                    id_map.insert(temporary_id, id.0);
+                    mappings.push(BatchIdMapping {
+                        temporary_id,
+                        id: id.0,
+                    });
+                    render_commands.push(EngineCommand::CreateImageWithId {
+                        id,
+                        style: Default::default(),
+                        width_px: 1,
+                        height_px: 1,
+                        cell_width_px: 1,
+                        cell_height_px: 1,
+                    });
                 }
                 "createInput" => {
                     let temporary_id = required_i32(command.id, "id", "createInput")?;
-                    let id = self.create_input()?;
-                    id_map.insert(temporary_id, id);
-                    mappings.push(BatchIdMapping { temporary_id, id });
+                    let id = self.allocate_dom_id()?;
+                    id_map.insert(temporary_id, id.0);
+                    mappings.push(BatchIdMapping {
+                        temporary_id,
+                        id: id.0,
+                    });
+                    render_commands.push(EngineCommand::CreateInputWithId {
+                        id,
+                        style: Default::default(),
+                        value: String::new(),
+                    });
                 }
                 "createTextArea" => {
                     let temporary_id = required_i32(command.id, "id", "createTextArea")?;
-                    let id = self.create_text_area()?;
-                    id_map.insert(temporary_id, id);
-                    mappings.push(BatchIdMapping { temporary_id, id });
+                    let id = self.allocate_dom_id()?;
+                    id_map.insert(temporary_id, id.0);
+                    mappings.push(BatchIdMapping {
+                        temporary_id,
+                        id: id.0,
+                    });
+                    render_commands.push(EngineCommand::CreateTextAreaWithId {
+                        id,
+                        style: Default::default(),
+                        value: String::new(),
+                    });
                 }
                 "setText" => {
                     let id = resolve_batch_id(command.id, "id", "setText", &id_map)?;
@@ -342,12 +388,13 @@ impl PaintCannon {
             }
         }
 
-        if !render_commands.is_empty() {
-            self.send(EngineCommand::Batch {
-                commands: render_commands,
-            })?;
+        if render_commands.is_empty() {
+            return Ok(Vec::new());
         }
 
+        self.send(EngineCommand::Batch {
+            commands: render_commands,
+        })?;
         Ok(mappings)
     }
 
@@ -587,13 +634,19 @@ fn signal_process_group(_signal: libc::c_int) -> Result<()> {
 }
 
 impl PaintCannon {
-    fn create_node(&self, command: impl FnOnce(Sender<DomId>) -> EngineCommand) -> Result<u32> {
-        let (response_tx, response_rx) = bounded(1);
-        self.send(command(response_tx))?;
-        response_rx
-            .recv()
-            .map(|id| id.0)
-            .map_err(|_| Error::from_reason("renderer thread stopped"))
+    fn create_node(&mut self, command: impl FnOnce(DomId) -> EngineCommand) -> Result<u32> {
+        let id = self.allocate_dom_id()?;
+        self.send(command(id))?;
+        Ok(id.0)
+    }
+
+    fn allocate_dom_id(&mut self) -> Result<DomId> {
+        let id = self.next_dom_id;
+        self.next_dom_id = self
+            .next_dom_id
+            .checked_add(1)
+            .ok_or_else(|| Error::from_reason("DOM id overflow"))?;
+        Ok(DomId(id))
     }
 
     fn send(&self, command: EngineCommand) -> Result<()> {
