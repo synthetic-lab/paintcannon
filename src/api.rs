@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
 
@@ -11,13 +12,15 @@ use napi::{Error, Result};
 use napi_derive::napi;
 
 use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseEvent, TerminalResizeEvent};
-use crate::renderer::{renderer_loop, ClickEvent, MouseClick, RenderCommand, ScrollMetrics};
+use crate::renderer::{
+    renderer_loop, ClickEvent, MouseClick, RenderCommand, ScrollMetrics, TransitionEvent,
+};
 use crate::style::{
     parse_align_items, parse_border_style, parse_dimension, parse_display, parse_flex_direction,
     parse_flex_flow, parse_flex_shorthand, parse_flex_wrap, parse_gap, parse_grid_auto_flow,
     parse_grid_auto_tracks, parse_grid_line, parse_grid_placement, parse_grid_template_tracks,
     parse_justify_content, parse_length_percentage, parse_non_negative_number, parse_overflow,
-    Background,
+    parse_transition, Background,
 };
 use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
@@ -48,6 +51,7 @@ pub struct PaintCannon {
     input: Option<TerminalInput>,
     kitty_keyboard_enabled: bool,
     render_pending: Arc<AtomicBool>,
+    transition_events: Arc<Mutex<VecDeque<TransitionEvent>>>,
     next_id: u32,
 }
 
@@ -61,7 +65,9 @@ impl PaintCannon {
         capture_ctrl_c: Option<bool>,
     ) -> Self {
         let (tx, rx) = bounded(RENDER_QUEUE_CAPACITY);
-        let thread = thread::spawn(move || renderer_loop(rx));
+        let transition_events = Arc::new(Mutex::new(VecDeque::new()));
+        let thread_transition_events = Arc::clone(&transition_events);
+        let thread = thread::spawn(move || renderer_loop(rx, thread_transition_events));
         let render_pending = Arc::new(AtomicBool::new(false));
         let input = TerminalInput::start(
             DEFAULT_SYNTHETIC_KEYUP_MS,
@@ -82,6 +88,7 @@ impl PaintCannon {
             input,
             kitty_keyboard_enabled,
             render_pending,
+            transition_events,
             next_id: 1,
         }
     }
@@ -264,6 +271,15 @@ impl PaintCannon {
             .as_ref()
             .map(TerminalInput::drain_resize_events)
             .unwrap_or_default()
+    }
+
+    #[napi]
+    pub fn drain_transition_events(&self) -> Vec<TransitionEvent> {
+        let Ok(mut events) = self.transition_events.lock() else {
+            return Vec::new();
+        };
+
+        events.drain(..).collect()
     }
 
     #[napi]
@@ -545,6 +561,15 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<RenderCommand> 
                 .ok_or_else(|| Error::from_reason(format!("unsupported border color: {value}")))?;
             RenderCommand::SetBorderColor { id, color }
         }
+        "color" => {
+            let color = Background::parse(value)
+                .ok_or_else(|| Error::from_reason(format!("unsupported color: {value}")))?;
+            RenderCommand::SetColor { id, color }
+        }
+        "transition" => RenderCommand::SetTransition {
+            id,
+            transitions: parse_transition(value),
+        },
         "background" | "background-color" | "backgroundColor" => {
             let background = Background::parse(value)
                 .ok_or_else(|| Error::from_reason(format!("unsupported background: {value}")))?;

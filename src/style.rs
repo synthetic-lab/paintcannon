@@ -2,6 +2,10 @@ use napi::{Error, Result};
 use taffy::geometry::Point;
 use taffy::prelude::*;
 use taffy::style::Overflow;
+use termprofile::{
+    anstyle::{Color, RgbColor},
+    TermProfile,
+};
 
 use crate::renderer::RenderCommand;
 
@@ -30,6 +34,7 @@ pub(crate) struct DivStyle {
     pub(crate) grid_auto_flow: LayoutGridAutoFlow,
     pub(crate) grid_column: CssGridLine,
     pub(crate) grid_row: CssGridLine,
+    pub(crate) color: Background,
     pub(crate) background: Background,
     pub(crate) selection_background: Option<Background>,
     pub(crate) border_top: BorderStyle,
@@ -67,6 +72,7 @@ impl Default for DivStyle {
             grid_auto_flow: LayoutGridAutoFlow::Row,
             grid_column: CssGridLine::default(),
             grid_row: CssGridLine::default(),
+            color: Background::Default,
             background: Background::Default,
             selection_background: None,
             border_top: BorderStyle::None,
@@ -104,6 +110,19 @@ pub(crate) enum BorderStyle {
     Rounded,
     ChunkyRounded,
     Ascii,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ColorTransitionProperty {
+    Color,
+    BackgroundColor,
+    BorderColor,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TransitionSpec {
+    pub(crate) property: ColorTransitionProperty,
+    pub(crate) duration_ms: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -284,10 +303,16 @@ pub(crate) enum Background {
     Magenta,
     Cyan,
     White,
+    Rgb(u8, u8, u8),
 }
 
 impl Background {
     pub(crate) fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if let Some(color) = parse_hex_color(value) {
+            return Some(color);
+        }
+
         match value {
             "default" => Some(Self::Default),
             "black" => Some(Self::Black),
@@ -302,33 +327,80 @@ impl Background {
         }
     }
 
-    pub(crate) fn ansi_bg(self) -> &'static str {
+    pub(crate) fn rgb(self) -> Option<(u8, u8, u8)> {
         match self {
-            Self::Default => "\x1b[49m",
-            Self::Black => "\x1b[40m",
-            Self::Red => "\x1b[41m",
-            Self::Green => "\x1b[42m",
-            Self::Yellow => "\x1b[43m",
-            Self::Blue => "\x1b[44m",
-            Self::Magenta => "\x1b[45m",
-            Self::Cyan => "\x1b[46m",
-            Self::White => "\x1b[47m",
+            Self::Default => None,
+            Self::Black => Some((0, 0, 0)),
+            Self::Red => Some((255, 0, 0)),
+            Self::Green => Some((0, 255, 0)),
+            Self::Yellow => Some((255, 255, 0)),
+            Self::Blue => Some((0, 0, 255)),
+            Self::Magenta => Some((255, 0, 255)),
+            Self::Cyan => Some((0, 255, 255)),
+            Self::White => Some((255, 255, 255)),
+            Self::Rgb(red, green, blue) => Some((red, green, blue)),
         }
     }
 
-    pub(crate) fn ansi_fg(self) -> &'static str {
-        match self {
-            Self::Default => "\x1b[39m",
-            Self::Black => "\x1b[30m",
-            Self::Red => "\x1b[31m",
-            Self::Green => "\x1b[32m",
-            Self::Yellow => "\x1b[33m",
-            Self::Blue => "\x1b[34m",
-            Self::Magenta => "\x1b[35m",
-            Self::Cyan => "\x1b[36m",
-            Self::White => "\x1b[37m",
-        }
+    pub(crate) fn ansi_bg(self, profile: TermProfile) -> String {
+        ansi_color(self, profile, ColorPlane::Background)
     }
+
+    pub(crate) fn ansi_fg(self, profile: TermProfile) -> String {
+        ansi_color(self, profile, ColorPlane::Foreground)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ColorPlane {
+    Foreground,
+    Background,
+}
+
+fn ansi_color(color: Background, profile: TermProfile, plane: ColorPlane) -> String {
+    if matches!(profile, TermProfile::NoTty | TermProfile::NoColor) {
+        return String::new();
+    }
+
+    if color == Background::Default {
+        return match plane {
+            ColorPlane::Foreground => "\x1b[39m".to_string(),
+            ColorPlane::Background => "\x1b[49m".to_string(),
+        };
+    }
+
+    let Some((red, green, blue)) = color.rgb() else {
+        return String::new();
+    };
+
+    let color = Color::Rgb(RgbColor(red, green, blue));
+    let Some(color) = profile.adapt_color(color) else {
+        return String::new();
+    };
+
+    match plane {
+        ColorPlane::Foreground => color.render_fg().to_string(),
+        ColorPlane::Background => color.render_bg().to_string(),
+    }
+}
+
+fn parse_hex_color(value: &str) -> Option<Background> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() == 3 {
+        let red = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+        let green = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+        let blue = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+        return Some(Background::Rgb(red, green, blue));
+    }
+
+    if hex.len() == 6 {
+        let red = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let green = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let blue = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        return Some(Background::Rgb(red, green, blue));
+    }
+
+    None
 }
 
 impl DivStyle {
@@ -482,6 +554,68 @@ pub(crate) fn parse_border_style(value: &str) -> Result<BorderStyle> {
             "unsupported border style: {value}"
         ))),
     }
+}
+
+pub(crate) fn parse_transition(value: &str) -> Vec<TransitionSpec> {
+    let mut transitions = Vec::new();
+    for part in value.split(',') {
+        let tokens = part.split_whitespace().collect::<Vec<_>>();
+        if tokens.len() < 2 {
+            continue;
+        }
+
+        let Some(duration_ms) = tokens.iter().find_map(|token| parse_duration_ms(token)) else {
+            continue;
+        };
+
+        match tokens[0] {
+            "all" => {
+                transitions.push(TransitionSpec {
+                    property: ColorTransitionProperty::Color,
+                    duration_ms,
+                });
+                transitions.push(TransitionSpec {
+                    property: ColorTransitionProperty::BackgroundColor,
+                    duration_ms,
+                });
+                transitions.push(TransitionSpec {
+                    property: ColorTransitionProperty::BorderColor,
+                    duration_ms,
+                });
+            }
+            "color" => transitions.push(TransitionSpec {
+                property: ColorTransitionProperty::Color,
+                duration_ms,
+            }),
+            "background" | "background-color" | "backgroundColor" => {
+                transitions.push(TransitionSpec {
+                    property: ColorTransitionProperty::BackgroundColor,
+                    duration_ms,
+                });
+            }
+            "border-color" | "borderColor" => transitions.push(TransitionSpec {
+                property: ColorTransitionProperty::BorderColor,
+                duration_ms,
+            }),
+            _ => {}
+        }
+    }
+
+    transitions
+}
+
+fn parse_duration_ms(value: &str) -> Option<u64> {
+    if let Some(ms) = value.strip_suffix("ms") {
+        let duration = ms.parse::<f32>().ok()?;
+        return (duration >= 0.0).then_some(duration.round() as u64);
+    }
+
+    if let Some(seconds) = value.strip_suffix('s') {
+        let duration = seconds.parse::<f32>().ok()?;
+        return (duration >= 0.0).then_some((duration * 1000.0).round() as u64);
+    }
+
+    None
 }
 
 pub(crate) fn parse_flex_direction(value: &str) -> Result<LayoutFlexDirection> {

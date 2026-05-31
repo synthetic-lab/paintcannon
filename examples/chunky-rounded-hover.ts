@@ -22,17 +22,21 @@ button.style.height = '5';
 button.style.border = 'chunky-rounded';
 button.style.borderColor = 'blue';
 button.style.backgroundColor = 'blue';
+button.style.color = 'white';
+button.style.transition = 'background-color 180ms, border-color 180ms, color 180ms';
 button.appendChild(pc.createTextNode('  chunky rounded  '));
 root.appendChild(button);
 
 button.addEventListener('mouseenter', () => {
-  button.style.borderColor = 'cyan';
   button.style.backgroundColor = 'cyan';
+  button.style.borderColor = 'cyan';
+  button.style.color = 'black';
 });
 
 button.addEventListener('mouseleave', () => {
-  button.style.borderColor = 'blue';
   button.style.backgroundColor = 'blue';
+  button.style.borderColor = 'blue';
+  button.style.color = 'white';
 });
 
 function tick() {

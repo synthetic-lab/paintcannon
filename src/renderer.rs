@@ -1,15 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Write};
 use std::ops::Range;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc::Sender as StdSender,
-    Arc,
+    Arc, Mutex,
 };
+use std::time::{Duration, Instant};
 
+use crossbeam_channel::RecvTimeoutError;
 use crossbeam_channel::{Receiver, Sender};
 use napi_derive::napi;
 use taffy::prelude::*;
+use termprofile::{DetectorSettings, TermProfile};
 
 use crate::style::*;
 use crate::terminal::{
@@ -168,6 +171,14 @@ pub(crate) enum RenderCommand {
         id: u32,
         color: Background,
     },
+    SetColor {
+        id: u32,
+        color: Background,
+    },
+    SetTransition {
+        id: u32,
+        transitions: Vec<TransitionSpec>,
+    },
     SetBackground {
         id: u32,
         background: Background,
@@ -278,6 +289,14 @@ pub struct ScrollMetrics {
     pub client_height: u32,
 }
 
+#[derive(Clone)]
+#[napi(object)]
+pub struct TransitionEvent {
+    pub r#type: String,
+    pub target_id: u32,
+    pub property_name: String,
+}
+
 pub(crate) struct SelectionMouseEvent {
     pub(crate) event_type: SelectionMouseEventType,
     pub(crate) x: u32,
@@ -361,6 +380,20 @@ impl TextNode {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct TransitionKey {
+    id: u32,
+    property: ColorTransitionProperty,
+}
+
+#[derive(Clone, Copy)]
+struct ActiveColorTransition {
+    from: Background,
+    to: Background,
+    started_at: Instant,
+    duration: Duration,
+}
+
 struct Renderer {
     root: Option<u32>,
     nodes: HashMap<u32, DomNode>,
@@ -374,13 +407,19 @@ struct Renderer {
     scroll_metrics_dirty: bool,
     inline_metrics_cache: HashMap<InlineMetricsKey, InlineMetrics>,
     last_layout_size: Option<(u32, u32)>,
+    transition_specs: HashMap<u32, HashMap<ColorTransitionProperty, Duration>>,
+    active_transitions: HashMap<TransitionKey, ActiveColorTransition>,
+    transition_events: Arc<Mutex<VecDeque<TransitionEvent>>>,
+    color_profile: TermProfile,
     selection: Option<Selection>,
 }
 
 impl Renderer {
-    fn new() -> Self {
+    fn new(transition_events: Arc<Mutex<VecDeque<TransitionEvent>>>) -> Self {
         let mut taffy = TaffyTree::new();
         taffy.disable_rounding();
+        termprofile::set_color_cache_enabled(true);
+        let color_profile = TermProfile::detect(&io::stdout(), DetectorSettings::default());
 
         Self {
             root: None,
@@ -395,6 +434,10 @@ impl Renderer {
             scroll_metrics_dirty: true,
             inline_metrics_cache: HashMap::new(),
             last_layout_size: None,
+            transition_specs: HashMap::new(),
+            active_transitions: HashMap::new(),
+            transition_events,
+            color_profile,
             selection: None,
         }
     }
@@ -580,10 +623,16 @@ impl Renderer {
                 self.update_style(id, |node| node.border_left = style);
             }
             RenderCommand::SetBorderColor { id, color } => {
-                self.update_visual_style(id, |node| node.border_color = color);
+                self.set_paint_color(id, ColorTransitionProperty::BorderColor, color);
+            }
+            RenderCommand::SetColor { id, color } => {
+                self.set_paint_color(id, ColorTransitionProperty::Color, color);
+            }
+            RenderCommand::SetTransition { id, transitions } => {
+                self.set_transition(id, transitions);
             }
             RenderCommand::SetBackground { id, background } => {
-                self.update_visual_style(id, |node| node.background = background);
+                self.set_paint_color(id, ColorTransitionProperty::BackgroundColor, background);
             }
             RenderCommand::SetSelectionBackground { id, background } => {
                 self.update_visual_style(id, |node| node.selection_background = Some(background));
@@ -691,6 +740,101 @@ impl Renderer {
     fn update_visual_style(&mut self, id: u32, update: impl FnOnce(&mut DivStyle)) {
         if let Some(style) = self.style_mut(id) {
             update(style);
+        }
+    }
+
+    fn set_transition(&mut self, id: u32, transitions: Vec<TransitionSpec>) {
+        let mut specs = HashMap::new();
+        for transition in transitions {
+            specs.insert(
+                transition.property,
+                Duration::from_millis(transition.duration_ms),
+            );
+        }
+        if specs.is_empty() {
+            self.transition_specs.remove(&id);
+        } else {
+            self.transition_specs.insert(id, specs);
+        }
+    }
+
+    fn set_paint_color(&mut self, id: u32, property: ColorTransitionProperty, target: Background) {
+        let now = Instant::now();
+        let current = self.paint_color(id, property, now).unwrap_or(target);
+        let duration = self
+            .transition_specs
+            .get(&id)
+            .and_then(|specs| specs.get(&property))
+            .copied();
+
+        self.active_transitions
+            .remove(&TransitionKey { id, property });
+        self.set_style_color(id, property, target);
+
+        if self.color_profile != TermProfile::TrueColor {
+            return;
+        }
+
+        let Some(duration) = duration else {
+            return;
+        };
+        if duration.is_zero()
+            || current == target
+            || current.rgb().is_none()
+            || target.rgb().is_none()
+        {
+            return;
+        }
+
+        self.active_transitions.insert(
+            TransitionKey { id, property },
+            ActiveColorTransition {
+                from: current,
+                to: target,
+                started_at: now,
+                duration,
+            },
+        );
+        self.push_transition_event("transitionstart", id, property);
+    }
+
+    fn paint_color(
+        &self,
+        id: u32,
+        property: ColorTransitionProperty,
+        now: Instant,
+    ) -> Option<Background> {
+        let key = TransitionKey { id, property };
+        if let Some(transition) = self.active_transitions.get(&key) {
+            return Some(transition.color_at(now));
+        }
+
+        self.nodes
+            .get(&id)
+            .and_then(|node| node_style(node))
+            .map(|style| style_color(style, property))
+    }
+
+    fn set_style_color(&mut self, id: u32, property: ColorTransitionProperty, color: Background) {
+        if let Some(style) = self.style_mut(id) {
+            match property {
+                ColorTransitionProperty::Color => style.color = color,
+                ColorTransitionProperty::BackgroundColor => style.background = color,
+                ColorTransitionProperty::BorderColor => style.border_color = color,
+            }
+        }
+    }
+
+    fn push_transition_event(&self, event_type: &str, id: u32, property: ColorTransitionProperty) {
+        if let Ok(mut events) = self.transition_events.lock() {
+            events.push_back(TransitionEvent {
+                r#type: event_type.to_string(),
+                target_id: id,
+                property_name: transition_property_name(property).to_string(),
+            });
+            while events.len() > 1024 {
+                events.pop_front();
+            }
         }
     }
 
@@ -919,15 +1063,37 @@ impl Renderer {
             &mut frame,
             &mut hit_regions,
             None,
+            Background::Default,
             ClipBounds::unbounded(),
         );
         self.refresh_active_selection_focus(&frame);
         self.content_frame = Some(frame.clone());
         let mut output_frame = frame;
         output_frame.apply_selection(self.selection.as_ref());
-        let _ = output_frame.write_diff_to_stdout(self.previous_frame.as_ref());
+        let _ = output_frame.write_diff_to_stdout(self.previous_frame.as_ref(), self.color_profile);
         self.previous_frame = Some(output_frame);
         self.hit_regions = hit_regions;
+        self.finish_completed_transitions(Instant::now());
+    }
+
+    fn has_active_transitions(&self) -> bool {
+        !self.active_transitions.is_empty()
+    }
+
+    fn finish_completed_transitions(&mut self, now: Instant) {
+        let completed = self
+            .active_transitions
+            .iter()
+            .filter_map(|(key, transition)| {
+                transition.is_complete(now).then_some((*key, transition.to))
+            })
+            .collect::<Vec<_>>();
+
+        for (key, target) in completed {
+            self.active_transitions.remove(&key);
+            self.set_style_color(key.id, key.property, target);
+            self.push_transition_event("transitionend", key.id, key.property);
+        }
     }
 
     fn collect_scroll_metrics(&mut self, id: u32, metrics: &mut HashMap<u32, ScrollMetrics>) {
@@ -1064,6 +1230,7 @@ impl Renderer {
         frame: &mut Frame,
         hit_regions: &mut Vec<HitRegion>,
         selection_background: Option<Background>,
+        foreground: Background,
         clip: ClipBounds,
     ) {
         let Some(dom_node) = self.nodes.get(&id) else {
@@ -1078,6 +1245,7 @@ impl Renderer {
 
         let x = parent_x + layout.location.x;
         let y = parent_y + layout.location.y;
+        let now = Instant::now();
         let bounds = cell_rect_from_edges(x, y, layout.size.width, layout.size.height);
         if !frame.capture_hidden_selection_units && clip.clip_rect(bounds).is_none() {
             return;
@@ -1089,8 +1257,15 @@ impl Renderer {
                     node.style.selection_background,
                     selection_background,
                 );
+                let node_foreground = self
+                    .paint_color(id, ColorTransitionProperty::Color, now)
+                    .unwrap_or(node.style.color);
+                let foreground = effective_foreground(node_foreground, foreground);
+                let background = self
+                    .paint_color(id, ColorTransitionProperty::BackgroundColor, now)
+                    .unwrap_or(node.style.background);
                 push_hit_region(hit_regions, id, bounds, clip);
-                frame.fill_rect(bounds, node.style.background, selection_background, clip);
+                frame.fill_rect(bounds, background, selection_background, clip);
                 frame.clear_chunky_rounded_corners(bounds, &node.style, clip);
 
                 let child_clip =
@@ -1107,6 +1282,7 @@ impl Renderer {
                         hit_regions,
                         Some(id),
                         selection_background,
+                        foreground,
                         child_clip,
                     );
                 } else {
@@ -1125,19 +1301,36 @@ impl Renderer {
                             frame,
                             hit_regions,
                             selection_background,
+                            foreground,
                             child_clip,
                         );
                     }
                 }
-                frame.stroke_border(bounds, &node.style, selection_background, clip);
+                let border_color = self
+                    .paint_color(id, ColorTransitionProperty::BorderColor, now)
+                    .unwrap_or(node.style.border_color);
+                frame.stroke_border(
+                    bounds,
+                    &node.style,
+                    border_color,
+                    selection_background,
+                    clip,
+                );
             }
             DomNode::Span(node) => {
                 let selection_background = effective_selection_background(
                     node.style.selection_background,
                     selection_background,
                 );
+                let node_foreground = self
+                    .paint_color(id, ColorTransitionProperty::Color, now)
+                    .unwrap_or(node.style.color);
+                let foreground = effective_foreground(node_foreground, foreground);
+                let background = self
+                    .paint_color(id, ColorTransitionProperty::BackgroundColor, now)
+                    .unwrap_or(node.style.background);
                 push_hit_region(hit_regions, id, bounds, clip);
-                frame.fill_rect(bounds, node.style.background, selection_background, clip);
+                frame.fill_rect(bounds, background, selection_background, clip);
                 frame.clear_chunky_rounded_corners(bounds, &node.style, clip);
                 let child_clip =
                     child_clip_for(node.style.overflow_x, node.style.overflow_y, bounds, clip);
@@ -1153,6 +1346,7 @@ impl Renderer {
                         hit_regions,
                         Some(id),
                         selection_background,
+                        foreground,
                         child_clip,
                     );
                 } else {
@@ -1171,17 +1365,28 @@ impl Renderer {
                             frame,
                             hit_regions,
                             selection_background,
+                            foreground,
                             child_clip,
                         );
                     }
                 }
-                frame.stroke_border(bounds, &node.style, selection_background, clip);
+                let border_color = self
+                    .paint_color(id, ColorTransitionProperty::BorderColor, now)
+                    .unwrap_or(node.style.border_color);
+                frame.stroke_border(
+                    bounds,
+                    &node.style,
+                    border_color,
+                    selection_background,
+                    clip,
+                );
             }
             DomNode::Text(node) => {
                 frame.write_text(
                     bounds.left,
                     bounds.top,
                     &node.text,
+                    foreground,
                     selection_background,
                     clip,
                 );
@@ -1289,6 +1494,7 @@ impl Renderer {
         hit_regions: &mut Vec<HitRegion>,
         hit_target: Option<u32>,
         selection_background: Option<Background>,
+        foreground: Background,
         clip: ClipBounds,
     ) {
         let mut cursor = InlineCursor {
@@ -1308,6 +1514,7 @@ impl Renderer {
                 hit_regions,
                 hit_target,
                 selection_background,
+                foreground,
                 clip,
             );
         }
@@ -1322,6 +1529,7 @@ impl Renderer {
         hit_regions: &mut Vec<HitRegion>,
         hit_target: Option<u32>,
         selection_background: Option<Background>,
+        foreground: Background,
         clip: ClipBounds,
     ) {
         match self.nodes.get(&id) {
@@ -1334,19 +1542,27 @@ impl Renderer {
                     hit_regions,
                     hit_target,
                     selection_background,
+                    foreground,
                     clip,
                 );
             }
             Some(DomNode::Span(node)) => {
-                let background = if node.style.background == Background::Default {
+                let node_background = self
+                    .paint_color(id, ColorTransitionProperty::BackgroundColor, Instant::now())
+                    .unwrap_or(node.style.background);
+                let background = if node_background == Background::Default {
                     background
                 } else {
-                    node.style.background
+                    node_background
                 };
                 let selection_background = effective_selection_background(
                     node.style.selection_background,
                     selection_background,
                 );
+                let node_foreground = self
+                    .paint_color(id, ColorTransitionProperty::Color, Instant::now())
+                    .unwrap_or(node.style.color);
+                let foreground = effective_foreground(node_foreground, foreground);
 
                 for child in &node.children {
                     self.paint_inline_node(
@@ -1357,20 +1573,28 @@ impl Renderer {
                         hit_regions,
                         Some(id),
                         selection_background,
+                        foreground,
                         clip,
                     );
                 }
             }
             Some(DomNode::Div(node)) if node.style.display == LayoutDisplay::Inline => {
-                let background = if node.style.background == Background::Default {
+                let node_background = self
+                    .paint_color(id, ColorTransitionProperty::BackgroundColor, Instant::now())
+                    .unwrap_or(node.style.background);
+                let background = if node_background == Background::Default {
                     background
                 } else {
-                    node.style.background
+                    node_background
                 };
                 let selection_background = effective_selection_background(
                     node.style.selection_background,
                     selection_background,
                 );
+                let node_foreground = self
+                    .paint_color(id, ColorTransitionProperty::Color, Instant::now())
+                    .unwrap_or(node.style.color);
+                let foreground = effective_foreground(node_foreground, foreground);
 
                 for child in &node.children {
                     self.paint_inline_node(
@@ -1381,6 +1605,7 @@ impl Renderer {
                         hit_regions,
                         Some(id),
                         selection_background,
+                        foreground,
                         clip,
                     );
                 }
@@ -1521,7 +1746,7 @@ impl Renderer {
 
         let mut output_frame = content_frame.clone();
         output_frame.apply_selection(self.selection.as_ref());
-        let _ = output_frame.write_diff_to_stdout(self.previous_frame.as_ref());
+        let _ = output_frame.write_diff_to_stdout(self.previous_frame.as_ref(), self.color_profile);
         self.previous_frame = Some(output_frame);
     }
 
@@ -1751,6 +1976,134 @@ fn effective_selection_background(
         .or(inherited)
 }
 
+fn effective_foreground(own: Background, inherited: Background) -> Background {
+    if own == Background::Default {
+        inherited
+    } else {
+        own
+    }
+}
+
+impl ActiveColorTransition {
+    fn color_at(self, now: Instant) -> Background {
+        let progress = (now - self.started_at).as_secs_f32() / self.duration.as_secs_f32();
+        interpolate_background(self.from, self.to, progress.clamp(0.0, 1.0)).unwrap_or(self.to)
+    }
+
+    fn is_complete(self, now: Instant) -> bool {
+        now.duration_since(self.started_at) >= self.duration
+    }
+}
+
+fn interpolate_background(from: Background, to: Background, progress: f32) -> Option<Background> {
+    let from = Oklab::from_rgb(from.rgb()?);
+    let to = Oklab::from_rgb(to.rgb()?);
+    Some(
+        Oklab {
+            l: interpolate_float(from.l, to.l, progress),
+            a: interpolate_float(from.a, to.a, progress),
+            b: interpolate_float(from.b, to.b, progress),
+        }
+        .to_background(),
+    )
+}
+
+fn interpolate_float(from: f32, to: f32, progress: f32) -> f32 {
+    from + (to - from) * progress
+}
+
+#[derive(Clone, Copy)]
+struct Oklab {
+    l: f32,
+    a: f32,
+    b: f32,
+}
+
+impl Oklab {
+    fn from_rgb((red, green, blue): (u8, u8, u8)) -> Self {
+        let red = srgb_to_linear(red);
+        let green = srgb_to_linear(green);
+        let blue = srgb_to_linear(blue);
+
+        let l = 0.412_221_46 * red + 0.536_332_55 * green + 0.051_445_995 * blue;
+        let m = 0.211_903_5 * red + 0.680_699_5 * green + 0.107_396_96 * blue;
+        let s = 0.088_302_46 * red + 0.281_718_85 * green + 0.629_978_7 * blue;
+
+        let l = l.cbrt();
+        let m = m.cbrt();
+        let s = s.cbrt();
+
+        Self {
+            l: 0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+            a: 1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+            b: 0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+        }
+    }
+
+    fn to_background(self) -> Background {
+        let l = self.l + 0.396_337_78 * self.a + 0.215_803_76 * self.b;
+        let m = self.l - 0.105_561_346 * self.a - 0.063_854_17 * self.b;
+        let s = self.l - 0.089_484_18 * self.a - 1.291_485_5 * self.b;
+
+        let l = l * l * l;
+        let m = m * m * m;
+        let s = s * s * s;
+
+        let red = 4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s;
+        let green = -1.268_438 * l + 2.609_757_4 * m - 0.341_319_38 * s;
+        let blue = -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s;
+
+        Background::Rgb(
+            linear_to_srgb(red),
+            linear_to_srgb(green),
+            linear_to_srgb(blue),
+        )
+    }
+}
+
+fn srgb_to_linear(value: u8) -> f32 {
+    let value = value as f32 / 255.0;
+    if value <= 0.040_45 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(value: f32) -> u8 {
+    let value = value.clamp(0.0, 1.0);
+    let value = if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    };
+    (value * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+fn node_style(node: &DomNode) -> Option<&DivStyle> {
+    match node {
+        DomNode::Div(node) => Some(&node.style),
+        DomNode::Span(node) => Some(&node.style),
+        DomNode::Text(_) => None,
+    }
+}
+
+fn style_color(style: &DivStyle, property: ColorTransitionProperty) -> Background {
+    match property {
+        ColorTransitionProperty::Color => style.color,
+        ColorTransitionProperty::BackgroundColor => style.background,
+        ColorTransitionProperty::BorderColor => style.border_color,
+    }
+}
+
+fn transition_property_name(property: ColorTransitionProperty) -> &'static str {
+    match property {
+        ColorTransitionProperty::Color => "color",
+        ColorTransitionProperty::BackgroundColor => "background-color",
+        ColorTransitionProperty::BorderColor => "border-color",
+    }
+}
+
 fn has_border(style: &DivStyle) -> bool {
     style.border_top != BorderStyle::None
         || style.border_right != BorderStyle::None
@@ -1905,6 +2258,7 @@ fn write_inline_text(
     hit_regions: &mut Vec<HitRegion>,
     hit_target: Option<u32>,
     selection_background: Option<Background>,
+    foreground: Background,
     clip: ClipBounds,
 ) {
     for character in text.chars() {
@@ -1921,7 +2275,15 @@ fn write_inline_text(
 
         let x = cursor.x + cursor.col;
         let y = cursor.y + cursor.row;
-        frame.write_char(x, y, character, background, selection_background, clip);
+        frame.write_char(
+            x,
+            y,
+            character,
+            background,
+            foreground,
+            selection_background,
+            clip,
+        );
         if let Some(hit_target) = hit_target {
             push_hit_region(hit_regions, hit_target, ClipRect::new(x, y, 1, 1), clip);
         }
@@ -2043,6 +2405,7 @@ impl Frame {
         x: i32,
         y: i32,
         text: &str,
+        foreground: Background,
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
@@ -2065,6 +2428,7 @@ impl Frame {
                 if visible {
                     let index = row as usize * self.width + col as usize;
                     self.cells[index].character = character;
+                    self.cells[index].foreground = foreground;
                     self.cells[index].selection_order = Some(selection_order);
                     if selection_background.is_some() {
                         self.cells[index].selection_background = selection_background;
@@ -2081,6 +2445,7 @@ impl Frame {
         y: i32,
         character: char,
         background: Background,
+        foreground: Background,
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
@@ -2100,6 +2465,7 @@ impl Frame {
 
         let index = y as usize * self.width + x as usize;
         self.cells[index].character = character;
+        self.cells[index].foreground = foreground;
         self.cells[index].selection_order = Some(selection_order);
         if background != Background::Default {
             self.cells[index].background = background;
@@ -2113,6 +2479,7 @@ impl Frame {
         &mut self,
         rect: ClipRect,
         style: &DivStyle,
+        border_color: Background,
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
@@ -2131,7 +2498,7 @@ impl Frame {
                     x,
                     top,
                     border_char_at(style, x == left, x == right, true, false),
-                    style.border_color,
+                    border_color,
                     selection_background,
                     clip,
                 );
@@ -2144,7 +2511,7 @@ impl Frame {
                     x,
                     bottom,
                     border_char_at(style, x == left, x == right, false, true),
-                    style.border_color,
+                    border_color,
                     selection_background,
                     clip,
                 );
@@ -2167,7 +2534,7 @@ impl Frame {
                     left,
                     y,
                     border_glyphs(style.border_left).vertical,
-                    style.border_color,
+                    border_color,
                     selection_background,
                     clip,
                 );
@@ -2190,7 +2557,7 @@ impl Frame {
                     right,
                     y,
                     border_glyphs(style.border_right).vertical,
-                    style.border_color,
+                    border_color,
                     selection_background,
                     clip,
                 );
@@ -2225,20 +2592,24 @@ impl Frame {
         }
     }
 
-    fn write_diff_to_stdout(&self, previous: Option<&Frame>) -> io::Result<()> {
+    fn write_diff_to_stdout(
+        &self,
+        previous: Option<&Frame>,
+        color_profile: TermProfile,
+    ) -> io::Result<()> {
         let mut out = io::stdout().lock();
         write_synchronized_output_begin(&mut out)?;
         let result: io::Result<()> = (|| {
             write!(out, "\x1b[?25l")?;
 
             let Some(previous) = previous else {
-                self.write_full_to(&mut out)?;
+                self.write_full_to(&mut out, color_profile)?;
                 return Ok(());
             };
 
             if previous.width != self.width || previous.height != self.height {
                 write!(out, "\x1b[2J")?;
-                self.write_full_to(&mut out)?;
+                self.write_full_to(&mut out, color_profile)?;
                 return Ok(());
             }
 
@@ -2260,7 +2631,7 @@ impl Frame {
                         col += 1;
                     }
 
-                    self.write_span_to(&mut out, row, start, col)?;
+                    self.write_span_to(&mut out, row, start, col, color_profile)?;
                 }
             }
 
@@ -2380,11 +2751,11 @@ impl Frame {
         order
     }
 
-    fn write_full_to(&self, out: &mut impl Write) -> io::Result<()> {
+    fn write_full_to(&self, out: &mut impl Write, color_profile: TermProfile) -> io::Result<()> {
         write!(out, "\x1b[H")?;
 
         for row in 0..self.height {
-            self.write_span_to(out, row, 0, self.width)?;
+            self.write_span_to(out, row, 0, self.width, color_profile)?;
         }
 
         Ok(())
@@ -2396,6 +2767,7 @@ impl Frame {
         row: usize,
         start_col: usize,
         end_col: usize,
+        color_profile: TermProfile,
     ) -> io::Result<()> {
         if start_col >= end_col {
             return Ok(());
@@ -2419,11 +2791,11 @@ impl Frame {
                 current_reversed = cell.reversed;
             }
             if background != current_background {
-                write!(out, "{}", background.ansi_bg())?;
+                write!(out, "{}", background.ansi_bg(color_profile))?;
                 current_background = background;
             }
             if foreground != current_foreground {
-                write!(out, "{}", foreground.ansi_fg())?;
+                write!(out, "{}", foreground.ansi_fg(color_profile))?;
                 current_foreground = foreground;
             }
             write!(out, "{}", cell.character)?;
@@ -2562,10 +2934,29 @@ fn measure_inline_text(text: &str, cursor: &mut InlineMeasureCursor) {
     }
 }
 
-pub(crate) fn renderer_loop(rx: Receiver<RenderCommand>) {
-    let mut renderer = Renderer::new();
+pub(crate) fn renderer_loop(
+    rx: Receiver<RenderCommand>,
+    transition_events: Arc<Mutex<VecDeque<TransitionEvent>>>,
+) {
+    let mut renderer = Renderer::new(transition_events);
 
-    while let Ok(command) = rx.recv() {
+    loop {
+        let command = if renderer.has_active_transitions() {
+            match rx.recv_timeout(Duration::from_millis(16)) {
+                Ok(command) => command,
+                Err(RecvTimeoutError::Timeout) => {
+                    renderer.render();
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            match rx.recv() {
+                Ok(command) => command,
+                Err(_) => break,
+            }
+        };
+
         if !renderer.apply(command) {
             break;
         }

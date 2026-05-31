@@ -23,10 +23,12 @@ export type PaintCannonEventType = KeyboardEventType | 'resize';
 export type KeyboardEventListener = (event: KeyboardEvent) => void;
 export type ResizeEventListener = (event: PaintResizeEvent) => void;
 export type MouseElementEventType = 'click' | 'mouseenter' | 'mouseleave' | 'mousemove';
-export type ElementEventType = MouseElementEventType | 'scroll';
+export type TransitionElementEventType = 'transitionstart' | 'transitionend';
+export type ElementEventType = MouseElementEventType | TransitionElementEventType | 'scroll';
 export type MouseEventListener = (event: PaintMouseEvent) => void;
 export type ScrollEventListener = (event: PaintScrollEvent) => void;
-type ElementEventListener = MouseEventListener | ScrollEventListener;
+export type TransitionEventListener = (event: PaintTransitionEvent) => void;
+type ElementEventListener = MouseEventListener | ScrollEventListener | TransitionEventListener;
 export type ClickEventListener = MouseEventListener;
 
 export interface KeyboardEvent {
@@ -56,6 +58,12 @@ export interface TerminalMouseEvent {
 export interface TerminalResizeEvent {
   cols: number;
   rows: number;
+}
+
+export interface NativeTransitionEvent {
+  type: TransitionElementEventType;
+  targetId: number;
+  propertyName: string;
 }
 
 export interface NativeClickEvent {
@@ -110,6 +118,7 @@ export interface NativePaintCannon {
   drainKeyboardEvents(): KeyboardEvent[];
   drainMouseEvents(): TerminalMouseEvent[];
   drainResizeEvents(): TerminalResizeEvent[];
+  drainTransitionEvents(): NativeTransitionEvent[];
   clickEventForMouseClick(
     x: number,
     y: number,
@@ -735,6 +744,13 @@ export class PaintCannon {
       }
     }
 
+    const transitionEvents = this.binding.drainTransitionEvents();
+    for (const event of transitionEvents) {
+      if (this.dispatchTransitionEvent(event)) {
+        handledAnyEvent = true;
+      }
+    }
+
     if (this.captureMouse) {
       const mouseEvents = this.binding.drainMouseEvents();
       for (const event of mouseEvents) {
@@ -759,6 +775,8 @@ export class PaintCannon {
     return (
       this.keyboardListenerCount() > 0 ||
       this.resizeEventListeners.size > 0 ||
+      this.hasElementEventListeners('transitionstart') ||
+      this.hasElementEventListeners('transitionend') ||
       !this.captureCtrlZ ||
       this.captureMouse
     );
@@ -1018,6 +1036,36 @@ export class PaintCannon {
     return true;
   }
 
+  private dispatchTransitionEvent(nativeEvent: NativeTransitionEvent): boolean {
+    const target = this.elements.get(nativeEvent.targetId);
+    if (target === undefined) {
+      return false;
+    }
+
+    const event = new PaintTransitionEvent({
+      type: nativeEvent.type,
+      target,
+      propertyName: nativeEvent.propertyName,
+    });
+
+    let currentTarget: PaintElement | undefined = target;
+    while (currentTarget !== undefined) {
+      event.setCurrentTarget(currentTarget);
+      const listeners = Array.from(
+        this.elementEventListeners.get(currentTarget.id)?.[nativeEvent.type] ?? [],
+      );
+      for (const listener of listeners) {
+        (listener as TransitionEventListener)(event);
+        if (event.propagationStopped) {
+          return true;
+        }
+      }
+      currentTarget = this.parents.get(currentTarget.id);
+    }
+
+    return true;
+  }
+
   private dispatchClickEvent(nativeEvent: NativeClickEvent): void {
     const target = this.elements.get(nativeEvent.targetId);
     if (target === undefined) {
@@ -1069,6 +1117,12 @@ interface PaintScrollEventInit {
   scrollHeight: number;
   deltaX: number;
   deltaY: number;
+}
+
+interface PaintTransitionEventInit {
+  type: TransitionElementEventType;
+  target: PaintElement;
+  propertyName: string;
 }
 
 export class PaintMouseEvent {
@@ -1159,6 +1213,34 @@ export class PaintResizeEvent {
   }
 }
 
+export class PaintTransitionEvent {
+  readonly type: TransitionElementEventType;
+  readonly target: PaintElement;
+  currentTarget: PaintElement;
+  readonly propertyName: string;
+  defaultPrevented = false;
+  propagationStopped = false;
+
+  constructor(event: PaintTransitionEventInit) {
+    this.type = event.type;
+    this.target = event.target;
+    this.currentTarget = event.target;
+    this.propertyName = event.propertyName;
+  }
+
+  preventDefault(): void {
+    this.defaultPrevented = true;
+  }
+
+  stopPropagation(): void {
+    this.propagationStopped = true;
+  }
+
+  setCurrentTarget(element: PaintElement): void {
+    this.currentTarget = element;
+  }
+}
+
 export class DivElement {
   readonly ownerDocument: PaintCannon;
   readonly style: CSSStyleDeclaration;
@@ -1219,12 +1301,14 @@ export class DivElement {
 
   addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   addEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   addEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
   removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
   }
@@ -1290,12 +1374,14 @@ export class SpanElement {
 
   addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   addEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   addEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
   removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
   }
@@ -1577,6 +1663,14 @@ export class CSSStyleDeclaration {
     this.setProperty('border-color', value);
   }
 
+  get color(): string {
+    return this.getPropertyValue('color');
+  }
+
+  set color(value: string) {
+    this.setProperty('color', value);
+  }
+
   get backgroundColor(): string {
     return this.getPropertyValue('background-color');
   }
@@ -1591,6 +1685,14 @@ export class CSSStyleDeclaration {
 
   set selectionBackgroundColor(value: string) {
     this.setProperty('selection-background-color', value);
+  }
+
+  get transition(): string {
+    return this.getPropertyValue('transition');
+  }
+
+  set transition(value: string) {
+    this.setProperty('transition', value);
   }
 
   get gridTemplateColumns(): string {
@@ -1697,11 +1799,13 @@ function assertPaintNode(value: unknown): asserts value is PaintNode {
 function isElementEventType(type: string): type is ElementEventType {
   return (
     type === 'click' ||
-    type === 'mouseenter' ||
-    type === 'mouseleave' ||
-    type === 'mousemove' ||
-    type === 'scroll'
-  );
+      type === 'mouseenter' ||
+      type === 'mouseleave' ||
+      type === 'mousemove' ||
+      type === 'transitionstart' ||
+      type === 'transitionend' ||
+      type === 'scroll'
+    );
 }
 
 function isAxisScrollable(value: string): boolean {

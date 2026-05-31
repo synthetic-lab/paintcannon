@@ -13,6 +13,7 @@ libc = "0.2"
 napi = { version = "3", default-features = false, features = ["napi4"] }
 napi-derive = "3"
 taffy = "0.10"
+termprofile = { version = "0.2", features = ["color-cache", "convert", "terminfo"] }
 
 [build-dependencies]
 napi-build = "2"
