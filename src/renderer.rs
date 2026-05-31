@@ -1399,16 +1399,23 @@ impl Renderer {
                 frame.fill_rect(bounds, background, selection_background, clip);
                 frame.clear_chunky_rounded_corners(bounds, &node.style, clip);
 
-                let child_clip =
-                    child_clip_for(node.style.overflow_x, node.style.overflow_y, bounds, clip);
+                let content_bounds = content_box_rect(bounds, &node.style);
+                let child_clip = child_clip_for(
+                    node.style.overflow_x,
+                    node.style.overflow_y,
+                    content_bounds,
+                    clip,
+                );
                 let child_x = x - scroll_offset(node.style.overflow_x, node.scroll_left);
                 let child_y = y - scroll_offset(node.style.overflow_y, node.scroll_top);
                 if self.is_inline_container(node) {
                     self.paint_inline_children(
                         &node.children,
-                        bounds.left - scroll_offset_cells(node.style.overflow_x, node.scroll_left),
-                        bounds.top - scroll_offset_cells(node.style.overflow_y, node.scroll_top),
-                        bounds.width(),
+                        content_bounds.left
+                            - scroll_offset_cells(node.style.overflow_x, node.scroll_left),
+                        content_bounds.top
+                            - scroll_offset_cells(node.style.overflow_y, node.scroll_top),
+                        content_bounds.width(),
                         frame,
                         hit_regions,
                         Some(id),
@@ -1463,16 +1470,23 @@ impl Renderer {
                 push_hit_region(hit_regions, id, bounds, clip);
                 frame.fill_rect(bounds, background, selection_background, clip);
                 frame.clear_chunky_rounded_corners(bounds, &node.style, clip);
-                let child_clip =
-                    child_clip_for(node.style.overflow_x, node.style.overflow_y, bounds, clip);
+                let content_bounds = content_box_rect(bounds, &node.style);
+                let child_clip = child_clip_for(
+                    node.style.overflow_x,
+                    node.style.overflow_y,
+                    content_bounds,
+                    clip,
+                );
                 let child_x = x - scroll_offset(node.style.overflow_x, node.scroll_left);
                 let child_y = y - scroll_offset(node.style.overflow_y, node.scroll_top);
                 if self.span_uses_inline_layout(node) {
                     self.paint_inline_children(
                         &node.children,
-                        bounds.left - scroll_offset_cells(node.style.overflow_x, node.scroll_left),
-                        bounds.top - scroll_offset_cells(node.style.overflow_y, node.scroll_top),
-                        bounds.width(),
+                        content_bounds.left
+                            - scroll_offset_cells(node.style.overflow_x, node.scroll_left),
+                        content_bounds.top
+                            - scroll_offset_cells(node.style.overflow_y, node.scroll_top),
+                        content_bounds.width(),
                         frame,
                         hit_regions,
                         Some(id),
@@ -2105,6 +2119,20 @@ fn child_clip_for(
     clip.intersect(ClipBounds::from_rect_axes(bounds, clips_x, clips_y))
 }
 
+fn content_box_rect(bounds: ClipRect, style: &DivStyle) -> ClipRect {
+    let left = bounds.left + border_extent_cells(style.border_left);
+    let top = bounds.top + border_extent_cells(style.border_top);
+    let right = bounds.right - border_extent_cells(style.border_right);
+    let bottom = bounds.bottom - border_extent_cells(style.border_bottom);
+
+    ClipRect {
+        left: left.min(right),
+        top: top.min(bottom),
+        right: right.max(left),
+        bottom: bottom.max(top),
+    }
+}
+
 fn content_box_size(node: &DomNode, size: Size<f32>) -> Size<f32> {
     let Some(style) = node_style(node) else {
         return size;
@@ -2132,10 +2160,14 @@ fn content_box_origin(node: &DomNode) -> Point<f32> {
 }
 
 fn border_extent(style: BorderStyle) -> f32 {
+    border_extent_cells(style) as f32
+}
+
+fn border_extent_cells(style: BorderStyle) -> i32 {
     if style == BorderStyle::None {
-        0.0
+        0
     } else {
-        1.0
+        1
     }
 }
 
@@ -3550,6 +3582,14 @@ mod tests {
             .unwrap();
     }
 
+    fn set_scroll_top_direct(renderer: &mut Renderer, id: u32, scroll_top: u32) {
+        match renderer.nodes.get_mut(&id).unwrap() {
+            DomNode::Div(node) => node.scroll_top = scroll_top,
+            DomNode::Span(node) => node.scroll_top = scroll_top,
+            _ => panic!("node is not scrollable"),
+        }
+    }
+
     fn collect_metrics_for(
         renderer: &mut Renderer,
         root: u32,
@@ -3703,6 +3743,70 @@ mod tests {
         assert_ne!(cell.character, '▄');
         assert!(matches!(cell.background, Background::Default));
         assert_eq!(rgb(cell.foreground), Some((255, 0, 0)));
+    }
+
+    #[test]
+    fn scrolling_content_is_clipped_inside_border() {
+        let mut renderer = test_renderer();
+
+        div(&mut renderer, 1);
+        set_width(&mut renderer, 1, CssDimension::Length(8.0));
+        set_height(&mut renderer, 1, CssDimension::Length(5.0));
+        apply(&mut renderer, RenderCommand::SetRoot { id: 1 });
+
+        div(&mut renderer, 2);
+        set_width(&mut renderer, 2, CssDimension::Length(8.0));
+        set_height(&mut renderer, 2, CssDimension::Length(5.0));
+        apply(
+            &mut renderer,
+            RenderCommand::SetOverflowY {
+                id: 2,
+                overflow: LayoutOverflow::Scroll,
+            },
+        );
+        apply(
+            &mut renderer,
+            RenderCommand::SetBorder {
+                id: 2,
+                style: BorderStyle::Rounded,
+            },
+        );
+        append(&mut renderer, 1, 2);
+
+        div(&mut renderer, 3);
+        set_width(&mut renderer, 3, CssDimension::Length(6.0));
+        set_height(&mut renderer, 3, CssDimension::Length(8.0));
+        apply(
+            &mut renderer,
+            RenderCommand::SetBackground {
+                id: 3,
+                background: Background::Rgb(255, 0, 0),
+            },
+        );
+        append(&mut renderer, 2, 3);
+
+        compute_layout(&mut renderer, 1, 8.0, 5.0);
+        set_scroll_top_direct(&mut renderer, 2, 1);
+
+        let mut frame = Frame::new(8, 5, false);
+        let mut hit_regions = Vec::new();
+        renderer.paint_node(
+            1,
+            0.0,
+            0.0,
+            &mut frame,
+            &mut hit_regions,
+            None,
+            Background::Default,
+            ClipBounds::unbounded(),
+        );
+
+        let top_border = frame.cells[1];
+        assert_eq!(top_border.character, '─');
+        assert!(
+            matches!(top_border.background, Background::Default),
+            "top border background should not contain scrolled child background"
+        );
     }
 
     fn build_demo_shaped_scroll_tree(renderer: &mut Renderer) {
