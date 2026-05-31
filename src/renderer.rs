@@ -36,6 +36,9 @@ pub(crate) enum RenderCommand {
     CreateImage {
         id: u32,
     },
+    CreateInput {
+        id: u32,
+    },
     CreateText {
         id: u32,
         text: String,
@@ -43,6 +46,15 @@ pub(crate) enum RenderCommand {
     SetImageSource {
         id: u32,
         src: String,
+    },
+    SetInputValue {
+        id: u32,
+        value: String,
+        cursor: u32,
+    },
+    SetInputFocused {
+        id: u32,
+        focused: bool,
     },
     SetText {
         id: u32,
@@ -339,6 +351,7 @@ enum DomNode {
     Div(DivNode),
     Span(SpanNode),
     Image(ImageNode),
+    Input(InputNode),
     Text(TextNode),
 }
 
@@ -405,6 +418,25 @@ struct ImageData {
     width_px: u32,
     height_px: u32,
     rgb: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct InputNode {
+    style: DivStyle,
+    value: String,
+    cursor: u32,
+    focused: bool,
+}
+
+impl Default for InputNode {
+    fn default() -> Self {
+        Self {
+            style: DivStyle::default(),
+            value: String::new(),
+            cursor: 0,
+            focused: false,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -523,6 +555,13 @@ impl Renderer {
                 }
                 self.nodes.insert(id, DomNode::Image(node));
             }
+            RenderCommand::CreateInput { id } => {
+                let node = InputNode::default();
+                if let Ok(taffy_id) = self.taffy.new_leaf(input_taffy_style(&node)) {
+                    self.taffy_ids.insert(id, taffy_id);
+                }
+                self.nodes.insert(id, DomNode::Input(node));
+            }
             RenderCommand::CreateText { id, text } => {
                 let node = TextNode {
                     metrics: measure_text(&text),
@@ -538,6 +577,12 @@ impl Renderer {
             }
             RenderCommand::SetImageSource { id, src } => {
                 self.set_image_source(id, src);
+            }
+            RenderCommand::SetInputValue { id, value, cursor } => {
+                self.set_input_value(id, value, cursor);
+            }
+            RenderCommand::SetInputFocused { id, focused } => {
+                self.set_input_focused(id, focused);
             }
             RenderCommand::SetRoot { id } => {
                 self.root = Some(id);
@@ -778,6 +823,7 @@ impl Renderer {
             DomNode::Div(node) => Some(&mut node.children),
             DomNode::Span(node) => Some(&mut node.children),
             DomNode::Image(_) => None,
+            DomNode::Input(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -787,6 +833,7 @@ impl Renderer {
             DomNode::Div(node) => Some(&mut node.style),
             DomNode::Span(node) => Some(&mut node.style),
             DomNode::Image(node) => Some(&mut node.style),
+            DomNode::Input(node) => Some(&mut node.style),
             DomNode::Text(_) => None,
         }
     }
@@ -813,6 +860,27 @@ impl Renderer {
             node.image = image;
             self.sync_taffy_style(id);
             self.mark_layout_dirty();
+        }
+    }
+
+    fn set_input_value(&mut self, id: u32, value: String, cursor: u32) {
+        let mut natural_size_changed = false;
+        if let Some(DomNode::Input(node)) = self.nodes.get_mut(&id) {
+            let previous_width = input_natural_width(node);
+            node.value = value;
+            node.cursor = cursor.min(node.value.chars().count() as u32);
+            natural_size_changed = previous_width != input_natural_width(node);
+        }
+
+        if natural_size_changed {
+            self.sync_taffy_style(id);
+            self.mark_layout_dirty();
+        }
+    }
+
+    fn set_input_focused(&mut self, id: u32, focused: bool) {
+        if let Some(DomNode::Input(node)) = self.nodes.get_mut(&id) {
+            node.focused = focused;
         }
     }
 
@@ -1010,6 +1078,7 @@ impl Renderer {
                 node.style.display != LayoutDisplay::Inline && !self.is_inline_child(child)
             }
             DomNode::Image(_) => false,
+            DomNode::Input(_) => false,
             DomNode::Text(_) => false,
         }
     }
@@ -1020,6 +1089,7 @@ impl Renderer {
             Some(DomNode::Div(node)) => node.style.display == LayoutDisplay::Inline,
             Some(DomNode::Span(node)) => node.style.display == LayoutDisplay::Inline,
             Some(DomNode::Image(node)) => node.style.display == LayoutDisplay::Inline,
+            Some(DomNode::Input(node)) => node.style.display == LayoutDisplay::Inline,
             None => false,
         }
     }
@@ -1029,6 +1099,7 @@ impl Renderer {
             DomNode::Div(node) => Some(node.style.to_taffy()),
             DomNode::Span(node) => Some(node.style.to_taffy()),
             DomNode::Image(node) => Some(image_taffy_style(node, query_terminal_size())),
+            DomNode::Input(node) => Some(input_taffy_style(node)),
             DomNode::Text(node) => Some(node.style()),
         }
     }
@@ -1052,6 +1123,7 @@ impl Renderer {
                 &node.children
             }
             DomNode::Image(_) => return Vec::new(),
+            DomNode::Input(_) => return Vec::new(),
             DomNode::Text(_) => return Vec::new(),
         };
 
@@ -1066,6 +1138,7 @@ impl Renderer {
             DomNode::Div(node) => Some((&mut node.scroll_left, &mut node.scroll_top)),
             DomNode::Span(node) => Some((&mut node.scroll_left, &mut node.scroll_top)),
             DomNode::Image(_) => None,
+            DomNode::Input(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -1075,6 +1148,7 @@ impl Renderer {
             DomNode::Div(node) => Some((node.scroll_left, node.scroll_top)),
             DomNode::Span(node) => Some((node.scroll_left, node.scroll_top)),
             DomNode::Image(_) => None,
+            DomNode::Input(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -1109,6 +1183,7 @@ impl Renderer {
                 axis_max_scroll(node.style.overflow_y, max_scroll_top(metrics)),
             )),
             DomNode::Image(_) => None,
+            DomNode::Input(_) => None,
             DomNode::Text(_) => None,
         }
     }
@@ -1238,6 +1313,7 @@ impl Renderer {
             DomNode::Div(node) => Some(node.children.clone()),
             DomNode::Span(node) => Some(node.children.clone()),
             DomNode::Image(_) => None,
+            DomNode::Input(_) => None,
             DomNode::Text(_) => None,
         };
         let Some(children) = children else {
@@ -1329,6 +1405,7 @@ impl Renderer {
                     metrics.scroll_top = node.scroll_top;
                 }
                 DomNode::Image(_) => {}
+                DomNode::Input(_) => {}
                 DomNode::Text(_) => {}
             }
         }
@@ -1541,6 +1618,41 @@ impl Renderer {
                 frame.fill_rect(bounds, Background::Default, selection_background, clip);
                 frame.write_image(node, bounds, selection_background, clip);
             }
+            DomNode::Input(node) => {
+                let selection_background = effective_selection_background(
+                    node.style.selection_background,
+                    selection_background,
+                );
+                let node_foreground = self
+                    .paint_color(id, ColorTransitionProperty::Color, now)
+                    .unwrap_or(node.style.color);
+                let foreground = effective_foreground(node_foreground, foreground);
+                let background = self
+                    .paint_color(id, ColorTransitionProperty::BackgroundColor, now)
+                    .unwrap_or(node.style.background);
+                push_hit_region(hit_regions, id, bounds, clip);
+                frame.fill_rect(bounds, background, selection_background, clip);
+                frame.clear_chunky_rounded_corners(bounds, &node.style, clip);
+                frame.write_input(
+                    content_box_rect(bounds, &node.style),
+                    &node.value,
+                    node.cursor,
+                    node.focused,
+                    foreground,
+                    selection_background,
+                    clip,
+                );
+                let border_color = self
+                    .paint_color(id, ColorTransitionProperty::BorderColor, now)
+                    .unwrap_or(node.style.border_color);
+                frame.stroke_border(
+                    bounds,
+                    &node.style,
+                    border_color,
+                    selection_background,
+                    clip,
+                );
+            }
         }
     }
 
@@ -1629,6 +1741,9 @@ impl Renderer {
                     has_inline_element = true;
                 }
                 Some(DomNode::Image(node)) if node.style.display == LayoutDisplay::Inline => {
+                    has_inline_element = true;
+                }
+                Some(DomNode::Input(node)) if node.style.display == LayoutDisplay::Inline => {
                     has_inline_element = true;
                 }
                 _ => return false,
@@ -1766,7 +1881,19 @@ impl Renderer {
             Some(DomNode::Image(node)) if node.style.display == LayoutDisplay::Inline => {
                 write_inline_image(id, node, cursor, frame, hit_regions, hit_target, clip);
             }
-            Some(DomNode::Div(_)) | Some(DomNode::Image(_)) | None => {}
+            Some(DomNode::Input(node)) if node.style.display == LayoutDisplay::Inline => {
+                write_inline_input(
+                    id,
+                    node,
+                    cursor,
+                    frame,
+                    hit_regions,
+                    hit_target,
+                    foreground,
+                    clip,
+                );
+            }
+            Some(DomNode::Div(_)) | Some(DomNode::Image(_)) | Some(DomNode::Input(_)) | None => {}
         }
     }
 
@@ -2345,6 +2472,7 @@ fn node_style(node: &DomNode) -> Option<&DivStyle> {
         DomNode::Div(node) => Some(&node.style),
         DomNode::Span(node) => Some(&node.style),
         DomNode::Image(node) => Some(&node.style),
+        DomNode::Input(node) => Some(&node.style),
         DomNode::Text(_) => None,
     }
 }
@@ -2572,6 +2700,36 @@ fn image_cell_aspect_ratio(image: &ImageData, terminal_size: TerminalSize) -> Op
     Some(natural.width / natural.height)
 }
 
+fn input_taffy_style(node: &InputNode) -> Style {
+    let mut style = node.style.to_taffy();
+
+    if matches!(node.style.width, CssDimension::Auto) {
+        style.size.width = Dimension::length(input_natural_width(node) as f32);
+    }
+    if matches!(node.style.height, CssDimension::Auto) {
+        style.size.height = Dimension::length(1.0);
+    }
+
+    style
+}
+
+fn input_natural_width(node: &InputNode) -> u32 {
+    node.value.chars().count().max(1) as u32
+}
+
+fn input_cell_size(node: &InputNode) -> (u32, u32) {
+    let width = match node.style.width {
+        CssDimension::Length(value) => value.max(0.0).round() as u32,
+        _ => input_natural_width(node),
+    };
+    let height = match node.style.height {
+        CssDimension::Length(value) => value.max(0.0).round() as u32,
+        _ => 1,
+    };
+
+    (width.max(1), height.max(1))
+}
+
 struct InlineCursor {
     x: i32,
     y: i32,
@@ -2646,6 +2804,39 @@ fn write_inline_image(
     if let Some(hit_target) = hit_target {
         push_hit_region(hit_regions, hit_target, rect, clip);
     }
+    cursor.col += width as i32;
+    cursor.max_row(height as i32);
+}
+
+fn write_inline_input(
+    id: u32,
+    node: &InputNode,
+    cursor: &mut InlineCursor,
+    frame: &mut Frame,
+    hit_regions: &mut Vec<HitRegion>,
+    hit_target: Option<u32>,
+    foreground: Background,
+    clip: ClipBounds,
+) {
+    let (width, height) = input_cell_size(node);
+    if cursor.col + width as i32 > cursor.width {
+        cursor.col = 0;
+        cursor.row += 1;
+    }
+
+    let x = cursor.x + cursor.col;
+    let y = cursor.y + cursor.row;
+    let rect = ClipRect::new(x, y, width as i32, height as i32);
+    frame.write_input(
+        rect,
+        &node.value,
+        node.cursor,
+        node.focused,
+        foreground,
+        None,
+        clip,
+    );
+    push_hit_region(hit_regions, hit_target.unwrap_or(id), rect, clip);
     cursor.col += width as i32;
     cursor.max_row(height as i32);
 }
@@ -2920,6 +3111,61 @@ impl Frame {
                     }
                 }
                 col += 1;
+            }
+        }
+    }
+
+    fn write_input(
+        &mut self,
+        rect: ClipRect,
+        value: &str,
+        cursor: u32,
+        focused: bool,
+        foreground: Background,
+        selection_background: Option<Background>,
+        clip: ClipBounds,
+    ) {
+        let Some(bounds) = clip.clip_rect(rect) else {
+            return;
+        };
+        let width = rect.width().max(0) as usize;
+        if width == 0 || rect.height() <= 0 {
+            return;
+        }
+
+        let chars = value.chars().collect::<Vec<_>>();
+        let cursor = (cursor as usize).min(chars.len());
+        let start = if focused && cursor >= width {
+            cursor + 1 - width
+        } else {
+            0
+        };
+        let cursor_col = focused.then_some(cursor.saturating_sub(start));
+
+        for y in bounds.top..bounds.bottom {
+            for x in bounds.left..bounds.right {
+                if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+                    continue;
+                }
+
+                let local_col = (x - rect.left).max(0) as usize;
+                let char_index = start + local_col;
+                let character = chars.get(char_index).copied().unwrap_or(' ');
+                let index = y as usize * self.width + x as usize;
+                self.cells[index].character = character;
+                self.cells[index].foreground = foreground;
+                self.cells[index].selection_order = None;
+                if let Some(order) =
+                    (char_index < chars.len()).then(|| self.push_selection_unit(y, character))
+                {
+                    self.cells[index].selection_order = Some(order);
+                }
+                if selection_background.is_some() {
+                    self.cells[index].selection_background = selection_background;
+                }
+                if focused && y == rect.top && cursor_col == Some(local_col) {
+                    self.cells[index].reversed = true;
+                }
             }
         }
     }
@@ -3446,6 +3692,9 @@ fn measure_inline_node(id: u32, nodes: &HashMap<u32, DomNode>, cursor: &mut Inli
         Some(DomNode::Image(node)) if node.style.display == LayoutDisplay::Inline => {
             measure_inline_image(node, cursor);
         }
+        Some(DomNode::Input(node)) if node.style.display == LayoutDisplay::Inline => {
+            measure_inline_input(node, cursor);
+        }
         _ => {}
     }
 }
@@ -3475,6 +3724,21 @@ fn measure_inline_image(node: &ImageNode, cursor: &mut InlineMeasureCursor) {
     if width == 0 || height == 0 {
         return;
     }
+    if cursor.col + width > cursor.width {
+        cursor.max_col = cursor.max_col.max(cursor.col);
+        cursor.col = 0;
+        cursor.row += 1;
+    }
+
+    cursor.col += width;
+    cursor.max_col = cursor.max_col.max(cursor.col);
+    if height > 1 {
+        cursor.row += height - 1;
+    }
+}
+
+fn measure_inline_input(node: &InputNode, cursor: &mut InlineMeasureCursor) {
+    let (width, height) = input_cell_size(node);
     if cursor.col + width > cursor.width {
         cursor.max_col = cursor.max_col.max(cursor.col);
         cursor.col = 0;
@@ -3743,6 +4007,45 @@ mod tests {
         assert_ne!(cell.character, '▄');
         assert!(matches!(cell.background, Background::Default));
         assert_eq!(rgb(cell.foreground), Some((255, 0, 0)));
+    }
+
+    #[test]
+    fn focused_input_renders_value_and_cursor() {
+        let mut frame = Frame::new(4, 1, false);
+        frame.write_input(
+            ClipRect::new(0, 0, 4, 1),
+            "abc",
+            1,
+            true,
+            Background::Rgb(255, 255, 255),
+            None,
+            ClipBounds::unbounded(),
+        );
+
+        assert_eq!(frame.cells[0].character, 'a');
+        assert_eq!(frame.cells[1].character, 'b');
+        assert!(frame.cells[1].reversed);
+        assert_eq!(frame.cells[2].character, 'c');
+        assert!(!frame.cells[2].reversed);
+    }
+
+    #[test]
+    fn focused_input_scrolls_value_to_cursor() {
+        let mut frame = Frame::new(3, 1, false);
+        frame.write_input(
+            ClipRect::new(0, 0, 3, 1),
+            "abcd",
+            4,
+            true,
+            Background::Rgb(255, 255, 255),
+            None,
+            ClipBounds::unbounded(),
+        );
+
+        assert_eq!(frame.cells[0].character, 'c');
+        assert_eq!(frame.cells[1].character, 'd');
+        assert_eq!(frame.cells[2].character, ' ');
+        assert!(frame.cells[2].reversed);
     }
 
     #[test]

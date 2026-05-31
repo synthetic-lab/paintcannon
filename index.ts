@@ -129,6 +129,8 @@ export interface NativeBatchCommand {
   child?: number;
   text?: string;
   src?: string;
+  cursor?: number;
+  focused?: boolean;
   property?: string;
   value?: string;
 }
@@ -142,9 +144,12 @@ export interface NativePaintCannon {
   createDiv(): number;
   createSpan(): number;
   createImage(): number;
+  createInput(): number;
   createTextNode(text: string): number;
   setTextNodeValue(id: number, text: string): void;
   setImageSource(id: number, src: string): void;
+  setInputValue(id: number, value: string, cursor: number): void;
+  setInputFocused(id: number, focused: boolean): void;
   setRoot(id: number): void;
   appendChild(parent: number, child: number): void;
   setStyleProperty(id: number, property: string, value: string): void;
@@ -186,7 +191,7 @@ export interface NativeBinding {
   ) => NativePaintCannon;
 }
 
-export type PaintElement = DivElement | SpanElement | ImageElement;
+export type PaintElement = DivElement | SpanElement | ImageElement | InputElement;
 export type PaintNode = PaintElement | TextNode;
 
 export const native: NativeBinding = loadNativeBinding();
@@ -208,6 +213,8 @@ export class PaintCannon {
   private readonly captureCtrlZ: boolean;
   private readonly captureMouse: boolean;
   private readonly animationFrameCallbacks = new Map<number, AnimationFrameCallback>();
+  private readonly inputElements: InputElement[] = [];
+  private focusedInput: InputElement | undefined;
   private readonly keyboardEventListeners: Record<KeyboardEventType, Set<KeyboardEventListener>> = {
     keydown: new Set(),
     keyup: new Set(),
@@ -253,6 +260,7 @@ export class PaintCannon {
   createElement(tagName: 'div'): DivElement;
   createElement(tagName: 'span'): SpanElement;
   createElement(tagName: 'img'): ImageElement;
+  createElement(tagName: 'input'): InputElement;
   createElement(tagName: string): PaintElement {
     if (tagName === 'div') {
       const element = new DivElement(
@@ -284,8 +292,20 @@ export class PaintCannon {
       this.registerElement(element);
       return element;
     }
+    if (tagName === 'input') {
+      const element = new InputElement(
+        this,
+        this.createNativeInput(),
+        (id, value, cursor) => this.setNativeInputValue(id, value, cursor),
+        (id, focused) => this.setNativeInputFocused(id, focused),
+        (id, property, value) => this.setNativeStyleProperty(id, property, value),
+      );
+      this.registerElement(element);
+      this.inputElements.push(element);
+      return element;
+    }
 
-    throw new Error(`paintcannon only supports <div>, <span>, and <img> right now, got <${tagName}>`);
+    throw new Error(`paintcannon only supports <div>, <span>, <img>, and <input> right now, got <${tagName}>`);
   }
 
   createTextNode(data: string): TextNode {
@@ -503,7 +523,7 @@ export class PaintCannon {
   }
 
   private setParent(child: PaintNode, parent: PaintElement): void {
-    if (child instanceof DivElement || child instanceof SpanElement || child instanceof ImageElement) {
+    if (child instanceof DivElement || child instanceof SpanElement || child instanceof ImageElement || child instanceof InputElement) {
       this.parents.set(child.id, parent);
     }
   }
@@ -574,6 +594,16 @@ export class PaintCannon {
     return id;
   }
 
+  private createNativeInput(): number {
+    if (!this.isTransactionActive()) {
+      return this.binding.createInput();
+    }
+
+    const id = this.allocateTemporaryId();
+    this.batchCommands.push({ type: 'createInput', id });
+    return id;
+  }
+
   private createNativeTextNode(text: string): number {
     if (!this.isTransactionActive()) {
       return this.binding.createTextNode(text);
@@ -600,6 +630,24 @@ export class PaintCannon {
     }
 
     this.binding.setImageSource(id, src);
+  }
+
+  private setNativeInputValue(id: number, value: string, cursor: number): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'setInputValue', id, value, cursor });
+      return;
+    }
+
+    this.binding.setInputValue(id, value, cursor);
+  }
+
+  private setNativeInputFocused(id: number, focused: boolean): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'setInputFocused', id, focused });
+      return;
+    }
+
+    this.binding.setInputFocused(id, focused);
   }
 
   private setNativeRoot(id: number): void {
@@ -699,7 +747,7 @@ export class PaintCannon {
       this.elements.set(element.id, element);
     }
     for (const node of this.batchNodes.values()) {
-      if (node instanceof DivElement || node instanceof SpanElement || node instanceof ImageElement) {
+      if (node instanceof DivElement || node instanceof SpanElement || node instanceof ImageElement || node instanceof InputElement) {
         this.elements.set(node.id, node);
       }
     }
@@ -795,6 +843,10 @@ export class PaintCannon {
           return;
         }
 
+        if (this.handleDefaultInputEvent(event)) {
+          handledAnyEvent = true;
+        }
+
         const listeners = Array.from(this.keyboardEventListeners[event.type] ?? []);
         for (const listener of listeners) {
           listener(event);
@@ -845,6 +897,7 @@ export class PaintCannon {
       this.resizeEventListeners.size > 0 ||
       this.hasElementEventListeners('transitionstart') ||
       this.hasElementEventListeners('transitionend') ||
+      this.inputElements.length > 0 ||
       !this.captureCtrlZ ||
       this.captureMouse
     );
@@ -869,6 +922,83 @@ export class PaintCannon {
     }
 
     return false;
+  }
+
+  private handleDefaultInputEvent(event: KeyboardEvent): boolean {
+    if (event.type !== 'keydown') {
+      return false;
+    }
+
+    if (!event.ctrlKey && !event.altKey && !event.metaKey && event.key === 'Tab') {
+      return this.focusNextInput(event.shiftKey ? -1 : 1);
+    }
+
+    const input = this.focusedInput;
+    if (input === undefined || event.ctrlKey || event.altKey || event.metaKey) {
+      return false;
+    }
+
+    switch (event.key) {
+      case 'Backspace':
+        return input.deleteBackward();
+      case 'Delete':
+        return input.deleteForward();
+      case 'ArrowLeft':
+        input.moveCursor(-1);
+        return true;
+      case 'ArrowRight':
+        input.moveCursor(1);
+        return true;
+      case 'Home':
+        input.cursorToStart();
+        return true;
+      case 'End':
+        input.cursorToEnd();
+        return true;
+      default:
+        if (event.key.length === 1) {
+          input.insertText(event.key);
+          return true;
+        }
+        return false;
+    }
+  }
+
+  focusInput(element: InputElement): void {
+    if (this.focusedInput === element) {
+      return;
+    }
+
+    this.focusedInput?.setFocused(false);
+    this.focusedInput = element;
+    element.setFocused(true);
+    this.render();
+  }
+
+  blurInput(element: InputElement): void {
+    if (this.focusedInput !== element) {
+      return;
+    }
+
+    element.setFocused(false);
+    this.focusedInput = undefined;
+    this.render();
+  }
+
+  private focusNextInput(direction: 1 | -1): boolean {
+    if (this.inputElements.length === 0) {
+      return false;
+    }
+
+    const currentIndex = this.focusedInput === undefined
+      ? -1
+      : this.inputElements.indexOf(this.focusedInput);
+    const start = currentIndex < 0
+      ? (direction === 1 ? -1 : 0)
+      : currentIndex;
+    const nextIndex = (start + direction + this.inputElements.length) % this.inputElements.length;
+    this.focusInput(this.inputElements[nextIndex]);
+    return true;
   }
 
   private registerElement(element: PaintElement): void {
@@ -928,12 +1058,12 @@ export class PaintCannon {
       return false;
     }
 
-    if (input.type === 'click' && !hasClick) {
-      return false;
-    }
-
     const targetId = this.binding.targetIdForPoint(input.x, input.y);
     const target = targetId === null ? undefined : this.elements.get(targetId);
+
+    if (input.type === 'click' && !hasClick && !(target instanceof InputElement)) {
+      return false;
+    }
 
     if (input.type === 'mousemove') {
       if (hasMouseEnter || hasMouseLeave) {
@@ -946,8 +1076,16 @@ export class PaintCannon {
     }
 
     if (input.type === 'click' && target !== undefined) {
-      this.dispatchMouseEvent('click', target, input, true);
-      return true;
+      let handled = false;
+      if (target instanceof InputElement) {
+        this.focusInput(target);
+        handled = true;
+      }
+      if (hasClick) {
+        this.dispatchMouseEvent('click', target, input, true);
+        handled = true;
+      }
+      return handled;
     }
 
     return false;
@@ -1497,6 +1635,136 @@ export class ImageElement {
   }
 }
 
+export class InputElement {
+  readonly ownerDocument: PaintCannon;
+  readonly style: CSSStyleDeclaration;
+  id: number;
+  private inputType = 'text';
+  private inputValue = '';
+  private cursor = 0;
+  private focused = false;
+
+  constructor(
+    owner: PaintCannon,
+    id: number,
+    private readonly setNativeInputValue: (id: number, value: string, cursor: number) => void,
+    private readonly setNativeInputFocused: (id: number, focused: boolean) => void,
+    setNativeStyleProperty: (id: number, property: string, value: string) => void,
+  ) {
+    this.ownerDocument = owner;
+    this.id = id;
+    this.style = new CSSStyleDeclaration(
+      () => this.id,
+      setNativeStyleProperty,
+    );
+  }
+
+  get type(): string {
+    return this.inputType;
+  }
+
+  set type(value: string) {
+    const next = String(value);
+    if (next !== 'text') {
+      throw new Error(`paintcannon only supports <input type="text"> right now, got "${next}"`);
+    }
+    this.inputType = next;
+  }
+
+  get value(): string {
+    return this.inputValue;
+  }
+
+  set value(value: string) {
+    this.inputValue = String(value);
+    this.cursor = Array.from(this.inputValue).length;
+    this.syncValue();
+  }
+
+  focus(): void {
+    this.ownerDocument.focusInput(this);
+  }
+
+  blur(): void {
+    this.ownerDocument.blurInput(this);
+  }
+
+  insertText(text: string): void {
+    const chars = Array.from(this.inputValue);
+    const insert = Array.from(text);
+    chars.splice(this.cursor, 0, ...insert);
+    this.inputValue = chars.join('');
+    this.cursor += insert.length;
+    this.syncValue();
+  }
+
+  deleteBackward(): boolean {
+    if (this.cursor === 0) {
+      return false;
+    }
+
+    const chars = Array.from(this.inputValue);
+    chars.splice(this.cursor - 1, 1);
+    this.cursor -= 1;
+    this.inputValue = chars.join('');
+    this.syncValue();
+    return true;
+  }
+
+  deleteForward(): boolean {
+    const chars = Array.from(this.inputValue);
+    if (this.cursor >= chars.length) {
+      return false;
+    }
+
+    chars.splice(this.cursor, 1);
+    this.inputValue = chars.join('');
+    this.syncValue();
+    return true;
+  }
+
+  moveCursor(delta: -1 | 1): void {
+    const length = Array.from(this.inputValue).length;
+    this.cursor = Math.max(0, Math.min(length, this.cursor + delta));
+    this.syncValue();
+  }
+
+  cursorToStart(): void {
+    this.cursor = 0;
+    this.syncValue();
+  }
+
+  cursorToEnd(): void {
+    this.cursor = Array.from(this.inputValue).length;
+    this.syncValue();
+  }
+
+  setFocused(focused: boolean): void {
+    if (this.focused === focused) {
+      return;
+    }
+
+    this.focused = focused;
+    this.setNativeInputFocused(this.id, focused);
+  }
+
+  addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
+  addEventListener(type: ElementEventType, listener: ElementEventListener): void {
+    this.ownerDocument.addElementEventListener(this, type, listener);
+  }
+
+  removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
+  removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
+    this.ownerDocument.removeElementEventListener(this, type, listener);
+  }
+
+  private syncValue(): void {
+    this.setNativeInputValue(this.id, this.inputValue, this.cursor);
+  }
+}
+
 export class TextNode {
   readonly ownerDocument: PaintCannon;
 
@@ -1911,13 +2179,13 @@ export class CSSStyleDeclaration {
 }
 
 function assertElement(value: unknown): asserts value is PaintElement {
-  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement)) {
+  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement) && !(value instanceof InputElement)) {
     throw new TypeError('expected a paintcannon element');
   }
 }
 
 function assertPaintNode(value: unknown): asserts value is PaintNode {
-  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement) && !(value instanceof TextNode)) {
+  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement) && !(value instanceof InputElement) && !(value instanceof TextNode)) {
     throw new TypeError('expected a paintcannon node');
   }
 }
