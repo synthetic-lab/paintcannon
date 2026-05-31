@@ -8,6 +8,8 @@ const pc = new PaintCannon({
 });
 
 let count = 0;
+let hovering = false;
+let flashToken = 0;
 
 const root = pc.createElement('div');
 root.style.display = 'flex';
@@ -33,24 +35,43 @@ button.style.borderColor = 'blue';
 button.style.backgroundColor = 'blue';
 button.style.color = 'white';
 button.style.cursor = 'pointer';
+button.style.transition = 'background-color 100ms, border-color 100ms, color 100ms';
 button.appendChild(pc.createTextNode('Increment'));
 
 button.addEventListener('mouseenter', () => {
-  button.style.backgroundColor = 'cyan';
-  button.style.borderColor = 'cyan';
-  button.style.color = 'black';
+  hovering = true;
+  applyButtonColors();
 });
 
 button.addEventListener('mouseleave', () => {
-  button.style.backgroundColor = 'blue';
-  button.style.borderColor = 'blue';
-  button.style.color = 'white';
+  hovering = false;
+  applyButtonColors();
 });
 
 button.addEventListener('click', () => {
   count += 1;
   label.nodeValue = `Count: ${count}`;
+  flashButton();
 });
+
+function applyButtonColors() {
+  button.style.backgroundColor = hovering ? 'cyan' : 'blue';
+  button.style.borderColor = hovering ? 'cyan' : 'blue';
+  button.style.color = hovering ? 'black' : 'white';
+}
+
+function flashButton() {
+  const token = ++flashToken;
+  button.style.backgroundColor = '#f97316';
+  button.style.borderColor = '#f97316';
+  button.style.color = 'white';
+
+  setTimeout(() => {
+    if (token === flashToken) {
+      applyButtonColors();
+    }
+  }, 150);
+}
 
 root.appendChild(label);
 root.appendChild(button);
