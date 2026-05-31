@@ -1529,7 +1529,10 @@ fn measure_inline_text(text: &str, white_space: CssWhiteSpace, cursor: &mut Inli
         if wrap && is_word_start(&chars, index) {
             let word_end = next_word_end(&chars, index);
             let word_width = text_width(&chars[index..word_end]);
-            if cursor.col > 0 && cursor.col + word_width > cursor.width {
+            if word_width <= cursor.width
+                && cursor.col > 0
+                && cursor.col + word_width > cursor.width
+            {
                 cursor.max_col = cursor.max_col.max(cursor.col);
                 cursor.row += 1;
                 cursor.col = 0;
@@ -1578,7 +1581,10 @@ fn layout_inline_text(
         if wrap && is_word_start(&chars, index) {
             let word_end = next_word_end(&chars, index);
             let word_width = text_width(&chars[index..word_end]);
-            if cursor.col > 0 && cursor.col + word_width > cursor.width {
+            if word_width <= cursor.width
+                && cursor.col > 0
+                && cursor.col + word_width > cursor.width
+            {
                 cursor.max_col = cursor.max_col.max(cursor.col);
                 cursor.row += 1;
                 cursor.col = 0;
@@ -2198,6 +2204,27 @@ mod tests {
 
         let layout = arena.layout(textarea);
         assert_eq!(layout.size.width, 5.0);
+        assert_eq!(layout.size.height, 2.0);
+    }
+
+    #[test]
+    fn textarea_force_wraps_long_unbroken_words_at_width() {
+        let mut arena = LayoutArena::new();
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Length(4.0), CssDimension::Auto),
+            "hahahaha",
+        );
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        let layout = arena.layout(textarea);
+        assert_eq!(layout.size.width, 4.0);
         assert_eq!(layout.size.height, 2.0);
     }
 

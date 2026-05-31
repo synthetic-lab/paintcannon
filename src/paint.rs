@@ -1420,6 +1420,31 @@ mod tests {
     }
 
     #[test]
+    fn paints_long_unbroken_textarea_word_across_full_rows() {
+        let mut arena = LayoutArena::new();
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Length(4.0), CssDimension::Length(2.0)),
+            "hahahaha",
+        );
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+        let output = paint_arena(&arena, textarea, 4, 2, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'h');
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, 'a');
+        assert_eq!(output.frame.cell(2, 0).unwrap().character, 'h');
+        assert_eq!(output.frame.cell(3, 0).unwrap().character, 'a');
+        assert_eq!(output.frame.cell(0, 1).unwrap().character, 'h');
+        assert_eq!(output.frame.cell(1, 1).unwrap().character, 'a');
+    }
+
+    #[test]
     fn empty_textarea_paints_wrapped_placeholder() {
         let mut arena = LayoutArena::new();
         let mut style = block_style(CssDimension::Length(5.0), CssDimension::Length(2.0));

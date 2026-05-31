@@ -38,10 +38,10 @@ impl WrappedText {
                 index += 1;
                 continue;
             }
-            if !character.is_whitespace() {
+            if is_word_start(&chars, index) {
                 let word_end = next_word_end(&chars, index);
                 let word_width = text_width(&chars[index..word_end]);
-                if col > 0 && col + word_width > wrap_width {
+                if word_width <= wrap_width && col > 0 && col + word_width > wrap_width {
                     row += 1;
                     col = 0;
                 }
@@ -119,6 +119,10 @@ fn next_word_end(chars: &[char], start: usize) -> usize {
     index
 }
 
+fn is_word_start(chars: &[char], index: usize) -> bool {
+    !chars[index].is_whitespace() && (index == 0 || chars[index - 1].is_whitespace())
+}
+
 fn text_width(chars: &[char]) -> usize {
     chars
         .iter()
@@ -145,6 +149,25 @@ mod tests {
         assert_eq!(layout.cursor_position(7), (1, 2));
         assert_eq!(layout.cursor_after_vertical_move(7, -1), 2);
         assert_eq!(layout.cursor_after_vertical_move(2, 1), 7);
+    }
+
+    #[test]
+    fn long_unbroken_word_wraps_at_width() {
+        let layout = WrappedText::new("hahahaha", 4);
+        let row_text = |row| {
+            layout
+                .glyphs
+                .iter()
+                .filter(|glyph| glyph.row == row)
+                .map(|glyph| glyph.character)
+                .collect::<String>()
+        };
+
+        assert_eq!(row_text(0), "haha");
+        assert_eq!(row_text(1), "haha");
+        assert_eq!(layout.cursor_position(1), (0, 1));
+        assert_eq!(layout.cursor_position(4), (0, 4));
+        assert_eq!(layout.cursor_position(5), (1, 1));
     }
 
     #[test]
