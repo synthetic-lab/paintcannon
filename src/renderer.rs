@@ -41,6 +41,24 @@ pub(crate) enum RenderCommand {
         id: u32,
         overflow: LayoutOverflow,
     },
+    SetOverflowX {
+        id: u32,
+        overflow: LayoutOverflow,
+    },
+    SetOverflowY {
+        id: u32,
+        overflow: LayoutOverflow,
+    },
+    SetScrollOffset {
+        id: u32,
+        scroll_left: u32,
+        scroll_top: u32,
+        response: Sender<Option<ScrollMetrics>>,
+    },
+    GetScrollMetrics {
+        id: u32,
+        response: Sender<Option<ScrollMetrics>>,
+    },
     SetFlexDirection {
         id: u32,
         direction: LayoutFlexDirection,
@@ -205,6 +223,17 @@ pub struct ClickEvent {
 }
 
 #[derive(Clone)]
+#[napi(object)]
+pub struct ScrollMetrics {
+    pub scroll_left: u32,
+    pub scroll_top: u32,
+    pub scroll_width: u32,
+    pub scroll_height: u32,
+    pub client_width: u32,
+    pub client_height: u32,
+}
+
+#[derive(Clone)]
 enum DomNode {
     Div(DivNode),
     Span(SpanNode),
@@ -215,6 +244,8 @@ enum DomNode {
 struct DivNode {
     children: Vec<u32>,
     style: DivStyle,
+    scroll_left: u32,
+    scroll_top: u32,
 }
 
 impl Default for DivNode {
@@ -222,6 +253,8 @@ impl Default for DivNode {
         Self {
             children: Vec::new(),
             style: DivStyle::default(),
+            scroll_left: 0,
+            scroll_top: 0,
         }
     }
 }
@@ -230,6 +263,8 @@ impl Default for DivNode {
 struct SpanNode {
     children: Vec<u32>,
     style: DivStyle,
+    scroll_left: u32,
+    scroll_top: u32,
 }
 
 impl Default for SpanNode {
@@ -240,6 +275,8 @@ impl Default for SpanNode {
         Self {
             children: Vec::new(),
             style,
+            scroll_left: 0,
+            scroll_top: 0,
         }
     }
 }
@@ -268,6 +305,7 @@ struct Renderer {
     nodes: HashMap<u32, DomNode>,
     previous_frame: Option<Frame>,
     hit_regions: Vec<HitRegion>,
+    scroll_metrics: HashMap<u32, ScrollMetrics>,
 }
 
 impl Renderer {
@@ -277,6 +315,7 @@ impl Renderer {
             nodes: HashMap::new(),
             previous_frame: None,
             hit_regions: Vec::new(),
+            scroll_metrics: HashMap::new(),
         }
     }
 
@@ -313,8 +352,31 @@ impl Renderer {
             }
             RenderCommand::SetOverflow { id, overflow } => {
                 if let Some(node) = self.style_mut(id) {
-                    node.overflow = overflow;
+                    node.overflow_x = overflow;
+                    node.overflow_y = overflow;
                 }
+            }
+            RenderCommand::SetOverflowX { id, overflow } => {
+                if let Some(node) = self.style_mut(id) {
+                    node.overflow_x = overflow;
+                }
+            }
+            RenderCommand::SetOverflowY { id, overflow } => {
+                if let Some(node) = self.style_mut(id) {
+                    node.overflow_y = overflow;
+                }
+            }
+            RenderCommand::SetScrollOffset {
+                id,
+                scroll_left,
+                scroll_top,
+                response,
+            } => {
+                let metrics = self.set_scroll_offset(id, scroll_left, scroll_top);
+                let _ = response.send(metrics);
+            }
+            RenderCommand::GetScrollMetrics { id, response } => {
+                let _ = response.send(self.scroll_metrics_for(id));
             }
             RenderCommand::SetFlexDirection { id, direction } => {
                 if let Some(node) = self.style_mut(id) {
@@ -520,6 +582,74 @@ impl Renderer {
         }
     }
 
+    fn scroll_offset_mut(&mut self, id: u32) -> Option<(&mut u32, &mut u32)> {
+        match self.nodes.get_mut(&id)? {
+            DomNode::Div(node) => Some((&mut node.scroll_left, &mut node.scroll_top)),
+            DomNode::Span(node) => Some((&mut node.scroll_left, &mut node.scroll_top)),
+            DomNode::Text(_) => None,
+        }
+    }
+
+    fn scroll_offset(&self, id: u32) -> Option<(u32, u32)> {
+        match self.nodes.get(&id)? {
+            DomNode::Div(node) => Some((node.scroll_left, node.scroll_top)),
+            DomNode::Span(node) => Some((node.scroll_left, node.scroll_top)),
+            DomNode::Text(_) => None,
+        }
+    }
+
+    fn set_scroll_offset(
+        &mut self,
+        id: u32,
+        scroll_left: u32,
+        scroll_top: u32,
+    ) -> Option<ScrollMetrics> {
+        let mut metrics = self.scroll_metrics_for(id)?;
+        let (max_left, max_top) = self.max_scroll_for_node(id, &metrics)?;
+        metrics.scroll_left = scroll_left.min(max_left);
+        metrics.scroll_top = scroll_top.min(max_top);
+
+        if let Some((left, top)) = self.scroll_offset_mut(id) {
+            *left = metrics.scroll_left;
+            *top = metrics.scroll_top;
+        }
+        self.scroll_metrics.insert(id, metrics.clone());
+        Some(metrics)
+    }
+
+    fn max_scroll_for_node(&self, id: u32, metrics: &ScrollMetrics) -> Option<(u32, u32)> {
+        match self.nodes.get(&id)? {
+            DomNode::Div(node) => Some((
+                axis_max_scroll(node.style.overflow_x, max_scroll_left(metrics)),
+                axis_max_scroll(node.style.overflow_y, max_scroll_top(metrics)),
+            )),
+            DomNode::Span(node) => Some((
+                axis_max_scroll(node.style.overflow_x, max_scroll_left(metrics)),
+                axis_max_scroll(node.style.overflow_y, max_scroll_top(metrics)),
+            )),
+            DomNode::Text(_) => None,
+        }
+    }
+
+    fn scroll_metrics_for(&self, id: u32) -> Option<ScrollMetrics> {
+        self.scroll_metrics
+            .get(&id)
+            .cloned()
+            .or_else(|| self.fallback_scroll_metrics(id))
+    }
+
+    fn fallback_scroll_metrics(&self, id: u32) -> Option<ScrollMetrics> {
+        let (scroll_left, scroll_top) = self.scroll_offset(id)?;
+        Some(ScrollMetrics {
+            scroll_left,
+            scroll_top,
+            scroll_width: 0,
+            scroll_height: 0,
+            client_width: 0,
+            client_height: 0,
+        })
+    }
+
     fn render(&mut self) {
         let Some(root) = self.root else {
             return;
@@ -541,6 +671,11 @@ impl Renderer {
             return;
         }
 
+        let mut scroll_metrics = HashMap::new();
+        self.collect_scroll_metrics(root, &taffy, &taffy_ids, &mut scroll_metrics);
+        self.clamp_scroll_offsets(&mut scroll_metrics);
+        self.scroll_metrics = scroll_metrics;
+
         let mut frame = Frame::new(cols as usize, rows as usize);
         let mut hit_regions = Vec::new();
         self.paint_node(
@@ -551,7 +686,7 @@ impl Renderer {
             &taffy_ids,
             &mut frame,
             &mut hit_regions,
-            None,
+            ClipBounds::unbounded(),
         );
         let _ = frame.write_diff_to_stdout(self.previous_frame.as_ref());
         self.previous_frame = Some(frame);
@@ -604,6 +739,119 @@ impl Renderer {
         Some(taffy_id)
     }
 
+    fn collect_scroll_metrics(
+        &self,
+        id: u32,
+        taffy: &TaffyTree<u32>,
+        taffy_ids: &HashMap<u32, NodeId>,
+        metrics: &mut HashMap<u32, ScrollMetrics>,
+    ) {
+        let Some(dom_node) = self.nodes.get(&id) else {
+            return;
+        };
+        let Some(taffy_id) = taffy_ids.get(&id) else {
+            return;
+        };
+        let Ok(layout) = taffy.layout(*taffy_id) else {
+            return;
+        };
+
+        let children = match dom_node {
+            DomNode::Div(node) => Some(&node.children),
+            DomNode::Span(node) => Some(&node.children),
+            DomNode::Text(_) => None,
+        };
+        let Some(children) = children else {
+            return;
+        };
+
+        let client_width = dimension_to_cells(layout.size.width);
+        let client_height = dimension_to_cells(layout.size.height);
+        let mut scroll_width = client_width;
+        let mut scroll_height = client_height;
+
+        if self.is_inline_children(children) {
+            let inline = measure_inline_children(children, client_width.max(1), &self.nodes);
+            scroll_width = scroll_width.max(inline.width);
+            scroll_height = scroll_height.max(inline.height);
+        } else {
+            for child in children {
+                self.collect_scroll_metrics(*child, taffy, taffy_ids, metrics);
+
+                let Some(child_taffy_id) = taffy_ids.get(child) else {
+                    continue;
+                };
+                let Ok(child_layout) = taffy.layout(*child_taffy_id) else {
+                    continue;
+                };
+
+                scroll_width = scroll_width.max(edge_to_cells(
+                    child_layout.location.x + child_layout.size.width,
+                ));
+                scroll_height = scroll_height.max(edge_to_cells(
+                    child_layout.location.y + child_layout.size.height,
+                ));
+            }
+        }
+
+        let (scroll_left, scroll_top) = self.scroll_offset(id).unwrap_or((0, 0));
+        metrics.insert(
+            id,
+            ScrollMetrics {
+                scroll_left,
+                scroll_top,
+                scroll_width,
+                scroll_height,
+                client_width,
+                client_height,
+            },
+        );
+    }
+
+    fn clamp_scroll_offsets(&mut self, metrics: &mut HashMap<u32, ScrollMetrics>) {
+        for (id, metrics) in metrics {
+            let Some(node) = self.nodes.get_mut(id) else {
+                continue;
+            };
+
+            match node {
+                DomNode::Div(node) => {
+                    let max_left = if node.style.overflow_x == LayoutOverflow::Scroll {
+                        max_scroll_left(metrics)
+                    } else {
+                        0
+                    };
+                    let max_top = if node.style.overflow_y == LayoutOverflow::Scroll {
+                        max_scroll_top(metrics)
+                    } else {
+                        0
+                    };
+                    node.scroll_left = node.scroll_left.min(max_left);
+                    node.scroll_top = node.scroll_top.min(max_top);
+                    metrics.scroll_left = node.scroll_left;
+                    metrics.scroll_top = node.scroll_top;
+                }
+                DomNode::Span(node) => {
+                    let max_left = if node.style.overflow_x == LayoutOverflow::Scroll {
+                        max_scroll_left(metrics)
+                    } else {
+                        0
+                    };
+                    let max_top = if node.style.overflow_y == LayoutOverflow::Scroll {
+                        max_scroll_top(metrics)
+                    } else {
+                        0
+                    };
+                    node.scroll_left = node.scroll_left.min(max_left);
+                    node.scroll_top = node.scroll_top.min(max_top);
+                    metrics.scroll_left = node.scroll_left;
+                    metrics.scroll_top = node.scroll_top;
+                }
+                DomNode::Text(_) => {}
+            }
+        }
+    }
+
     fn paint_node(
         &self,
         id: u32,
@@ -613,7 +861,7 @@ impl Renderer {
         taffy_ids: &HashMap<u32, NodeId>,
         frame: &mut Frame,
         hit_regions: &mut Vec<HitRegion>,
-        clip: Option<ClipRect>,
+        clip: ClipBounds,
     ) {
         let Some(dom_node) = self.nodes.get(&id) else {
             return;
@@ -646,12 +894,15 @@ impl Renderer {
                     clip,
                 );
 
-                let child_clip = child_clip_for(node.style.overflow, bounds, clip);
+                let child_clip =
+                    child_clip_for(node.style.overflow_x, node.style.overflow_y, bounds, clip);
+                let child_x = x - scroll_offset(node.style.overflow_x, node.scroll_left);
+                let child_y = y - scroll_offset(node.style.overflow_y, node.scroll_top);
                 if self.is_inline_container(node) {
                     self.paint_inline_children(
                         &node.children,
-                        x.round() as i32,
-                        y.round() as i32,
+                        child_x.round() as i32,
+                        child_y.round() as i32,
                         layout.size.width.round() as i32,
                         frame,
                         hit_regions,
@@ -662,8 +913,8 @@ impl Renderer {
                     for child in &node.children {
                         self.paint_node(
                             *child,
-                            x,
-                            y,
+                            child_x,
+                            child_y,
                             taffy,
                             taffy_ids,
                             frame,
@@ -683,12 +934,15 @@ impl Renderer {
                     node.style.background,
                     clip,
                 );
-                let child_clip = child_clip_for(node.style.overflow, bounds, clip);
+                let child_clip =
+                    child_clip_for(node.style.overflow_x, node.style.overflow_y, bounds, clip);
+                let child_x = x - scroll_offset(node.style.overflow_x, node.scroll_left);
+                let child_y = y - scroll_offset(node.style.overflow_y, node.scroll_top);
                 if self.is_inline_children(&node.children) {
                     self.paint_inline_children(
                         &node.children,
-                        x.round() as i32,
-                        y.round() as i32,
+                        child_x.round() as i32,
+                        child_y.round() as i32,
                         layout.size.width.round() as i32,
                         frame,
                         hit_regions,
@@ -699,8 +953,8 @@ impl Renderer {
                     for child in &node.children {
                         self.paint_node(
                             *child,
-                            x,
-                            y,
+                            child_x,
+                            child_y,
                             taffy,
                             taffy_ids,
                             frame,
@@ -746,7 +1000,7 @@ impl Renderer {
         frame: &mut Frame,
         hit_regions: &mut Vec<HitRegion>,
         hit_target: Option<u32>,
-        clip: Option<ClipRect>,
+        clip: ClipBounds,
     ) {
         let mut cursor = InlineCursor {
             x,
@@ -777,7 +1031,7 @@ impl Renderer {
         frame: &mut Frame,
         hit_regions: &mut Vec<HitRegion>,
         hit_target: Option<u32>,
-        clip: Option<ClipRect>,
+        clip: ClipBounds,
     ) {
         match self.nodes.get(&id) {
             Some(DomNode::Text(node)) => {
@@ -874,6 +1128,14 @@ struct ClipRect {
     bottom: i32,
 }
 
+#[derive(Clone, Copy)]
+struct ClipBounds {
+    left: Option<i32>,
+    top: Option<i32>,
+    right: Option<i32>,
+    bottom: Option<i32>,
+}
+
 impl ClipRect {
     fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
         Self {
@@ -883,20 +1145,76 @@ impl ClipRect {
             bottom: y + height.max(0),
         }
     }
+}
 
-    fn intersect(self, other: Self) -> Option<Self> {
-        let rect = Self {
-            left: self.left.max(other.left),
-            top: self.top.max(other.top),
-            right: self.right.min(other.right),
-            bottom: self.bottom.min(other.bottom),
+impl ClipBounds {
+    fn unbounded() -> Self {
+        Self {
+            left: None,
+            top: None,
+            right: None,
+            bottom: None,
+        }
+    }
+
+    fn from_rect_axes(rect: ClipRect, clip_x: bool, clip_y: bool) -> Self {
+        Self {
+            left: clip_x.then_some(rect.left),
+            right: clip_x.then_some(rect.right),
+            top: clip_y.then_some(rect.top),
+            bottom: clip_y.then_some(rect.bottom),
+        }
+    }
+
+    fn intersect(self, other: Self) -> Self {
+        Self {
+            left: max_option(self.left, other.left),
+            top: max_option(self.top, other.top),
+            right: min_option(self.right, other.right),
+            bottom: min_option(self.bottom, other.bottom),
+        }
+    }
+
+    fn clip_rect(self, rect: ClipRect) -> Option<ClipRect> {
+        let clipped = ClipRect {
+            left: self.left.map_or(rect.left, |left| rect.left.max(left)),
+            top: self.top.map_or(rect.top, |top| rect.top.max(top)),
+            right: self.right.map_or(rect.right, |right| rect.right.min(right)),
+            bottom: self
+                .bottom
+                .map_or(rect.bottom, |bottom| rect.bottom.min(bottom)),
         };
 
-        if rect.left < rect.right && rect.top < rect.bottom {
-            Some(rect)
+        if clipped.left < clipped.right && clipped.top < clipped.bottom {
+            Some(clipped)
         } else {
             None
         }
+    }
+
+    fn contains(self, x: i32, y: i32) -> bool {
+        self.left.is_none_or(|left| x >= left)
+            && self.right.is_none_or(|right| x < right)
+            && self.top.is_none_or(|top| y >= top)
+            && self.bottom.is_none_or(|bottom| y < bottom)
+    }
+}
+
+fn max_option(a: Option<i32>, b: Option<i32>) -> Option<i32> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn min_option(a: Option<i32>, b: Option<i32>) -> Option<i32> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
     }
 }
 
@@ -906,13 +1224,8 @@ impl HitRegion {
     }
 }
 
-fn push_hit_region(
-    hit_regions: &mut Vec<HitRegion>,
-    id: u32,
-    bounds: ClipRect,
-    clip: Option<ClipRect>,
-) {
-    let Some(bounds) = clip.map_or(Some(bounds), |clip| bounds.intersect(clip)) else {
+fn push_hit_region(hit_regions: &mut Vec<HitRegion>, id: u32, bounds: ClipRect, clip: ClipBounds) {
+    let Some(bounds) = clip.clip_rect(bounds) else {
         return;
     };
 
@@ -926,14 +1239,50 @@ fn push_hit_region(
 }
 
 fn child_clip_for(
-    overflow: LayoutOverflow,
+    overflow_x: LayoutOverflow,
+    overflow_y: LayoutOverflow,
     bounds: ClipRect,
-    clip: Option<ClipRect>,
-) -> Option<ClipRect> {
-    match overflow {
-        LayoutOverflow::Visible => clip,
-        LayoutOverflow::Hidden => clip.map_or(Some(bounds), |clip| bounds.intersect(clip)),
+    clip: ClipBounds,
+) -> ClipBounds {
+    let clips_x = overflow_x != LayoutOverflow::Visible;
+    let clips_y = overflow_y != LayoutOverflow::Visible;
+    clip.intersect(ClipBounds::from_rect_axes(bounds, clips_x, clips_y))
+}
+
+fn scroll_offset(overflow: LayoutOverflow, value: u32) -> f32 {
+    if overflow == LayoutOverflow::Scroll {
+        value as f32
+    } else {
+        0.0
     }
+}
+
+fn row_may_intersect_clip(row: i32, clip: ClipBounds) -> bool {
+    clip.top.is_none_or(|top| row >= top) && clip.bottom.is_none_or(|bottom| row < bottom)
+}
+
+fn axis_max_scroll(overflow: LayoutOverflow, value: u32) -> u32 {
+    if overflow == LayoutOverflow::Scroll {
+        value
+    } else {
+        0
+    }
+}
+
+fn max_scroll_left(metrics: &ScrollMetrics) -> u32 {
+    metrics.scroll_width.saturating_sub(metrics.client_width)
+}
+
+fn max_scroll_top(metrics: &ScrollMetrics) -> u32 {
+    metrics.scroll_height.saturating_sub(metrics.client_height)
+}
+
+fn dimension_to_cells(value: f32) -> u32 {
+    value.max(0.0).round() as u32
+}
+
+fn edge_to_cells(value: f32) -> u32 {
+    value.max(0.0).ceil() as u32
 }
 
 struct InlineCursor {
@@ -951,7 +1300,7 @@ fn write_inline_text(
     frame: &mut Frame,
     hit_regions: &mut Vec<HitRegion>,
     hit_target: Option<u32>,
-    clip: Option<ClipRect>,
+    clip: ClipBounds,
 ) {
     for character in text.chars() {
         if character == '\n' {
@@ -997,19 +1346,15 @@ impl Frame {
         width: i32,
         height: i32,
         background: Background,
-        clip: Option<ClipRect>,
+        clip: ClipBounds,
     ) {
         if background == Background::Default || width <= 0 || height <= 0 {
             return;
         }
 
-        let mut bounds = ClipRect::new(x, y, width, height);
-        if let Some(clip) = clip {
-            let Some(clipped) = bounds.intersect(clip) else {
-                return;
-            };
-            bounds = clipped;
-        }
+        let Some(bounds) = clip.clip_rect(ClipRect::new(x, y, width, height)) else {
+            return;
+        };
 
         let left = bounds.left.max(0) as usize;
         let top = bounds.top.max(0) as usize;
@@ -1027,13 +1372,13 @@ impl Frame {
         }
     }
 
-    fn write_text(&mut self, x: i32, y: i32, text: &str, clip: Option<ClipRect>) {
+    fn write_text(&mut self, x: i32, y: i32, text: &str, clip: ClipBounds) {
         for (line_offset, line) in text.lines().enumerate() {
             let row = y + line_offset as i32;
             if row < 0 || row >= self.height as i32 {
                 continue;
             }
-            if clip.is_some_and(|clip| row < clip.top || row >= clip.bottom) {
+            if !row_may_intersect_clip(row, clip) {
                 continue;
             }
 
@@ -1043,7 +1388,7 @@ impl Frame {
                     break;
                 }
 
-                if col >= 0 && clip.is_none_or(|clip| col >= clip.left && col < clip.right) {
+                if col >= 0 && clip.contains(col, row) {
                     let index = row as usize * self.width + col as usize;
                     self.cells[index].character = character;
                 }
@@ -1058,14 +1403,12 @@ impl Frame {
         y: i32,
         character: char,
         background: Background,
-        clip: Option<ClipRect>,
+        clip: ClipBounds,
     ) {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
             return;
         }
-        if clip.is_some_and(|clip| {
-            x < clip.left || x >= clip.right || y < clip.top || y >= clip.bottom
-        }) {
+        if !clip.contains(x, y) {
             return;
         }
 
@@ -1184,6 +1527,11 @@ struct TextMetrics {
     height: usize,
 }
 
+struct InlineMetrics {
+    width: u32,
+    height: u32,
+}
+
 fn measure_text(text: &str) -> TextMetrics {
     let mut width = 0;
     let mut height = 0;
@@ -1196,6 +1544,72 @@ fn measure_text(text: &str) -> TextMetrics {
     TextMetrics {
         width,
         height: height.max(1),
+    }
+}
+
+fn measure_inline_children(
+    children: &[u32],
+    width: u32,
+    nodes: &HashMap<u32, DomNode>,
+) -> InlineMetrics {
+    let mut cursor = InlineMeasureCursor {
+        col: 0,
+        row: 0,
+        width: width.max(1),
+        max_col: 0,
+    };
+
+    for child in children {
+        measure_inline_node(*child, nodes, &mut cursor);
+    }
+
+    InlineMetrics {
+        width: cursor.max_col.max(cursor.col).max(1),
+        height: cursor.row + 1,
+    }
+}
+
+struct InlineMeasureCursor {
+    col: u32,
+    row: u32,
+    width: u32,
+    max_col: u32,
+}
+
+fn measure_inline_node(id: u32, nodes: &HashMap<u32, DomNode>, cursor: &mut InlineMeasureCursor) {
+    match nodes.get(&id) {
+        Some(DomNode::Text(node)) => measure_inline_text(&node.text, cursor),
+        Some(DomNode::Span(node)) if node.style.display == LayoutDisplay::Inline => {
+            for child in &node.children {
+                measure_inline_node(*child, nodes, cursor);
+            }
+        }
+        Some(DomNode::Div(node)) if node.style.display == LayoutDisplay::Inline => {
+            for child in &node.children {
+                measure_inline_node(*child, nodes, cursor);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn measure_inline_text(text: &str, cursor: &mut InlineMeasureCursor) {
+    for character in text.chars() {
+        if character == '\n' {
+            cursor.max_col = cursor.max_col.max(cursor.col);
+            cursor.col = 0;
+            cursor.row += 1;
+            continue;
+        }
+
+        if cursor.col >= cursor.width {
+            cursor.max_col = cursor.max_col.max(cursor.col);
+            cursor.col = 0;
+            cursor.row += 1;
+        }
+
+        cursor.col += 1;
+        cursor.max_col = cursor.max_col.max(cursor.col);
     }
 }
 

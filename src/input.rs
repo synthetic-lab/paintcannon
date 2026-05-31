@@ -44,6 +44,8 @@ pub struct TerminalMouseEvent {
     pub x: u32,
     pub y: u32,
     pub button: u32,
+    pub delta_x: i32,
+    pub delta_y: i32,
     pub ctrl_key: bool,
     pub alt_key: bool,
     pub meta_key: bool,
@@ -425,7 +427,18 @@ fn handle_terminal_mouse_event(
                 mouse_event_from_terminal("mousemove", event, MouseButton::Left),
             );
         }
-        _ => {}
+        MouseEventKind::ScrollUp => {
+            push_mouse_event(events, wheel_event_from_terminal(event, 0, -1));
+        }
+        MouseEventKind::ScrollDown => {
+            push_mouse_event(events, wheel_event_from_terminal(event, 0, 1));
+        }
+        MouseEventKind::ScrollLeft => {
+            push_mouse_event(events, wheel_event_from_terminal(event, -1, 0));
+        }
+        MouseEventKind::ScrollRight => {
+            push_mouse_event(events, wheel_event_from_terminal(event, 1, 0));
+        }
     }
 }
 
@@ -449,6 +462,29 @@ fn mouse_event_from_terminal(
         x: u32::from(event.column),
         y: u32::from(event.row),
         button: mouse_button_value(button),
+        delta_x: 0,
+        delta_y: 0,
+        ctrl_key: modifiers.contains(KeyModifiers::CONTROL),
+        alt_key: modifiers.contains(KeyModifiers::ALT),
+        meta_key: modifiers
+            .intersects(KeyModifiers::META | KeyModifiers::SUPER | KeyModifiers::HYPER),
+        shift_key: modifiers.contains(KeyModifiers::SHIFT),
+    }
+}
+
+fn wheel_event_from_terminal(
+    event: CrosstermMouseEvent,
+    delta_x: i32,
+    delta_y: i32,
+) -> TerminalMouseEvent {
+    let modifiers = event.modifiers;
+    TerminalMouseEvent {
+        r#type: "wheel".to_string(),
+        x: u32::from(event.column),
+        y: u32::from(event.row),
+        button: 0,
+        delta_x,
+        delta_y,
         ctrl_key: modifiers.contains(KeyModifiers::CONTROL),
         alt_key: modifiers.contains(KeyModifiers::ALT),
         meta_key: modifiers

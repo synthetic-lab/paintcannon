@@ -20,8 +20,11 @@ export interface TerminalSize {
 export type AnimationFrameCallback = (timestamp: number) => void;
 export type KeyboardEventType = 'keydown' | 'keyup';
 export type KeyboardEventListener = (event: KeyboardEvent) => void;
-export type ElementEventType = 'click' | 'mouseenter' | 'mouseleave' | 'mousemove';
+export type MouseElementEventType = 'click' | 'mouseenter' | 'mouseleave' | 'mousemove';
+export type ElementEventType = MouseElementEventType | 'scroll';
 export type MouseEventListener = (event: PaintMouseEvent) => void;
+export type ScrollEventListener = (event: PaintScrollEvent) => void;
+type ElementEventListener = MouseEventListener | ScrollEventListener;
 export type ClickEventListener = MouseEventListener;
 
 export interface KeyboardEvent {
@@ -36,10 +39,12 @@ export interface KeyboardEvent {
 }
 
 export interface TerminalMouseEvent {
-  type: 'click' | 'mousemove' | string;
+  type: 'click' | 'mousemove' | 'wheel' | string;
   x: number;
   y: number;
   button: number;
+  deltaX: number;
+  deltaY: number;
   ctrlKey: boolean;
   altKey: boolean;
   metaKey: boolean;
@@ -56,6 +61,15 @@ export interface NativeClickEvent {
   altKey: boolean;
   metaKey: boolean;
   shiftKey: boolean;
+}
+
+export interface NativeScrollMetrics {
+  scrollLeft: number;
+  scrollTop: number;
+  scrollWidth: number;
+  scrollHeight: number;
+  clientWidth: number;
+  clientHeight: number;
 }
 
 export interface NativePaintCannon {
@@ -81,6 +95,8 @@ export interface NativePaintCannon {
     shiftKey: boolean,
   ): NativeClickEvent | null;
   targetIdForPoint(x: number, y: number): number | null;
+  setScrollOffset(id: number, scrollLeft: number, scrollTop: number): NativeScrollMetrics | null;
+  scrollMetrics(id: number): NativeScrollMetrics | null;
   setSyntheticKeyupDelay(delayMs: number): void;
   releaseTerminal(): void;
   captureTerminal(): void;
@@ -122,8 +138,9 @@ export class PaintCannon {
   private readonly parents = new Map<number, PaintElement>();
   private readonly elementEventListeners = new Map<
     number,
-    Partial<Record<ElementEventType, Set<MouseEventListener>>>
+    Partial<Record<ElementEventType, Set<ElementEventListener>>>
   >();
+  private readonly scrollMetrics = new Map<number, NativeScrollMetrics>();
   private hoveredElement: PaintElement | undefined;
   private readonly handleSigcont = () => {
     if (!this.suspendedByPaintCannon || this.stopped) {
@@ -249,7 +266,7 @@ export class PaintCannon {
   addElementEventListener(
     element: PaintElement,
     type: ElementEventType,
-    listener: MouseEventListener,
+    listener: ElementEventListener,
   ): void {
     if (!isElementEventType(type)) {
       throw new Error(`unsupported event type: ${type}`);
@@ -277,7 +294,7 @@ export class PaintCannon {
   removeElementEventListener(
     element: PaintElement,
     type: ElementEventType,
-    listener: MouseEventListener,
+    listener: ElementEventListener,
   ): void {
     if (!isElementEventType(type)) {
       return;
@@ -326,6 +343,7 @@ export class PaintCannon {
     this.elementEventListeners.clear();
     this.elements.clear();
     this.parents.clear();
+    this.scrollMetrics.clear();
     this.hoveredElement = undefined;
     process.off('SIGCONT', this.handleSigcont);
     this.binding.stop();
@@ -335,6 +353,42 @@ export class PaintCannon {
     if (child instanceof DivElement || child instanceof SpanElement) {
       this.parents.set(child.id, parent);
     }
+  }
+
+  getScrollLeft(element: PaintElement): number {
+    return this.getScrollMetrics(element)?.scrollLeft ?? 0;
+  }
+
+  setScrollLeft(element: PaintElement, value: number): void {
+    if (this.setScrollOffset(element, value, this.getScrollTop(element)) !== null) {
+      this.render();
+    }
+  }
+
+  getScrollTop(element: PaintElement): number {
+    return this.getScrollMetrics(element)?.scrollTop ?? 0;
+  }
+
+  setScrollTop(element: PaintElement, value: number): void {
+    if (this.setScrollOffset(element, this.getScrollLeft(element), value) !== null) {
+      this.render();
+    }
+  }
+
+  getScrollWidth(element: PaintElement): number {
+    return this.getScrollMetrics(element)?.scrollWidth ?? 0;
+  }
+
+  getScrollHeight(element: PaintElement): number {
+    return this.getScrollMetrics(element)?.scrollHeight ?? 0;
+  }
+
+  getClientWidth(element: PaintElement): number {
+    return this.getScrollMetrics(element)?.clientWidth ?? 0;
+  }
+
+  getClientHeight(element: PaintElement): number {
+    return this.getScrollMetrics(element)?.clientHeight ?? 0;
   }
 
   private scheduleAnimationFrameTick(): void {
@@ -399,7 +453,7 @@ export class PaintCannon {
       handledAnyEvent = true;
     }
 
-    if (this.captureMouse && this.elementMouseListenerCount() > 0) {
+    if (this.captureMouse) {
       const mouseEvents = this.binding.drainMouseEvents();
       for (const event of mouseEvents) {
         if (this.handleTerminalMouseEvent(event)) {
@@ -419,22 +473,12 @@ export class PaintCannon {
     return this.keyboardEventListeners.keydown.size + this.keyboardEventListeners.keyup.size;
   }
 
-  private elementMouseListenerCount(): number {
-    let count = 0;
-    for (const eventListeners of this.elementEventListeners.values()) {
-      for (const listeners of Object.values(eventListeners)) {
-        count += listeners?.size ?? 0;
-      }
-    }
-    return count;
-  }
-
   private shouldPumpInputEvents(): boolean {
     return (
       this.keyboardListenerCount() > 0 ||
       !this.captureCtrlC ||
       !this.captureCtrlZ ||
-      (this.captureMouse && this.elementMouseListenerCount() > 0)
+      this.captureMouse
     );
   }
 
@@ -469,7 +513,49 @@ export class PaintCannon {
     this.elements.set(element.id, element);
   }
 
+  private getScrollMetrics(element: PaintElement): NativeScrollMetrics | undefined {
+    const metrics = this.binding.scrollMetrics(element.id);
+    if (metrics !== null) {
+      this.scrollMetrics.set(element.id, metrics);
+      return metrics;
+    }
+    return this.scrollMetrics.get(element.id);
+  }
+
+  private setScrollOffset(
+    element: PaintElement,
+    left: number,
+    top: number,
+  ): NativeScrollMetrics | null {
+    const nextLeft = normalizeScrollOffset(left);
+    const nextTop = normalizeScrollOffset(top);
+    const before = this.getScrollMetrics(element);
+    const metrics = this.binding.setScrollOffset(element.id, nextLeft, nextTop);
+    if (metrics === null) {
+      return null;
+    }
+
+    this.scrollMetrics.set(element.id, metrics);
+    if (
+      before !== undefined &&
+      before.scrollLeft === metrics.scrollLeft &&
+      before.scrollTop === metrics.scrollTop &&
+      before.scrollWidth === metrics.scrollWidth &&
+      before.scrollHeight === metrics.scrollHeight &&
+      before.clientWidth === metrics.clientWidth &&
+      before.clientHeight === metrics.clientHeight
+    ) {
+      return null;
+    }
+
+    return metrics;
+  }
+
   private handleTerminalMouseEvent(input: TerminalMouseEvent): boolean {
+    if (input.type === 'wheel') {
+      return this.handleWheelEvent(input);
+    }
+
     const hasMouseEnter = this.hasElementEventListeners('mouseenter');
     const hasMouseLeave = this.hasElementEventListeners('mouseleave');
     const hasMouseMove = this.hasElementEventListeners('mousemove');
@@ -502,6 +588,49 @@ export class PaintCannon {
     }
 
     return false;
+  }
+
+  private handleWheelEvent(input: TerminalMouseEvent): boolean {
+    const targetId = this.binding.targetIdForPoint(input.x, input.y);
+    const target = targetId === null ? undefined : this.elements.get(targetId);
+    if (target === undefined) {
+      return false;
+    }
+
+    const scrollTarget = this.findScrollableAncestor(target, input.deltaX, input.deltaY);
+    if (scrollTarget === undefined) {
+      return false;
+    }
+
+    const current = this.getScrollMetrics(scrollTarget) ?? emptyScrollMetrics();
+    const canScrollX = isAxisScrollable(scrollTarget.style.overflowX || scrollTarget.style.overflow);
+    const canScrollY = isAxisScrollable(scrollTarget.style.overflowY || scrollTarget.style.overflow);
+    const nextLeft = canScrollX ? current.scrollLeft + input.deltaX * 4 : current.scrollLeft;
+    const nextTop = canScrollY ? current.scrollTop + input.deltaY * 3 : current.scrollTop;
+
+    const metrics = this.setScrollOffset(scrollTarget, nextLeft, nextTop);
+    if (metrics === null) {
+      return false;
+    }
+
+    this.dispatchScrollEvent(scrollTarget, input, metrics);
+    return true;
+  }
+
+  private findScrollableAncestor(
+    target: PaintElement,
+    deltaX: number,
+    deltaY: number,
+  ): PaintElement | undefined {
+    for (const element of this.elementPath(target)) {
+      const overflow = element.style.overflow;
+      const canScrollX = deltaX !== 0 && isAxisScrollable(element.style.overflowX || overflow);
+      const canScrollY = deltaY !== 0 && isAxisScrollable(element.style.overflowY || overflow);
+      if (canScrollX || canScrollY) {
+        return element;
+      }
+    }
+    return undefined;
   }
 
   private dispatchHoverBoundaryEvents(nextHoveredElement: PaintElement | undefined, input: TerminalMouseEvent): void {
@@ -563,7 +692,7 @@ export class PaintCannon {
         this.elementEventListeners.get(currentTarget.id)?.[type] ?? [],
       );
       for (const listener of listeners) {
-        listener(event);
+        (listener as MouseEventListener)(event);
         if (event.propagationStopped) {
           return;
         }
@@ -572,6 +701,30 @@ export class PaintCannon {
         return;
       }
       currentTarget = this.parents.get(currentTarget.id);
+    }
+  }
+
+  private dispatchScrollEvent(
+    target: PaintElement,
+    input: TerminalMouseEvent,
+    metrics: NativeScrollMetrics,
+  ): void {
+    const event = new PaintScrollEvent({
+      target,
+      scrollLeft: metrics.scrollLeft,
+      scrollTop: metrics.scrollTop,
+      scrollWidth: metrics.scrollWidth,
+      scrollHeight: metrics.scrollHeight,
+      deltaX: input.deltaX,
+      deltaY: input.deltaY,
+    });
+    event.setCurrentTarget(target);
+    const listeners = Array.from(this.elementEventListeners.get(target.id)?.scroll ?? []);
+    for (const listener of listeners) {
+      (listener as ScrollEventListener)(event);
+      if (event.propagationStopped) {
+        return;
+      }
     }
   }
 
@@ -586,6 +739,8 @@ export class PaintCannon {
       x: nativeEvent.clientX,
       y: nativeEvent.clientY,
       button: nativeEvent.button,
+      deltaX: 0,
+      deltaY: 0,
       ctrlKey: nativeEvent.ctrlKey,
       altKey: nativeEvent.altKey,
       metaKey: nativeEvent.metaKey,
@@ -614,6 +769,16 @@ interface PaintMouseEventInit {
   altKey: boolean;
   metaKey: boolean;
   shiftKey: boolean;
+}
+
+interface PaintScrollEventInit {
+  target: PaintElement;
+  scrollLeft: number;
+  scrollTop: number;
+  scrollWidth: number;
+  scrollHeight: number;
+  deltaX: number;
+  deltaY: number;
 }
 
 export class PaintMouseEvent {
@@ -656,6 +821,43 @@ export class PaintMouseEvent {
   }
 }
 
+export class PaintScrollEvent {
+  readonly type: 'scroll' = 'scroll';
+  readonly target: PaintElement;
+  currentTarget: PaintElement;
+  readonly scrollLeft: number;
+  readonly scrollTop: number;
+  readonly scrollWidth: number;
+  readonly scrollHeight: number;
+  readonly deltaX: number;
+  readonly deltaY: number;
+  defaultPrevented = false;
+  propagationStopped = false;
+
+  constructor(event: PaintScrollEventInit) {
+    this.target = event.target;
+    this.currentTarget = event.target;
+    this.scrollLeft = event.scrollLeft;
+    this.scrollTop = event.scrollTop;
+    this.scrollWidth = event.scrollWidth;
+    this.scrollHeight = event.scrollHeight;
+    this.deltaX = event.deltaX;
+    this.deltaY = event.deltaY;
+  }
+
+  preventDefault(): void {
+    this.defaultPrevented = true;
+  }
+
+  stopPropagation(): void {
+    this.propagationStopped = true;
+  }
+
+  setCurrentTarget(element: PaintElement): void {
+    this.currentTarget = element;
+  }
+}
+
 export class DivElement {
   readonly ownerDocument: PaintCannon;
   readonly style: CSSStyleDeclaration;
@@ -676,11 +878,47 @@ export class DivElement {
     return child;
   }
 
-  addEventListener(type: ElementEventType, listener: MouseEventListener): void {
+  get scrollLeft(): number {
+    return this.ownerDocument.getScrollLeft(this);
+  }
+
+  set scrollLeft(value: number) {
+    this.ownerDocument.setScrollLeft(this, value);
+  }
+
+  get scrollTop(): number {
+    return this.ownerDocument.getScrollTop(this);
+  }
+
+  set scrollTop(value: number) {
+    this.ownerDocument.setScrollTop(this, value);
+  }
+
+  get scrollWidth(): number {
+    return this.ownerDocument.getScrollWidth(this);
+  }
+
+  get scrollHeight(): number {
+    return this.ownerDocument.getScrollHeight(this);
+  }
+
+  get clientWidth(): number {
+    return this.ownerDocument.getClientWidth(this);
+  }
+
+  get clientHeight(): number {
+    return this.ownerDocument.getClientHeight(this);
+  }
+
+  addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  addEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  addEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
-  removeEventListener(type: ElementEventType, listener: MouseEventListener): void {
+  removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
   }
 }
@@ -705,11 +943,47 @@ export class SpanElement {
     return child;
   }
 
-  addEventListener(type: ElementEventType, listener: MouseEventListener): void {
+  get scrollLeft(): number {
+    return this.ownerDocument.getScrollLeft(this);
+  }
+
+  set scrollLeft(value: number) {
+    this.ownerDocument.setScrollLeft(this, value);
+  }
+
+  get scrollTop(): number {
+    return this.ownerDocument.getScrollTop(this);
+  }
+
+  set scrollTop(value: number) {
+    this.ownerDocument.setScrollTop(this, value);
+  }
+
+  get scrollWidth(): number {
+    return this.ownerDocument.getScrollWidth(this);
+  }
+
+  get scrollHeight(): number {
+    return this.ownerDocument.getScrollHeight(this);
+  }
+
+  get clientWidth(): number {
+    return this.ownerDocument.getClientWidth(this);
+  }
+
+  get clientHeight(): number {
+    return this.ownerDocument.getClientHeight(this);
+  }
+
+  addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  addEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  addEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
-  removeEventListener(type: ElementEventType, listener: MouseEventListener): void {
+  removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
   }
 }
@@ -771,12 +1045,28 @@ export class CSSStyleDeclaration {
     this.setProperty('display', value);
   }
 
-  get overflow(): 'visible' | 'hidden' | string {
+  get overflow(): 'visible' | 'hidden' | 'scroll' | string {
     return this.getPropertyValue('overflow');
   }
 
-  set overflow(value: 'visible' | 'hidden' | string) {
+  set overflow(value: 'visible' | 'hidden' | 'scroll' | string) {
     this.setProperty('overflow', value);
+  }
+
+  get overflowX(): 'visible' | 'hidden' | 'scroll' | string {
+    return this.getPropertyValue('overflow-x');
+  }
+
+  set overflowX(value: 'visible' | 'hidden' | 'scroll' | string) {
+    this.setProperty('overflow-x', value);
+  }
+
+  get overflowY(): 'visible' | 'hidden' | 'scroll' | string {
+    return this.getPropertyValue('overflow-y');
+  }
+
+  set overflowY(value: 'visible' | 'hidden' | 'scroll' | string) {
+    this.setProperty('overflow-y', value);
   }
 
   get flexDirection(): 'row' | 'column' | string {
@@ -1033,7 +1323,35 @@ function assertPaintNode(value: unknown): asserts value is PaintNode {
 }
 
 function isElementEventType(type: string): type is ElementEventType {
-  return type === 'click' || type === 'mouseenter' || type === 'mouseleave' || type === 'mousemove';
+  return (
+    type === 'click' ||
+    type === 'mouseenter' ||
+    type === 'mouseleave' ||
+    type === 'mousemove' ||
+    type === 'scroll'
+  );
+}
+
+function isAxisScrollable(value: string): boolean {
+  return value === 'scroll';
+}
+
+function normalizeScrollOffset(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function emptyScrollMetrics(): NativeScrollMetrics {
+  return {
+    scrollLeft: 0,
+    scrollTop: 0,
+    scrollWidth: 0,
+    scrollHeight: 0,
+    clientWidth: 0,
+    clientHeight: 0,
+  };
 }
 
 function normalizeStyleName(property: string): string {

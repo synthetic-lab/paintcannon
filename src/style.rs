@@ -31,7 +31,8 @@ pub(crate) struct DivStyle {
     pub(crate) grid_column: CssGridLine,
     pub(crate) grid_row: CssGridLine,
     pub(crate) background: Background,
-    pub(crate) overflow: LayoutOverflow,
+    pub(crate) overflow_x: LayoutOverflow,
+    pub(crate) overflow_y: LayoutOverflow,
 }
 
 impl Default for DivStyle {
@@ -61,7 +62,8 @@ impl Default for DivStyle {
             grid_column: CssGridLine::default(),
             grid_row: CssGridLine::default(),
             background: Background::Default,
-            overflow: LayoutOverflow::Visible,
+            overflow_x: LayoutOverflow::Visible,
+            overflow_y: LayoutOverflow::Visible,
         }
     }
 }
@@ -78,6 +80,7 @@ pub(crate) enum LayoutDisplay {
 pub(crate) enum LayoutOverflow {
     Visible,
     Hidden,
+    Scroll,
 }
 
 #[derive(Clone, Copy)]
@@ -372,13 +375,15 @@ impl DivStyle {
             grid_column: self.grid_column.to_taffy(),
             grid_row: self.grid_row.to_taffy(),
             overflow: Point {
-                x: match self.overflow {
+                x: match self.overflow_x {
                     LayoutOverflow::Visible => Overflow::Visible,
                     LayoutOverflow::Hidden => Overflow::Hidden,
+                    LayoutOverflow::Scroll => Overflow::Scroll,
                 },
-                y: match self.overflow {
+                y: match self.overflow_y {
                     LayoutOverflow::Visible => Overflow::Visible,
                     LayoutOverflow::Hidden => Overflow::Hidden,
+                    LayoutOverflow::Scroll => Overflow::Scroll,
                 },
             },
             ..Default::default()
@@ -412,6 +417,7 @@ pub(crate) fn parse_overflow(value: &str) -> Result<LayoutOverflow> {
     match value.trim() {
         "visible" => Ok(LayoutOverflow::Visible),
         "hidden" => Ok(LayoutOverflow::Hidden),
+        "scroll" => Ok(LayoutOverflow::Scroll),
         value => Err(Error::from_reason(format!("unsupported overflow: {value}"))),
     }
 }

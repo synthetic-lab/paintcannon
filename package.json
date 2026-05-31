@@ -13,6 +13,7 @@
     "demo:mouse": "npm run build:debug && node dist/examples/mouse-clicks.js",
     "demo:overflow": "npm run build:debug && node dist/examples/overflow.js",
     "demo:pong": "npm run build:debug && node dist/examples/pong.js",
+    "demo:scroll": "npm run build:debug && node dist/examples/scroll.js",
     "demo:spans": "npm run build:debug && node dist/examples/spans.js"
   },
   "napi": {

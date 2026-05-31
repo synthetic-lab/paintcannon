@@ -5,7 +5,7 @@ use napi::{Error, Result};
 use napi_derive::napi;
 
 use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseEvent};
-use crate::renderer::{renderer_loop, ClickEvent, MouseClick, RenderCommand};
+use crate::renderer::{renderer_loop, ClickEvent, MouseClick, RenderCommand, ScrollMetrics};
 use crate::style::{
     parse_align_items, parse_dimension, parse_display, parse_flex_direction, parse_flex_flow,
     parse_flex_shorthand, parse_flex_wrap, parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks,
@@ -103,6 +103,14 @@ impl PaintCannon {
                 display: parse_display(&value)?,
             },
             "overflow" => RenderCommand::SetOverflow {
+                id,
+                overflow: parse_overflow(&value)?,
+            },
+            "overflow-x" | "overflowX" => RenderCommand::SetOverflowX {
+                id,
+                overflow: parse_overflow(&value)?,
+            },
+            "overflow-y" | "overflowY" => RenderCommand::SetOverflowY {
                 id,
                 overflow: parse_overflow(&value)?,
             },
@@ -312,6 +320,37 @@ impl PaintCannon {
         self.send(RenderCommand::HitTestPoint {
             x,
             y,
+            response: response_tx,
+        })?;
+        response_rx
+            .recv()
+            .map_err(|_| Error::from_reason("renderer thread stopped"))
+    }
+
+    #[napi]
+    pub fn set_scroll_offset(
+        &self,
+        id: u32,
+        scroll_left: u32,
+        scroll_top: u32,
+    ) -> Result<Option<ScrollMetrics>> {
+        let (response_tx, response_rx) = bounded(1);
+        self.send(RenderCommand::SetScrollOffset {
+            id,
+            scroll_left,
+            scroll_top,
+            response: response_tx,
+        })?;
+        response_rx
+            .recv()
+            .map_err(|_| Error::from_reason("renderer thread stopped"))
+    }
+
+    #[napi]
+    pub fn scroll_metrics(&self, id: u32) -> Result<Option<ScrollMetrics>> {
+        let (response_tx, response_rx) = bounded(1);
+        self.send(RenderCommand::GetScrollMetrics {
+            id,
             response: response_tx,
         })?;
         response_rx
