@@ -14,6 +14,8 @@
     "demo:overflow": "npm run build:debug && node dist/examples/overflow.js",
     "demo:pong": "npm run build:debug && node dist/examples/pong.js",
     "demo:scroll": "npm run build:debug && node dist/examples/scroll.js",
+    "demo:scroll-percent": "npm run build:debug && node dist/examples/scroll-percent.js",
+    "demo:scroll-percent-static": "npm run build:debug && node dist/examples/scroll-percent-static.js",
     "demo:spans": "npm run build:debug && node dist/examples/spans.js"
   },
   "napi": {

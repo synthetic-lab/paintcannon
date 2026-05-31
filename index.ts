@@ -110,6 +110,7 @@ export interface NativeBinding {
     forceCompatMode?: boolean,
     alternateScreen?: boolean,
     captureMouse?: boolean,
+    captureCtrlC?: boolean,
   ) => NativePaintCannon;
 }
 
@@ -158,6 +159,7 @@ export class PaintCannon {
       options.forceCompatMode ?? false,
       options.alternateScreen ?? false,
       options.captureMouse ?? false,
+      options.captureCtrlC ?? false,
     );
     this.frameIntervalMs = fpsToInterval(options.fps ?? 60);
     this.captureCtrlC = options.captureCtrlC ?? false;
@@ -476,7 +478,6 @@ export class PaintCannon {
   private shouldPumpInputEvents(): boolean {
     return (
       this.keyboardListenerCount() > 0 ||
-      !this.captureCtrlC ||
       !this.captureCtrlZ ||
       this.captureMouse
     );
@@ -485,12 +486,6 @@ export class PaintCannon {
   private handleDefaultControlEvent(event: KeyboardEvent): boolean {
     if (event.type !== 'keydown' || !event.ctrlKey) {
       return false;
-    }
-
-    if (!this.captureCtrlC && event.code === 'KeyC') {
-      this.stop();
-      this.binding.interruptProcessGroup();
-      return true;
     }
 
     if (!this.captureCtrlZ && event.code === 'KeyZ') {

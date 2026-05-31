@@ -1,6 +1,10 @@
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread::{self, JoinHandle};
 
-use crossbeam_channel::{bounded, Sender};
+use crossbeam_channel::{bounded, Sender, TrySendError};
 use napi::{Error, Result};
 use napi_derive::napi;
 
@@ -23,6 +27,7 @@ pub struct PaintCannon {
     thread: Option<JoinHandle<()>>,
     input: Option<TerminalInput>,
     kitty_keyboard_enabled: bool,
+    render_pending: Arc<AtomicBool>,
     next_id: u32,
 }
 
@@ -33,14 +38,17 @@ impl PaintCannon {
         force_compat_mode: Option<bool>,
         alternate_screen: Option<bool>,
         capture_mouse: Option<bool>,
+        capture_ctrl_c: Option<bool>,
     ) -> Self {
         let (tx, rx) = bounded(RENDER_QUEUE_CAPACITY);
         let thread = thread::spawn(move || renderer_loop(rx));
+        let render_pending = Arc::new(AtomicBool::new(false));
         let input = TerminalInput::start(
             DEFAULT_SYNTHETIC_KEYUP_MS,
             force_compat_mode.unwrap_or(false),
             alternate_screen.unwrap_or(false),
             capture_mouse.unwrap_or(false),
+            capture_ctrl_c.unwrap_or(false),
             Some(tx.clone()),
         );
         let kitty_keyboard_enabled = input
@@ -53,6 +61,7 @@ impl PaintCannon {
             thread: Some(thread),
             input,
             kitty_keyboard_enabled,
+            render_pending,
             next_id: 1,
         }
     }
@@ -272,7 +281,27 @@ impl PaintCannon {
 
     #[napi]
     pub fn render(&self) -> Result<()> {
-        self.send(RenderCommand::Render)
+        if self
+            .render_pending
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        match self.tx.try_send(RenderCommand::Render {
+            pending: Arc::clone(&self.render_pending),
+        }) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => {
+                self.render_pending.store(false, Ordering::Release);
+                Ok(())
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.render_pending.store(false, Ordering::Release);
+                Err(Error::from_reason("renderer thread stopped"))
+            }
+        }
     }
 
     #[napi]

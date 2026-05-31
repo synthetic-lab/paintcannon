@@ -1,5 +1,10 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
+use std::ops::Range;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use crossbeam_channel::{Receiver, Sender};
 use napi_derive::napi;
@@ -200,7 +205,9 @@ pub(crate) enum RenderCommand {
         event: SelectionMouseEvent,
     },
     InvalidateFrame,
-    Render,
+    Render {
+        pending: Arc<AtomicBool>,
+    },
     Shutdown,
 }
 
@@ -306,11 +313,12 @@ impl Default for SpanNode {
 #[derive(Clone)]
 struct TextNode {
     text: String,
+    metrics: TextMetrics,
 }
 
 impl TextNode {
     fn style(&self) -> Style {
-        let TextMetrics { width, height } = measure_text(&self.text);
+        let TextMetrics { width, height } = self.metrics;
 
         Style {
             size: Size {
@@ -325,22 +333,37 @@ impl TextNode {
 struct Renderer {
     root: Option<u32>,
     nodes: HashMap<u32, DomNode>,
+    taffy: TaffyTree<u32>,
+    taffy_ids: HashMap<u32, NodeId>,
+    parent_by_child: HashMap<u32, u32>,
     previous_frame: Option<Frame>,
     content_frame: Option<Frame>,
     hit_regions: Vec<HitRegion>,
     scroll_metrics: HashMap<u32, ScrollMetrics>,
+    scroll_metrics_dirty: bool,
+    inline_metrics_cache: HashMap<InlineMetricsKey, InlineMetrics>,
+    last_layout_size: Option<(u32, u32)>,
     selection: Option<Selection>,
 }
 
 impl Renderer {
     fn new() -> Self {
+        let mut taffy = TaffyTree::new();
+        taffy.disable_rounding();
+
         Self {
             root: None,
             nodes: HashMap::new(),
+            taffy,
+            taffy_ids: HashMap::new(),
+            parent_by_child: HashMap::new(),
             previous_frame: None,
             content_frame: None,
             hit_regions: Vec::new(),
             scroll_metrics: HashMap::new(),
+            scroll_metrics_dirty: true,
+            inline_metrics_cache: HashMap::new(),
+            last_layout_size: None,
             selection: None,
         }
     }
@@ -348,49 +371,63 @@ impl Renderer {
     fn apply(&mut self, command: RenderCommand) -> bool {
         match command {
             RenderCommand::CreateDiv { id } => {
-                self.nodes.insert(id, DomNode::Div(DivNode::default()));
+                let node = DivNode::default();
+                if let Ok(taffy_id) = self.taffy.new_leaf(node.style.to_taffy()) {
+                    self.taffy_ids.insert(id, taffy_id);
+                }
+                self.nodes.insert(id, DomNode::Div(node));
             }
             RenderCommand::CreateSpan { id } => {
-                self.nodes.insert(id, DomNode::Span(SpanNode::default()));
+                let node = SpanNode::default();
+                if let Ok(taffy_id) = self.taffy.new_leaf(node.style.to_taffy()) {
+                    self.taffy_ids.insert(id, taffy_id);
+                }
+                self.nodes.insert(id, DomNode::Span(node));
             }
             RenderCommand::CreateText { id, text } => {
-                self.nodes.insert(id, DomNode::Text(TextNode { text }));
+                let node = TextNode {
+                    metrics: measure_text(&text),
+                    text,
+                };
+                if let Ok(taffy_id) = self.taffy.new_leaf(node.style()) {
+                    self.taffy_ids.insert(id, taffy_id);
+                }
+                self.nodes.insert(id, DomNode::Text(node));
             }
             RenderCommand::SetText { id, text } => {
-                if let Some(DomNode::Text(node)) = self.nodes.get_mut(&id) {
-                    node.text = text;
-                }
+                self.set_text(id, text);
             }
             RenderCommand::SetRoot { id } => {
                 self.root = Some(id);
+                self.mark_layout_dirty();
             }
-            RenderCommand::AppendChild { parent, child } => {
+            RenderCommand::AppendChild {
+                parent: parent_id,
+                child,
+            } => {
                 if self.nodes.contains_key(&child) {
-                    if let Some(parent) = self.children_mut(parent) {
-                        parent.push(child);
+                    if let Some(children) = self.children_mut(parent_id) {
+                        children.push(child);
                     }
+                    self.parent_by_child.insert(child, parent_id);
+                    self.sync_appended_taffy_child(parent_id, child);
+                    self.mark_layout_dirty();
                 }
             }
             RenderCommand::SetDisplay { id, display } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.display = display;
-                }
+                self.update_style(id, |node| node.display = display);
             }
             RenderCommand::SetOverflow { id, overflow } => {
-                if let Some(node) = self.style_mut(id) {
+                self.update_style(id, |node| {
                     node.overflow_x = overflow;
                     node.overflow_y = overflow;
-                }
+                });
             }
             RenderCommand::SetOverflowX { id, overflow } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.overflow_x = overflow;
-                }
+                self.update_style(id, |node| node.overflow_x = overflow);
             }
             RenderCommand::SetOverflowY { id, overflow } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.overflow_y = overflow;
-                }
+                self.update_style(id, |node| node.overflow_y = overflow);
             }
             RenderCommand::SetScrollOffset {
                 id,
@@ -405,39 +442,29 @@ impl Renderer {
                 let _ = response.send(self.scroll_metrics_for(id));
             }
             RenderCommand::SetFlexDirection { id, direction } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.flex_direction = direction;
-                }
+                self.update_style(id, |node| node.flex_direction = direction);
             }
             RenderCommand::SetFlexWrap { id, flex_wrap } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.flex_wrap = flex_wrap;
-                }
+                self.update_style(id, |node| node.flex_wrap = flex_wrap);
             }
             RenderCommand::SetFlexFlow {
                 id,
                 direction,
                 flex_wrap,
             } => {
-                if let Some(node) = self.style_mut(id) {
+                self.update_style(id, |node| {
                     node.flex_direction = direction;
                     node.flex_wrap = flex_wrap;
-                }
+                });
             }
             RenderCommand::SetFlexBasis { id, flex_basis } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.flex_basis = flex_basis;
-                }
+                self.update_style(id, |node| node.flex_basis = flex_basis);
             }
             RenderCommand::SetFlexGrow { id, flex_grow } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.flex_grow = flex_grow;
-                }
+                self.update_style(id, |node| node.flex_grow = flex_grow);
             }
             RenderCommand::SetFlexShrink { id, flex_shrink } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.flex_shrink = flex_shrink;
-                }
+                self.update_style(id, |node| node.flex_shrink = flex_shrink);
             }
             RenderCommand::SetFlex {
                 id,
@@ -445,139 +472,93 @@ impl Renderer {
                 flex_shrink,
                 flex_basis,
             } => {
-                if let Some(node) = self.style_mut(id) {
+                self.update_style(id, |node| {
                     node.flex_grow = flex_grow;
                     node.flex_shrink = flex_shrink;
                     node.flex_basis = flex_basis;
-                }
+                });
             }
             RenderCommand::SetJustifyContent {
                 id,
                 justify_content,
             } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.justify_content = Some(justify_content);
-                }
+                self.update_style(id, |node| node.justify_content = Some(justify_content));
             }
             RenderCommand::SetAlignItems { id, align_items } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.align_items = Some(align_items);
-                }
+                self.update_style(id, |node| node.align_items = Some(align_items));
             }
             RenderCommand::SetAlignSelf { id, align_self } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.align_self = Some(align_self);
-                }
+                self.update_style(id, |node| node.align_self = Some(align_self));
             }
             RenderCommand::SetAlignContent { id, align_content } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.align_content = Some(align_content);
-                }
+                self.update_style(id, |node| node.align_content = Some(align_content));
             }
             RenderCommand::SetJustifyItems { id, justify_items } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.justify_items = Some(justify_items);
-                }
+                self.update_style(id, |node| node.justify_items = Some(justify_items));
             }
             RenderCommand::SetJustifySelf { id, justify_self } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.justify_self = Some(justify_self);
-                }
+                self.update_style(id, |node| node.justify_self = Some(justify_self));
             }
             RenderCommand::SetGap {
                 id,
                 row_gap,
                 column_gap,
             } => {
-                if let Some(node) = self.style_mut(id) {
+                self.update_style(id, |node| {
                     node.row_gap = row_gap;
                     node.column_gap = column_gap;
-                }
+                });
             }
             RenderCommand::SetRowGap { id, row_gap } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.row_gap = row_gap;
-                }
+                self.update_style(id, |node| node.row_gap = row_gap);
             }
             RenderCommand::SetColumnGap { id, column_gap } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.column_gap = column_gap;
-                }
+                self.update_style(id, |node| node.column_gap = column_gap);
             }
             RenderCommand::SetWidth { id, width } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.width = width;
-                }
+                self.update_style(id, |node| node.width = width);
             }
             RenderCommand::SetHeight { id, height } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.height = height;
-                }
+                self.update_style(id, |node| node.height = height);
             }
             RenderCommand::SetBackground { id, background } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.background = background;
-                }
+                self.update_visual_style(id, |node| node.background = background);
             }
             RenderCommand::SetSelectionBackground { id, background } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.selection_background = Some(background);
-                }
+                self.update_visual_style(id, |node| node.selection_background = Some(background));
             }
             RenderCommand::SetGridTemplateColumns { id, tracks } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.grid_template_columns = tracks;
-                }
+                self.update_style(id, |node| node.grid_template_columns = tracks);
             }
             RenderCommand::SetGridTemplateRows { id, tracks } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.grid_template_rows = tracks;
-                }
+                self.update_style(id, |node| node.grid_template_rows = tracks);
             }
             RenderCommand::SetGridAutoColumns { id, tracks } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.grid_auto_columns = tracks;
-                }
+                self.update_style(id, |node| node.grid_auto_columns = tracks);
             }
             RenderCommand::SetGridAutoRows { id, tracks } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.grid_auto_rows = tracks;
-                }
+                self.update_style(id, |node| node.grid_auto_rows = tracks);
             }
             RenderCommand::SetGridAutoFlow { id, grid_auto_flow } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.grid_auto_flow = grid_auto_flow;
-                }
+                self.update_style(id, |node| node.grid_auto_flow = grid_auto_flow);
             }
             RenderCommand::SetGridColumn { id, placement } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.grid_column = placement;
-                }
+                self.update_style(id, |node| node.grid_column = placement);
             }
             RenderCommand::SetGridRow { id, placement } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.grid_row = placement;
-                }
+                self.update_style(id, |node| node.grid_row = placement);
             }
             RenderCommand::SetGridColumnStart { id, placement } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.grid_column.start = placement;
-                }
+                self.update_style(id, |node| node.grid_column.start = placement);
             }
             RenderCommand::SetGridColumnEnd { id, placement } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.grid_column.end = placement;
-                }
+                self.update_style(id, |node| node.grid_column.end = placement);
             }
             RenderCommand::SetGridRowStart { id, placement } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.grid_row.start = placement;
-                }
+                self.update_style(id, |node| node.grid_row.start = placement);
             }
             RenderCommand::SetGridRowEnd { id, placement } => {
-                if let Some(node) = self.style_mut(id) {
-                    node.grid_row.end = placement;
-                }
+                self.update_style(id, |node| node.grid_row.end = placement);
             }
             RenderCommand::HitTestClick { click, response } => {
                 let _ = response.send(self.hit_test_click(click));
@@ -588,8 +569,9 @@ impl Renderer {
             RenderCommand::HandleTextSelection { event } => {
                 self.handle_text_selection(event);
             }
-            RenderCommand::Render => {
+            RenderCommand::Render { pending } => {
                 self.render();
+                pending.store(false, Ordering::Release);
             }
             RenderCommand::InvalidateFrame => {
                 self.previous_frame = None;
@@ -614,6 +596,147 @@ impl Renderer {
             DomNode::Span(node) => Some(&mut node.style),
             DomNode::Text(_) => None,
         }
+    }
+
+    fn set_text(&mut self, id: u32, text: String) {
+        let mut metrics_changed = false;
+        if let Some(DomNode::Text(node)) = self.nodes.get_mut(&id) {
+            let metrics = measure_text(&text);
+            metrics_changed = node.metrics != metrics;
+            node.text = text;
+            node.metrics = metrics;
+        }
+
+        if metrics_changed {
+            self.sync_taffy_style(id);
+            self.mark_layout_dirty();
+        }
+    }
+
+    fn update_style(&mut self, id: u32, update: impl FnOnce(&mut DivStyle)) {
+        if let Some(style) = self.style_mut(id) {
+            update(style);
+            self.sync_taffy_style(id);
+            self.sync_taffy_children(id);
+            self.sync_parent_taffy_children(id);
+            self.mark_layout_dirty();
+        }
+    }
+
+    fn update_visual_style(&mut self, id: u32, update: impl FnOnce(&mut DivStyle)) {
+        if let Some(style) = self.style_mut(id) {
+            update(style);
+        }
+    }
+
+    fn mark_layout_dirty(&mut self) {
+        self.scroll_metrics_dirty = true;
+        self.inline_metrics_cache.clear();
+    }
+
+    fn sync_taffy_style(&mut self, id: u32) {
+        let Some(taffy_id) = self.taffy_ids.get(&id).copied() else {
+            return;
+        };
+        let Some(style) = self.taffy_style(id) else {
+            return;
+        };
+        let _ = self.taffy.set_style(taffy_id, style);
+    }
+
+    fn sync_taffy_children(&mut self, id: u32) {
+        let Some(taffy_id) = self.taffy_ids.get(&id).copied() else {
+            return;
+        };
+        let children = self.taffy_children_for(id);
+        let _ = self.taffy.set_children(taffy_id, &children);
+    }
+
+    fn sync_parent_taffy_children(&mut self, id: u32) {
+        if let Some(parent) = self.parent_by_child.get(&id).copied() {
+            self.sync_taffy_children(parent);
+        }
+    }
+
+    fn sync_appended_taffy_child(&mut self, parent_id: u32, child: u32) {
+        if self.can_fast_append_taffy_child(parent_id, child) {
+            if let (Some(parent_taffy_id), Some(child_taffy_id)) = (
+                self.taffy_ids.get(&parent_id).copied(),
+                self.taffy_ids.get(&child).copied(),
+            ) {
+                if self
+                    .taffy
+                    .add_child(parent_taffy_id, child_taffy_id)
+                    .is_ok()
+                {
+                    return;
+                }
+            }
+        }
+
+        self.sync_taffy_children(parent_id);
+    }
+
+    fn can_fast_append_taffy_child(&self, parent_id: u32, child: u32) -> bool {
+        let Some(parent) = self.nodes.get(&parent_id) else {
+            return false;
+        };
+
+        match parent {
+            DomNode::Div(node) => match node.style.display {
+                LayoutDisplay::Flex | LayoutDisplay::Grid => true,
+                LayoutDisplay::Block => !self.is_inline_child(child),
+                LayoutDisplay::Inline => false,
+            },
+            DomNode::Span(node) => {
+                node.style.display != LayoutDisplay::Inline && !self.is_inline_child(child)
+            }
+            DomNode::Text(_) => false,
+        }
+    }
+
+    fn is_inline_child(&self, id: u32) -> bool {
+        match self.nodes.get(&id) {
+            Some(DomNode::Text(_)) => true,
+            Some(DomNode::Div(node)) => node.style.display == LayoutDisplay::Inline,
+            Some(DomNode::Span(node)) => node.style.display == LayoutDisplay::Inline,
+            None => false,
+        }
+    }
+
+    fn taffy_style(&self, id: u32) -> Option<Style> {
+        match self.nodes.get(&id)? {
+            DomNode::Div(node) => Some(node.style.to_taffy()),
+            DomNode::Span(node) => Some(node.style.to_taffy()),
+            DomNode::Text(node) => Some(node.style()),
+        }
+    }
+
+    fn taffy_children_for(&self, id: u32) -> Vec<NodeId> {
+        let Some(node) = self.nodes.get(&id) else {
+            return Vec::new();
+        };
+
+        let children = match node {
+            DomNode::Div(node) => {
+                if self.is_inline_container(node) {
+                    return Vec::new();
+                }
+                &node.children
+            }
+            DomNode::Span(node) => {
+                if self.span_uses_inline_layout(node) {
+                    return Vec::new();
+                }
+                &node.children
+            }
+            DomNode::Text(_) => return Vec::new(),
+        };
+
+        children
+            .iter()
+            .filter_map(|child| self.taffy_ids.get(child).copied())
+            .collect()
     }
 
     fn scroll_offset_mut(&mut self, id: u32) -> Option<(&mut u32, &mut u32)> {
@@ -688,36 +811,46 @@ impl Renderer {
         let Some(root) = self.root else {
             return;
         };
-
-        let TerminalSize { cols, rows } = query_terminal_size();
-        let mut taffy = TaffyTree::<u32>::new();
-        let mut taffy_ids = HashMap::new();
-        let Some(root_node) = self.build_taffy(root, &mut taffy, &mut taffy_ids) else {
+        let Some(root_node) = self.taffy_ids.get(&root).copied() else {
             return;
         };
+
+        let TerminalSize { cols, rows } = query_terminal_size();
+        let layout_size = (cols, rows);
+        if self.last_layout_size != Some(layout_size) {
+            self.mark_layout_dirty();
+        }
 
         let available = Size {
             width: AvailableSpace::Definite(cols as f32),
             height: AvailableSpace::Definite(rows as f32),
         };
 
-        if taffy.compute_layout(root_node, available).is_err() {
+        if self.taffy.compute_layout(root_node, available).is_err() {
             return;
         }
 
-        let mut scroll_metrics = HashMap::new();
-        self.collect_scroll_metrics(root, &taffy, &taffy_ids, &mut scroll_metrics);
-        self.clamp_scroll_offsets(&mut scroll_metrics);
-        self.scroll_metrics = scroll_metrics;
+        if self.scroll_metrics_dirty {
+            let mut scroll_metrics = HashMap::new();
+            self.collect_scroll_metrics(root, &mut scroll_metrics);
+            self.clamp_scroll_offsets(&mut scroll_metrics);
+            self.scroll_metrics = scroll_metrics;
+            self.scroll_metrics_dirty = false;
+            self.last_layout_size = Some(layout_size);
+        }
 
-        let mut frame = Frame::new(cols as usize, rows as usize);
+        let mut frame = Frame::new(
+            cols as usize,
+            rows as usize,
+            self.selection
+                .as_ref()
+                .is_some_and(|selection| selection.selecting),
+        );
         let mut hit_regions = Vec::new();
         self.paint_node(
             root,
             0.0,
             0.0,
-            &taffy,
-            &taffy_ids,
             &mut frame,
             &mut hit_regions,
             None,
@@ -732,72 +865,20 @@ impl Renderer {
         self.hit_regions = hit_regions;
     }
 
-    fn build_taffy(
-        &self,
-        id: u32,
-        taffy: &mut TaffyTree<u32>,
-        taffy_ids: &mut HashMap<u32, NodeId>,
-    ) -> Option<NodeId> {
-        let taffy_id = match self.nodes.get(&id)? {
-            DomNode::Div(node) => {
-                let children = if self.is_inline_container(node) {
-                    Vec::new()
-                } else {
-                    node.children
-                        .iter()
-                        .filter_map(|child| self.build_taffy(*child, taffy, taffy_ids))
-                        .collect::<Vec<_>>()
-                };
-
-                taffy
-                    .new_with_children(node.style.to_taffy(), &children)
-                    .ok()?
-            }
-            DomNode::Span(node) => {
-                if node.style.display == LayoutDisplay::Inline {
-                    taffy.new_leaf(node.style.to_taffy()).ok()?
-                } else {
-                    let children = if self.is_inline_children(&node.children) {
-                        Vec::new()
-                    } else {
-                        node.children
-                            .iter()
-                            .filter_map(|child| self.build_taffy(*child, taffy, taffy_ids))
-                            .collect::<Vec<_>>()
-                    };
-
-                    taffy
-                        .new_with_children(node.style.to_taffy(), &children)
-                        .ok()?
-                }
-            }
-            DomNode::Text(node) => taffy.new_leaf(node.style()).ok()?,
-        };
-
-        taffy_ids.insert(id, taffy_id);
-        Some(taffy_id)
-    }
-
-    fn collect_scroll_metrics(
-        &self,
-        id: u32,
-        taffy: &TaffyTree<u32>,
-        taffy_ids: &HashMap<u32, NodeId>,
-        metrics: &mut HashMap<u32, ScrollMetrics>,
-    ) {
+    fn collect_scroll_metrics(&mut self, id: u32, metrics: &mut HashMap<u32, ScrollMetrics>) {
         let Some(dom_node) = self.nodes.get(&id) else {
             return;
         };
-        let Some(taffy_id) = taffy_ids.get(&id) else {
+        let Some(taffy_id) = self.taffy_ids.get(&id) else {
             return;
         };
-        let Ok(layout) = taffy.layout(*taffy_id) else {
+        let Ok(layout) = self.taffy.layout(*taffy_id) else {
             return;
         };
 
         let children = match dom_node {
-            DomNode::Div(node) => Some(&node.children),
-            DomNode::Span(node) => Some(&node.children),
+            DomNode::Div(node) => Some(node.children.clone()),
+            DomNode::Span(node) => Some(node.children.clone()),
             DomNode::Text(_) => None,
         };
         let Some(children) = children else {
@@ -809,18 +890,18 @@ impl Renderer {
         let mut scroll_width = client_width;
         let mut scroll_height = client_height;
 
-        if self.is_inline_children(children) {
-            let inline = measure_inline_children(children, client_width.max(1), &self.nodes);
+        if self.is_inline_children(&children) {
+            let inline = self.measure_inline_children_for(id, &children, client_width.max(1));
             scroll_width = scroll_width.max(inline.width);
             scroll_height = scroll_height.max(inline.height);
         } else {
             for child in children {
-                self.collect_scroll_metrics(*child, taffy, taffy_ids, metrics);
+                self.collect_scroll_metrics(child, metrics);
 
-                let Some(child_taffy_id) = taffy_ids.get(child) else {
+                let Some(child_taffy_id) = self.taffy_ids.get(&child) else {
                     continue;
                 };
-                let Ok(child_layout) = taffy.layout(*child_taffy_id) else {
+                let Ok(child_layout) = self.taffy.layout(*child_taffy_id) else {
                     continue;
                 };
 
@@ -891,13 +972,30 @@ impl Renderer {
         }
     }
 
+    fn measure_inline_children_for(
+        &mut self,
+        id: u32,
+        children: &[u32],
+        width: u32,
+    ) -> InlineMetrics {
+        let key = InlineMetricsKey {
+            id,
+            width: width.max(1),
+        };
+        if let Some(metrics) = self.inline_metrics_cache.get(&key).copied() {
+            return metrics;
+        }
+
+        let metrics = measure_inline_children(children, key.width, &self.nodes);
+        self.inline_metrics_cache.insert(key, metrics);
+        metrics
+    }
+
     fn paint_node(
         &self,
         id: u32,
         parent_x: f32,
         parent_y: f32,
-        taffy: &TaffyTree<u32>,
-        taffy_ids: &HashMap<u32, NodeId>,
         frame: &mut Frame,
         hit_regions: &mut Vec<HitRegion>,
         selection_background: Option<Background>,
@@ -906,21 +1004,19 @@ impl Renderer {
         let Some(dom_node) = self.nodes.get(&id) else {
             return;
         };
-        let Some(taffy_id) = taffy_ids.get(&id) else {
+        let Some(taffy_id) = self.taffy_ids.get(&id) else {
             return;
         };
-        let Ok(layout) = taffy.layout(*taffy_id) else {
+        let Ok(layout) = self.taffy.layout(*taffy_id) else {
             return;
         };
 
         let x = parent_x + layout.location.x;
         let y = parent_y + layout.location.y;
-        let bounds = ClipRect::new(
-            x.round() as i32,
-            y.round() as i32,
-            layout.size.width.round() as i32,
-            layout.size.height.round() as i32,
-        );
+        let bounds = cell_rect_from_edges(x, y, layout.size.width, layout.size.height);
+        if !frame.capture_hidden_selection_units && clip.clip_rect(bounds).is_none() {
+            return;
+        }
 
         match dom_node {
             DomNode::Div(node) => {
@@ -929,15 +1025,7 @@ impl Renderer {
                     selection_background,
                 );
                 push_hit_region(hit_regions, id, bounds, clip);
-                frame.fill_rect(
-                    x.round() as i32,
-                    y.round() as i32,
-                    layout.size.width.round() as i32,
-                    layout.size.height.round() as i32,
-                    node.style.background,
-                    selection_background,
-                    clip,
-                );
+                frame.fill_rect(bounds, node.style.background, selection_background, clip);
 
                 let child_clip =
                     child_clip_for(node.style.overflow_x, node.style.overflow_y, bounds, clip);
@@ -946,9 +1034,9 @@ impl Renderer {
                 if self.is_inline_container(node) {
                     self.paint_inline_children(
                         &node.children,
-                        child_x.round() as i32,
-                        child_y.round() as i32,
-                        layout.size.width.round() as i32,
+                        bounds.left - scroll_offset_cells(node.style.overflow_x, node.scroll_left),
+                        bounds.top - scroll_offset_cells(node.style.overflow_y, node.scroll_top),
+                        bounds.width(),
                         frame,
                         hit_regions,
                         Some(id),
@@ -956,13 +1044,18 @@ impl Renderer {
                         child_clip,
                     );
                 } else {
-                    for child in &node.children {
+                    let child_range = self.visible_child_range(
+                        &node.style,
+                        &node.children,
+                        child_y,
+                        child_clip,
+                        frame,
+                    );
+                    for child in &node.children[child_range] {
                         self.paint_node(
                             *child,
                             child_x,
                             child_y,
-                            taffy,
-                            taffy_ids,
                             frame,
                             hit_regions,
                             selection_background,
@@ -977,25 +1070,17 @@ impl Renderer {
                     selection_background,
                 );
                 push_hit_region(hit_regions, id, bounds, clip);
-                frame.fill_rect(
-                    x.round() as i32,
-                    y.round() as i32,
-                    layout.size.width.round() as i32,
-                    layout.size.height.round() as i32,
-                    node.style.background,
-                    selection_background,
-                    clip,
-                );
+                frame.fill_rect(bounds, node.style.background, selection_background, clip);
                 let child_clip =
                     child_clip_for(node.style.overflow_x, node.style.overflow_y, bounds, clip);
                 let child_x = x - scroll_offset(node.style.overflow_x, node.scroll_left);
                 let child_y = y - scroll_offset(node.style.overflow_y, node.scroll_top);
-                if self.is_inline_children(&node.children) {
+                if self.span_uses_inline_layout(node) {
                     self.paint_inline_children(
                         &node.children,
-                        child_x.round() as i32,
-                        child_y.round() as i32,
-                        layout.size.width.round() as i32,
+                        bounds.left - scroll_offset_cells(node.style.overflow_x, node.scroll_left),
+                        bounds.top - scroll_offset_cells(node.style.overflow_y, node.scroll_top),
+                        bounds.width(),
                         frame,
                         hit_regions,
                         Some(id),
@@ -1003,13 +1088,18 @@ impl Renderer {
                         child_clip,
                     );
                 } else {
-                    for child in &node.children {
+                    let child_range = self.visible_child_range(
+                        &node.style,
+                        &node.children,
+                        child_y,
+                        child_clip,
+                        frame,
+                    );
+                    for child in &node.children[child_range] {
                         self.paint_node(
                             *child,
                             child_x,
                             child_y,
-                            taffy,
-                            taffy_ids,
                             frame,
                             hit_regions,
                             selection_background,
@@ -1020,8 +1110,8 @@ impl Renderer {
             }
             DomNode::Text(node) => {
                 frame.write_text(
-                    x.round() as i32,
-                    y.round() as i32,
+                    bounds.left,
+                    bounds.top,
                     &node.text,
                     selection_background,
                     clip,
@@ -1030,8 +1120,77 @@ impl Renderer {
         }
     }
 
+    fn visible_child_range(
+        &self,
+        style: &DivStyle,
+        children: &[u32],
+        child_y: f32,
+        clip: ClipBounds,
+        frame: &Frame,
+    ) -> Range<usize> {
+        if frame.capture_hidden_selection_units || !can_cull_vertical_children(style) {
+            return 0..children.len();
+        }
+
+        self.vertical_visible_child_range(children, child_y, clip)
+            .unwrap_or(0..children.len())
+    }
+
+    fn vertical_visible_child_range(
+        &self,
+        children: &[u32],
+        child_y: f32,
+        clip: ClipBounds,
+    ) -> Option<Range<usize>> {
+        let clip_top = clip.top? as f32;
+        let clip_bottom = clip.bottom? as f32;
+        if children.is_empty() || clip_top >= clip_bottom {
+            return Some(0..0);
+        }
+
+        let mut low = 0;
+        let mut high = children.len();
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let (_, bottom) = self.child_vertical_edges(children[mid], child_y)?;
+            if bottom <= clip_top {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        let start = low;
+
+        low = start;
+        high = children.len();
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let (top, _) = self.child_vertical_edges(children[mid], child_y)?;
+            if top < clip_bottom {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+
+        Some(start..low)
+    }
+
+    fn child_vertical_edges(&self, id: u32, parent_y: f32) -> Option<(f32, f32)> {
+        let taffy_id = self.taffy_ids.get(&id)?;
+        let layout = self.taffy.layout(*taffy_id).ok()?;
+        let top = parent_y + layout.location.y;
+        Some((top, top + layout.size.height))
+    }
+
     fn is_inline_container(&self, node: &DivNode) -> bool {
-        self.is_inline_children(&node.children)
+        node.style.display == LayoutDisplay::Block && self.is_inline_children(&node.children)
+    }
+
+    fn span_uses_inline_layout(&self, node: &SpanNode) -> bool {
+        node.style.display == LayoutDisplay::Inline
+            || (node.style.display == LayoutDisplay::Block
+                && self.is_inline_children(&node.children))
     }
 
     fn is_inline_children(&self, children: &[u32]) -> bool {
@@ -1366,6 +1525,10 @@ impl ClipRect {
             bottom: y + height.max(0),
         }
     }
+
+    fn width(self) -> i32 {
+        self.right.saturating_sub(self.left)
+    }
 }
 
 impl ClipBounds {
@@ -1470,11 +1633,44 @@ fn child_clip_for(
     clip.intersect(ClipBounds::from_rect_axes(bounds, clips_x, clips_y))
 }
 
+fn can_cull_vertical_children(style: &DivStyle) -> bool {
+    match style.display {
+        LayoutDisplay::Block => true,
+        LayoutDisplay::Flex => {
+            matches!(style.flex_direction, LayoutFlexDirection::Column)
+                && matches!(style.flex_wrap, LayoutFlexWrap::NoWrap)
+        }
+        LayoutDisplay::Inline | LayoutDisplay::Grid => false,
+    }
+}
+
 fn scroll_offset(overflow: LayoutOverflow, value: u32) -> f32 {
     if overflow == LayoutOverflow::Scroll {
         value as f32
     } else {
         0.0
+    }
+}
+
+fn scroll_offset_cells(overflow: LayoutOverflow, value: u32) -> i32 {
+    if overflow == LayoutOverflow::Scroll {
+        value.min(i32::MAX as u32) as i32
+    } else {
+        0
+    }
+}
+
+fn cell_rect_from_edges(x: f32, y: f32, width: f32, height: f32) -> ClipRect {
+    let left = x.round() as i32;
+    let top = y.round() as i32;
+    let right = (x + width).round() as i32;
+    let bottom = (y + height).round() as i32;
+
+    ClipRect {
+        left,
+        top,
+        right: right.max(left),
+        bottom: bottom.max(top),
     }
 }
 
@@ -1507,7 +1703,7 @@ fn dimension_to_cells(value: f32) -> u32 {
 }
 
 fn edge_to_cells(value: f32) -> u32 {
-    value.max(0.0).ceil() as u32
+    value.max(0.0).round() as u32
 }
 
 struct InlineCursor {
@@ -1557,37 +1753,33 @@ struct Frame {
     cells: Vec<Cell>,
     selection_units: Vec<SelectionUnit>,
     next_selection_order: usize,
+    capture_hidden_selection_units: bool,
 }
 
 impl Frame {
-    fn new(width: usize, height: usize) -> Self {
+    fn new(width: usize, height: usize, capture_hidden_selection_units: bool) -> Self {
         Self {
             width,
             height,
             cells: vec![Cell::default(); width * height],
             selection_units: Vec::new(),
             next_selection_order: 0,
+            capture_hidden_selection_units,
         }
     }
 
     fn fill_rect(
         &mut self,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
+        rect: ClipRect,
         background: Background,
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
-        if (background == Background::Default && selection_background.is_none())
-            || width <= 0
-            || height <= 0
-        {
+        if background == Background::Default && selection_background.is_none() {
             return;
         }
 
-        let Some(bounds) = clip.clip_rect(ClipRect::new(x, y, width, height)) else {
+        let Some(bounds) = clip.clip_rect(rect) else {
             return;
         };
 
@@ -1622,14 +1814,19 @@ impl Frame {
             let row = y + line_offset as i32;
             let mut col = x;
             for character in line.chars() {
-                let selection_order = self.push_selection_unit(row, character);
-
-                if row >= 0
+                let visible = row >= 0
                     && row < self.height as i32
                     && col >= 0
                     && col < self.width as i32
-                    && clip.contains(col, row)
-                {
+                    && clip.contains(col, row);
+
+                if !visible && !self.capture_hidden_selection_units {
+                    col += 1;
+                    continue;
+                }
+
+                let selection_order = self.push_selection_unit(row, character);
+                if visible {
                     let index = row as usize * self.width + col as usize;
                     self.cells[index].character = character;
                     self.cells[index].selection_order = Some(selection_order);
@@ -1651,12 +1848,17 @@ impl Frame {
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
-        let selection_order = self.push_selection_unit(y, character);
-
-        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+        let visible = x >= 0
+            && y >= 0
+            && x < self.width as i32
+            && y < self.height as i32
+            && clip.contains(x, y);
+        if !visible && !self.capture_hidden_selection_units {
             return;
         }
-        if !clip.contains(x, y) {
+
+        let selection_order = self.push_selection_unit(y, character);
+        if !visible {
             return;
         }
 
@@ -1901,11 +2103,19 @@ impl Default for Cell {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct TextMetrics {
     width: usize,
     height: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct InlineMetricsKey {
+    id: u32,
+    width: u32,
+}
+
+#[derive(Clone, Copy)]
 struct InlineMetrics {
     width: u32,
     height: u32,

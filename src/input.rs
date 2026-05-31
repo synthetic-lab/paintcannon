@@ -23,6 +23,7 @@ use crossterm::{
 use napi_derive::napi;
 
 use crate::renderer::{RenderCommand, SelectionMouseEvent, SelectionMouseEventType};
+use crate::terminal::reset_terminal;
 
 const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
 
@@ -76,6 +77,7 @@ impl TerminalInput {
         force_compat_mode: bool,
         alternate_screen: bool,
         capture_mouse: bool,
+        capture_ctrl_c: bool,
         renderer_tx: Option<crossbeam_channel::Sender<RenderCommand>>,
     ) -> Option<Self> {
         if enable_raw_mode().is_err() {
@@ -123,6 +125,10 @@ impl TerminalInput {
         let thread_stop = Arc::clone(&stop);
         let thread_synthetic_keyup_delay_ms = Arc::clone(&synthetic_keyup_delay_ms);
         let thread_renderer_tx = if capture_mouse { renderer_tx } else { None };
+        let thread_keyboard_enhancement_pushed = Arc::clone(&keyboard_enhancement_pushed);
+        let thread_alternate_screen_entered = Arc::clone(&alternate_screen_entered);
+        let thread_mouse_capture_enabled = Arc::clone(&mouse_capture_enabled);
+        let thread_terminal_captured = Arc::clone(&terminal_captured);
 
         let thread = thread::spawn(move || {
             let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
@@ -134,6 +140,19 @@ impl TerminalInput {
                         if let Ok(event) = terminal_event::read() {
                             match event {
                                 TerminalEvent::Key(event) => {
+                                    if !capture_ctrl_c && is_ctrl_c_event(&event) {
+                                        release_terminal_state(
+                                            &thread_terminal_captured,
+                                            &thread_mouse_capture_enabled,
+                                            &thread_keyboard_enhancement_pushed,
+                                            &thread_alternate_screen_entered,
+                                        );
+                                        reset_terminal();
+                                        signal_process_group(libc::SIGINT);
+                                        thread_stop.store(true, Ordering::Relaxed);
+                                        break;
+                                    }
+
                                     handle_terminal_key_event(
                                         event,
                                         &mut pressed_keys,
@@ -213,20 +232,12 @@ impl TerminalInput {
     }
 
     pub(crate) fn release_terminal(&self) {
-        if !swap_bool(&self.terminal_captured, false) {
-            return;
-        }
-
-        if swap_bool(&self.mouse_capture_enabled, false) {
-            let _ = execute!(io::stdout(), DisableMouseCapture);
-        }
-        if swap_bool(&self.keyboard_enhancement_pushed, false) {
-            let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
-        }
-        if swap_bool(&self.alternate_screen_entered, false) {
-            let _ = execute!(io::stdout(), LeaveAlternateScreen);
-        }
-        let _ = disable_raw_mode();
+        release_terminal_state(
+            &self.terminal_captured,
+            &self.mouse_capture_enabled,
+            &self.keyboard_enhancement_pushed,
+            &self.alternate_screen_entered,
+        );
     }
 
     pub(crate) fn capture_terminal(&self) {
@@ -288,6 +299,48 @@ fn swap_bool(value: &Arc<Mutex<bool>>, next: bool) -> bool {
     *value = next;
     previous
 }
+
+fn release_terminal_state(
+    terminal_captured: &Arc<Mutex<bool>>,
+    mouse_capture_enabled: &Arc<Mutex<bool>>,
+    keyboard_enhancement_pushed: &Arc<Mutex<bool>>,
+    alternate_screen_entered: &Arc<Mutex<bool>>,
+) {
+    if !swap_bool(terminal_captured, false) {
+        return;
+    }
+
+    if swap_bool(mouse_capture_enabled, false) {
+        let _ = execute!(io::stdout(), DisableMouseCapture);
+    }
+    if swap_bool(keyboard_enhancement_pushed, false) {
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+    }
+    if swap_bool(alternate_screen_entered, false) {
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    }
+    let _ = disable_raw_mode();
+}
+
+fn is_ctrl_c_event(event: &TerminalKeyEvent) -> bool {
+    if !matches!(event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+        return false;
+    }
+
+    match event.code {
+        KeyCode::Char('c') | KeyCode::Char('C') => event.modifiers.contains(KeyModifiers::CONTROL),
+        KeyCode::Char('\u{3}') => true,
+        _ => false,
+    }
+}
+
+#[cfg(unix)]
+fn signal_process_group(signal: libc::c_int) {
+    let _ = unsafe { libc::kill(0, signal) };
+}
+
+#[cfg(not(unix))]
+fn signal_process_group(_signal: libc::c_int) {}
 
 #[derive(Clone)]
 struct PressedKey {
@@ -470,7 +523,7 @@ fn send_selection_event(
         return;
     };
 
-    let _ = renderer_tx.send(RenderCommand::HandleTextSelection {
+    let _ = renderer_tx.try_send(RenderCommand::HandleTextSelection {
         event: SelectionMouseEvent {
             event_type,
             x: u32::from(event.column),
@@ -488,7 +541,7 @@ fn send_selection_cursor_event(
         return;
     };
 
-    let _ = renderer_tx.send(RenderCommand::HandleTextSelection {
+    let _ = renderer_tx.try_send(RenderCommand::HandleTextSelection {
         event: SelectionMouseEvent {
             event_type: SelectionMouseEventType::Scroll,
             x: u32::from(event.column),
