@@ -58,7 +58,7 @@ function renderGoodbye() {
   goodbye.appendChild(second.createTextNode(`goodbye ${(new Date()).toISOString()}`));
   second.setRoot(goodbye);
   second.render();
-  setTimeout(() => second.stop(), 250);
+  second.stop();
 }
 
 function stopFirstAndContinue() {
