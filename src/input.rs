@@ -55,9 +55,17 @@ pub struct TerminalMouseEvent {
     pub shift_key: bool,
 }
 
+#[derive(Clone)]
+#[napi(object)]
+pub struct TerminalResizeEvent {
+    pub cols: u32,
+    pub rows: u32,
+}
+
 pub(crate) struct TerminalInput {
     keyboard_events: Arc<Mutex<VecDeque<KeyboardEvent>>>,
     mouse_events: Arc<Mutex<VecDeque<TerminalMouseEvent>>>,
+    resize_events: Arc<Mutex<VecDeque<TerminalResizeEvent>>>,
     stop: Arc<AtomicBool>,
     synthetic_keyup_delay_ms: Arc<Mutex<u32>>,
     kitty_keyboard_enabled: bool,
@@ -117,11 +125,13 @@ impl TerminalInput {
 
         let keyboard_events = Arc::new(Mutex::new(VecDeque::new()));
         let mouse_events = Arc::new(Mutex::new(VecDeque::new()));
+        let resize_events = Arc::new(Mutex::new(VecDeque::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let synthetic_keyup_delay_ms = Arc::new(Mutex::new(synthetic_keyup_delay_ms));
         let terminal_captured = Arc::new(Mutex::new(true));
         let thread_keyboard_events = Arc::clone(&keyboard_events);
         let thread_mouse_events = Arc::clone(&mouse_events);
+        let thread_resize_events = Arc::clone(&resize_events);
         let thread_stop = Arc::clone(&stop);
         let thread_synthetic_keyup_delay_ms = Arc::clone(&synthetic_keyup_delay_ms);
         let thread_renderer_tx = if capture_mouse { renderer_tx } else { None };
@@ -169,6 +179,15 @@ impl TerminalInput {
                                         thread_renderer_tx.as_ref(),
                                     );
                                 }
+                                TerminalEvent::Resize(cols, rows) => {
+                                    push_resize_event(
+                                        &thread_resize_events,
+                                        TerminalResizeEvent {
+                                            cols: u32::from(cols),
+                                            rows: u32::from(rows),
+                                        },
+                                    );
+                                }
                                 _ => {}
                             }
                         }
@@ -191,6 +210,7 @@ impl TerminalInput {
         Some(Self {
             keyboard_events,
             mouse_events,
+            resize_events,
             stop,
             synthetic_keyup_delay_ms,
             kitty_keyboard_enabled,
@@ -219,6 +239,20 @@ impl TerminalInput {
         };
 
         events.drain(..).collect()
+    }
+
+    pub(crate) fn drain_resize_events(&self) -> Vec<TerminalResizeEvent> {
+        let Ok(mut events) = self.resize_events.lock() else {
+            return Vec::new();
+        };
+
+        if events.is_empty() {
+            return Vec::new();
+        }
+
+        let latest = events.pop_back();
+        events.clear();
+        latest.into_iter().collect()
     }
 
     pub(crate) fn set_synthetic_keyup_delay(&self, delay_ms: u32) {
@@ -555,6 +589,18 @@ fn push_mouse_event(events: &Arc<Mutex<VecDeque<TerminalMouseEvent>>>, event: Te
     if let Ok(mut events) = events.lock() {
         events.push_back(event);
         while events.len() > 1024 {
+            events.pop_front();
+        }
+    }
+}
+
+fn push_resize_event(
+    events: &Arc<Mutex<VecDeque<TerminalResizeEvent>>>,
+    event: TerminalResizeEvent,
+) {
+    if let Ok(mut events) = events.lock() {
+        events.push_back(event);
+        while events.len() > 16 {
             events.pop_front();
         }
     }

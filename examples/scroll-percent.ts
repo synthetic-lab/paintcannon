@@ -67,10 +67,17 @@ root.appendChild(header);
 root.appendChild(body);
 
 viewport.addEventListener('scroll', (event) => {
-  const clientHeight = viewport.clientHeight;
-  status.nodeValue = `scrollTop=${event.scrollTop}/${event.scrollHeight}, clientHeight=${clientHeight}`;
-  scrollbar.nodeValue = scrollbarText(event.scrollTop, event.scrollHeight, clientHeight);
+  updateScrollbar(event.scrollTop, event.scrollHeight, viewport.clientHeight);
 });
+
+pc.addEventListener('resize', () => {
+  updateScrollbar(viewport.scrollTop, viewport.scrollHeight, viewport.clientHeight);
+});
+
+function updateScrollbar(scrollTop: number, scrollHeight: number, clientHeight: number): void {
+  status.nodeValue = `scrollTop=${scrollTop}/${scrollHeight}, clientHeight=${clientHeight}`;
+  scrollbar.nodeValue = scrollbarText(scrollTop, scrollHeight, clientHeight);
+}
 
 function scrollbarText(scrollTop: number, scrollHeight: number, clientHeight: number): string {
   const height = Math.max(1, clientHeight);

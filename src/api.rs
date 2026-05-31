@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -9,7 +10,7 @@ use crossbeam_channel::{bounded, Sender, TrySendError};
 use napi::{Error, Result};
 use napi_derive::napi;
 
-use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseEvent};
+use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseEvent, TerminalResizeEvent};
 use crate::renderer::{renderer_loop, ClickEvent, MouseClick, RenderCommand, ScrollMetrics};
 use crate::style::{
     parse_align_items, parse_dimension, parse_display, parse_flex_direction, parse_flex_flow,
@@ -230,6 +231,17 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn render_sync(&self) -> Result<()> {
+        let (response_tx, response_rx) = mpsc::channel();
+        self.send(RenderCommand::RenderSync {
+            response: response_tx,
+        })?;
+        response_rx
+            .recv()
+            .map_err(|_| Error::from_reason("renderer thread stopped"))
+    }
+
+    #[napi]
     pub fn drain_keyboard_events(&self) -> Vec<KeyboardEvent> {
         self.input
             .as_ref()
@@ -242,6 +254,14 @@ impl PaintCannon {
         self.input
             .as_ref()
             .map(TerminalInput::drain_mouse_events)
+            .unwrap_or_default()
+    }
+
+    #[napi]
+    pub fn drain_resize_events(&self) -> Vec<TerminalResizeEvent> {
+        self.input
+            .as_ref()
+            .map(TerminalInput::drain_resize_events)
             .unwrap_or_default()
     }
 

@@ -19,7 +19,9 @@ export interface TerminalSize {
 
 export type AnimationFrameCallback = (timestamp: number) => void;
 export type KeyboardEventType = 'keydown' | 'keyup';
+export type PaintCannonEventType = KeyboardEventType | 'resize';
 export type KeyboardEventListener = (event: KeyboardEvent) => void;
+export type ResizeEventListener = (event: PaintResizeEvent) => void;
 export type MouseElementEventType = 'click' | 'mouseenter' | 'mouseleave' | 'mousemove';
 export type ElementEventType = MouseElementEventType | 'scroll';
 export type MouseEventListener = (event: PaintMouseEvent) => void;
@@ -49,6 +51,11 @@ export interface TerminalMouseEvent {
   altKey: boolean;
   metaKey: boolean;
   shiftKey: boolean;
+}
+
+export interface TerminalResizeEvent {
+  cols: number;
+  rows: number;
 }
 
 export interface NativeClickEvent {
@@ -99,8 +106,10 @@ export interface NativePaintCannon {
   terminalSize(): TerminalSize;
   readonly kittyKeyboardEnabled: boolean;
   render(): void;
+  renderSync(): void;
   drainKeyboardEvents(): KeyboardEvent[];
   drainMouseEvents(): TerminalMouseEvent[];
+  drainResizeEvents(): TerminalResizeEvent[];
   clickEventForMouseClick(
     x: number,
     y: number,
@@ -156,6 +165,7 @@ export class PaintCannon {
     keydown: new Set(),
     keyup: new Set(),
   };
+  private readonly resizeEventListeners = new Set<ResizeEventListener>();
   private readonly elements = new Map<number, PaintElement>();
   private readonly parents = new Map<number, PaintElement>();
   private readonly elementEventListeners = new Map<
@@ -305,8 +315,10 @@ export class PaintCannon {
     return result;
   }
 
-  addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void {
-    if (type !== 'keydown' && type !== 'keyup') {
+  addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
+  addEventListener(type: 'resize', listener: ResizeEventListener): void;
+  addEventListener(type: PaintCannonEventType, listener: KeyboardEventListener | ResizeEventListener): void {
+    if (type !== 'keydown' && type !== 'keyup' && type !== 'resize') {
       throw new Error(`unsupported event type: ${type}`);
     }
 
@@ -314,16 +326,26 @@ export class PaintCannon {
       throw new Error('paintcannon renderer has been stopped');
     }
 
-    this.keyboardEventListeners[type].add(listener);
+    if (type === 'resize') {
+      this.resizeEventListeners.add(listener as ResizeEventListener);
+    } else {
+      this.keyboardEventListeners[type].add(listener as KeyboardEventListener);
+    }
     this.scheduleKeyboardEventPump();
   }
 
-  removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void {
-    if (type !== 'keydown' && type !== 'keyup') {
+  removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
+  removeEventListener(type: 'resize', listener: ResizeEventListener): void;
+  removeEventListener(type: PaintCannonEventType, listener: KeyboardEventListener | ResizeEventListener): void {
+    if (type !== 'keydown' && type !== 'keyup' && type !== 'resize') {
       return;
     }
 
-    this.keyboardEventListeners[type].delete(listener);
+    if (type === 'resize') {
+      this.resizeEventListeners.delete(listener as ResizeEventListener);
+    } else {
+      this.keyboardEventListeners[type].delete(listener as KeyboardEventListener);
+    }
     if (!this.shouldPumpInputEvents() && this.keyboardEventTimer !== undefined) {
       clearTimeout(this.keyboardEventTimer);
       this.keyboardEventTimer = undefined;
@@ -412,6 +434,7 @@ export class PaintCannon {
     this.animationFrameCallbacks.clear();
     this.keyboardEventListeners.keydown.clear();
     this.keyboardEventListeners.keyup.clear();
+    this.resizeEventListeners.clear();
     this.elementEventListeners.clear();
     this.elements.clear();
     this.parents.clear();
@@ -703,6 +726,15 @@ export class PaintCannon {
       handledAnyEvent = true;
     }
 
+    const resizeEvents = this.binding.drainResizeEvents();
+    if (resizeEvents.length > 0) {
+      const latestResize = resizeEvents[resizeEvents.length - 1];
+      this.binding.renderSync();
+      if (this.dispatchResizeEvent(latestResize)) {
+        handledAnyEvent = true;
+      }
+    }
+
     if (this.captureMouse) {
       const mouseEvents = this.binding.drainMouseEvents();
       for (const event of mouseEvents) {
@@ -726,6 +758,7 @@ export class PaintCannon {
   private shouldPumpInputEvents(): boolean {
     return (
       this.keyboardListenerCount() > 0 ||
+      this.resizeEventListeners.size > 0 ||
       !this.captureCtrlZ ||
       this.captureMouse
     );
@@ -972,6 +1005,19 @@ export class PaintCannon {
     }
   }
 
+  private dispatchResizeEvent(input: TerminalResizeEvent): boolean {
+    const listeners = Array.from(this.resizeEventListeners);
+    if (listeners.length === 0) {
+      return false;
+    }
+
+    const event = new PaintResizeEvent(input.cols, input.rows);
+    for (const listener of listeners) {
+      listener(event);
+    }
+    return true;
+  }
+
   private dispatchClickEvent(nativeEvent: NativeClickEvent): void {
     const target = this.elements.get(nativeEvent.targetId);
     if (target === undefined) {
@@ -1099,6 +1145,17 @@ export class PaintScrollEvent {
 
   setCurrentTarget(element: PaintElement): void {
     this.currentTarget = element;
+  }
+}
+
+export class PaintResizeEvent {
+  readonly type: 'resize' = 'resize';
+  readonly cols: number;
+  readonly rows: number;
+
+  constructor(cols: number, rows: number) {
+    this.cols = cols;
+    this.rows = rows;
   }
 }
 

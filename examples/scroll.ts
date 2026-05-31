@@ -51,14 +51,22 @@ viewport.appendChild(content);
 const scrollbar = pc.createTextNode(scrollbarText(0));
 
 viewport.addEventListener('scroll', (event) => {
-  status.nodeValue = `scrollTop=${event.scrollTop}/${event.scrollHeight}, scrollLeft=${event.scrollLeft}/${event.scrollWidth}`;
-  scrollbar.nodeValue = scrollbarText(event.scrollTop, event.scrollHeight, viewport.clientHeight);
+  updateScrollbar(event.scrollTop, event.scrollHeight, event.scrollLeft, event.scrollWidth);
+});
+
+pc.addEventListener('resize', () => {
+  updateScrollbar(viewport.scrollTop, viewport.scrollHeight, viewport.scrollLeft, viewport.scrollWidth);
 });
 
 row.appendChild(viewport);
 row.appendChild(scrollbar);
 root.appendChild(status);
 root.appendChild(row);
+
+function updateScrollbar(scrollTop: number, scrollHeight: number, scrollLeft: number, scrollWidth: number): void {
+  status.nodeValue = `scrollTop=${scrollTop}/${scrollHeight}, scrollLeft=${scrollLeft}/${scrollWidth}`;
+  scrollbar.nodeValue = scrollbarText(scrollTop, scrollHeight, viewport.clientHeight);
+}
 
 function scrollbarText(scrollTop: number, scrollHeight = 24, clientHeight = 9): string {
   const max = Math.max(1, scrollHeight - clientHeight);

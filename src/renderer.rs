@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::ops::Range;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
+    mpsc::Sender as StdSender,
     Arc,
 };
 
@@ -210,6 +211,9 @@ pub(crate) enum RenderCommand {
     InvalidateFrame,
     Render {
         pending: Arc<AtomicBool>,
+    },
+    RenderSync {
+        response: StdSender<()>,
     },
     Shutdown,
 }
@@ -582,6 +586,10 @@ impl Renderer {
             RenderCommand::Render { pending } => {
                 self.render();
                 pending.store(false, Ordering::Release);
+            }
+            RenderCommand::RenderSync { response } => {
+                self.render();
+                let _ = response.send(());
             }
             RenderCommand::InvalidateFrame => {
                 self.previous_frame = None;
