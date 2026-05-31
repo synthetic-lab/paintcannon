@@ -9,6 +9,8 @@
     "build": "napi build --release --dts dist/native.d.ts && tsc",
     "build:debug": "napi build --dts dist/native.d.ts && tsc",
     "demo": "npm run build:debug && node dist/examples/basic.js",
+    "demo:borders": "npm run build:debug && node dist/examples/borders.js",
+    "demo:chunky-rounded": "npm run build:debug && node dist/examples/chunky-rounded-hover.js",
     "demo:keyboard": "npm run build:debug && node dist/examples/keyboard-events.js",
     "demo:mouse": "npm run build:debug && node dist/examples/mouse-clicks.js",
     "demo:overflow": "npm run build:debug && node dist/examples/overflow.js",

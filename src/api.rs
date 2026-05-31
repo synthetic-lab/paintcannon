@@ -13,10 +13,11 @@ use napi_derive::napi;
 use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseEvent, TerminalResizeEvent};
 use crate::renderer::{renderer_loop, ClickEvent, MouseClick, RenderCommand, ScrollMetrics};
 use crate::style::{
-    parse_align_items, parse_dimension, parse_display, parse_flex_direction, parse_flex_flow,
-    parse_flex_shorthand, parse_flex_wrap, parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks,
-    parse_grid_line, parse_grid_placement, parse_grid_template_tracks, parse_justify_content,
-    parse_length_percentage, parse_non_negative_number, parse_overflow, Background,
+    parse_align_items, parse_border_style, parse_dimension, parse_display, parse_flex_direction,
+    parse_flex_flow, parse_flex_shorthand, parse_flex_wrap, parse_gap, parse_grid_auto_flow,
+    parse_grid_auto_tracks, parse_grid_line, parse_grid_placement, parse_grid_template_tracks,
+    parse_justify_content, parse_length_percentage, parse_non_negative_number, parse_overflow,
+    Background,
 };
 use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
@@ -519,6 +520,31 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<RenderCommand> 
             id,
             height: parse_dimension(value)?,
         },
+        "border" => RenderCommand::SetBorder {
+            id,
+            style: parse_border_style(value)?,
+        },
+        "border-top" | "borderTop" => RenderCommand::SetBorderTop {
+            id,
+            style: parse_border_style(value)?,
+        },
+        "border-right" | "borderRight" => RenderCommand::SetBorderRight {
+            id,
+            style: parse_border_style(value)?,
+        },
+        "border-bottom" | "borderBottom" => RenderCommand::SetBorderBottom {
+            id,
+            style: parse_border_style(value)?,
+        },
+        "border-left" | "borderLeft" => RenderCommand::SetBorderLeft {
+            id,
+            style: parse_border_style(value)?,
+        },
+        "border-color" | "borderColor" => {
+            let color = Background::parse(value)
+                .ok_or_else(|| Error::from_reason(format!("unsupported border color: {value}")))?;
+            RenderCommand::SetBorderColor { id, color }
+        }
         "background" | "background-color" | "backgroundColor" => {
             let background = Background::parse(value)
                 .ok_or_else(|| Error::from_reason(format!("unsupported background: {value}")))?;

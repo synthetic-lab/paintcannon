@@ -32,6 +32,11 @@ pub(crate) struct DivStyle {
     pub(crate) grid_row: CssGridLine,
     pub(crate) background: Background,
     pub(crate) selection_background: Option<Background>,
+    pub(crate) border_top: BorderStyle,
+    pub(crate) border_right: BorderStyle,
+    pub(crate) border_bottom: BorderStyle,
+    pub(crate) border_left: BorderStyle,
+    pub(crate) border_color: Background,
     pub(crate) overflow_x: LayoutOverflow,
     pub(crate) overflow_y: LayoutOverflow,
 }
@@ -64,6 +69,11 @@ impl Default for DivStyle {
             grid_row: CssGridLine::default(),
             background: Background::Default,
             selection_background: None,
+            border_top: BorderStyle::None,
+            border_right: BorderStyle::None,
+            border_bottom: BorderStyle::None,
+            border_left: BorderStyle::None,
+            border_color: Background::Default,
             overflow_x: LayoutOverflow::Visible,
             overflow_y: LayoutOverflow::Visible,
         }
@@ -83,6 +93,17 @@ pub(crate) enum LayoutOverflow {
     Visible,
     Hidden,
     Scroll,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BorderStyle {
+    None,
+    Solid,
+    Double,
+    Heavy,
+    Rounded,
+    ChunkyRounded,
+    Ascii,
 }
 
 #[derive(Clone, Copy)]
@@ -294,6 +315,20 @@ impl Background {
             Self::White => "\x1b[47m",
         }
     }
+
+    pub(crate) fn ansi_fg(self) -> &'static str {
+        match self {
+            Self::Default => "\x1b[39m",
+            Self::Black => "\x1b[30m",
+            Self::Red => "\x1b[31m",
+            Self::Green => "\x1b[32m",
+            Self::Yellow => "\x1b[33m",
+            Self::Blue => "\x1b[34m",
+            Self::Magenta => "\x1b[35m",
+            Self::Cyan => "\x1b[36m",
+            Self::White => "\x1b[37m",
+        }
+    }
 }
 
 impl DivStyle {
@@ -353,6 +388,12 @@ impl DivStyle {
                 width: self.width.to_taffy(),
                 height: self.height.to_taffy(),
             },
+            border: Rect {
+                left: border_size(self.border_left),
+                right: border_size(self.border_right),
+                top: border_size(self.border_top),
+                bottom: border_size(self.border_bottom),
+            },
             grid_template_columns: self
                 .grid_template_columns
                 .iter()
@@ -393,6 +434,10 @@ impl DivStyle {
     }
 }
 
+fn border_size(style: BorderStyle) -> LengthPercentage {
+    LengthPercentage::length(if style == BorderStyle::None { 0.0 } else { 1.0 })
+}
+
 fn layout_align_items_to_taffy(value: LayoutAlignItems) -> AlignItems {
     match value {
         LayoutAlignItems::Start => AlignItems::Start,
@@ -421,6 +466,21 @@ pub(crate) fn parse_overflow(value: &str) -> Result<LayoutOverflow> {
         "hidden" => Ok(LayoutOverflow::Hidden),
         "scroll" => Ok(LayoutOverflow::Scroll),
         value => Err(Error::from_reason(format!("unsupported overflow: {value}"))),
+    }
+}
+
+pub(crate) fn parse_border_style(value: &str) -> Result<BorderStyle> {
+    match value.trim() {
+        "none" => Ok(BorderStyle::None),
+        "solid" => Ok(BorderStyle::Solid),
+        "double" => Ok(BorderStyle::Double),
+        "heavy" => Ok(BorderStyle::Heavy),
+        "rounded" => Ok(BorderStyle::Rounded),
+        "chunky-rounded" => Ok(BorderStyle::ChunkyRounded),
+        "ascii" => Ok(BorderStyle::Ascii),
+        value => Err(Error::from_reason(format!(
+            "unsupported border style: {value}"
+        ))),
     }
 }
 

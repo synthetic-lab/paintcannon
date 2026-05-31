@@ -1529,6 +1529,54 @@ export class CSSStyleDeclaration {
     this.setProperty('height', value);
   }
 
+  get border(): string {
+    return this.getPropertyValue('border');
+  }
+
+  set border(value: string) {
+    this.setProperty('border', value);
+  }
+
+  get borderTop(): string {
+    return this.getPropertyValue('border-top');
+  }
+
+  set borderTop(value: string) {
+    this.setProperty('border-top', value);
+  }
+
+  get borderRight(): string {
+    return this.getPropertyValue('border-right');
+  }
+
+  set borderRight(value: string) {
+    this.setProperty('border-right', value);
+  }
+
+  get borderBottom(): string {
+    return this.getPropertyValue('border-bottom');
+  }
+
+  set borderBottom(value: string) {
+    this.setProperty('border-bottom', value);
+  }
+
+  get borderLeft(): string {
+    return this.getPropertyValue('border-left');
+  }
+
+  set borderLeft(value: string) {
+    this.setProperty('border-left', value);
+  }
+
+  get borderColor(): string {
+    return this.getPropertyValue('border-color');
+  }
+
+  set borderColor(value: string) {
+    this.setProperty('border-color', value);
+  }
+
   get backgroundColor(): string {
     return this.getPropertyValue('background-color');
   }

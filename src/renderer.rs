@@ -144,6 +144,30 @@ pub(crate) enum RenderCommand {
         id: u32,
         height: CssDimension,
     },
+    SetBorder {
+        id: u32,
+        style: BorderStyle,
+    },
+    SetBorderTop {
+        id: u32,
+        style: BorderStyle,
+    },
+    SetBorderRight {
+        id: u32,
+        style: BorderStyle,
+    },
+    SetBorderBottom {
+        id: u32,
+        style: BorderStyle,
+    },
+    SetBorderLeft {
+        id: u32,
+        style: BorderStyle,
+    },
+    SetBorderColor {
+        id: u32,
+        color: Background,
+    },
     SetBackground {
         id: u32,
         background: Background,
@@ -534,6 +558,29 @@ impl Renderer {
             }
             RenderCommand::SetHeight { id, height } => {
                 self.update_style(id, |node| node.height = height);
+            }
+            RenderCommand::SetBorder { id, style } => {
+                self.update_style(id, |node| {
+                    node.border_top = style;
+                    node.border_right = style;
+                    node.border_bottom = style;
+                    node.border_left = style;
+                });
+            }
+            RenderCommand::SetBorderTop { id, style } => {
+                self.update_style(id, |node| node.border_top = style);
+            }
+            RenderCommand::SetBorderRight { id, style } => {
+                self.update_style(id, |node| node.border_right = style);
+            }
+            RenderCommand::SetBorderBottom { id, style } => {
+                self.update_style(id, |node| node.border_bottom = style);
+            }
+            RenderCommand::SetBorderLeft { id, style } => {
+                self.update_style(id, |node| node.border_left = style);
+            }
+            RenderCommand::SetBorderColor { id, color } => {
+                self.update_visual_style(id, |node| node.border_color = color);
             }
             RenderCommand::SetBackground { id, background } => {
                 self.update_visual_style(id, |node| node.background = background);
@@ -1044,6 +1091,7 @@ impl Renderer {
                 );
                 push_hit_region(hit_regions, id, bounds, clip);
                 frame.fill_rect(bounds, node.style.background, selection_background, clip);
+                frame.clear_chunky_rounded_corners(bounds, &node.style, clip);
 
                 let child_clip =
                     child_clip_for(node.style.overflow_x, node.style.overflow_y, bounds, clip);
@@ -1081,6 +1129,7 @@ impl Renderer {
                         );
                     }
                 }
+                frame.stroke_border(bounds, &node.style, selection_background, clip);
             }
             DomNode::Span(node) => {
                 let selection_background = effective_selection_background(
@@ -1089,6 +1138,7 @@ impl Renderer {
                 );
                 push_hit_region(hit_regions, id, bounds, clip);
                 frame.fill_rect(bounds, node.style.background, selection_background, clip);
+                frame.clear_chunky_rounded_corners(bounds, &node.style, clip);
                 let child_clip =
                     child_clip_for(node.style.overflow_x, node.style.overflow_y, bounds, clip);
                 let child_x = x - scroll_offset(node.style.overflow_x, node.scroll_left);
@@ -1125,6 +1175,7 @@ impl Renderer {
                         );
                     }
                 }
+                frame.stroke_border(bounds, &node.style, selection_background, clip);
             }
             DomNode::Text(node) => {
                 frame.write_text(
@@ -1700,6 +1751,120 @@ fn effective_selection_background(
         .or(inherited)
 }
 
+fn has_border(style: &DivStyle) -> bool {
+    style.border_top != BorderStyle::None
+        || style.border_right != BorderStyle::None
+        || style.border_bottom != BorderStyle::None
+        || style.border_left != BorderStyle::None
+}
+
+fn has_chunky_rounded_corner(style: &DivStyle) -> bool {
+    (style.border_top == BorderStyle::ChunkyRounded
+        && (style.border_left == BorderStyle::ChunkyRounded
+            || style.border_right == BorderStyle::ChunkyRounded))
+        || (style.border_bottom == BorderStyle::ChunkyRounded
+            && (style.border_left == BorderStyle::ChunkyRounded
+                || style.border_right == BorderStyle::ChunkyRounded))
+}
+
+#[derive(Clone, Copy)]
+struct BorderGlyphs {
+    horizontal: char,
+    vertical: char,
+    top_left: char,
+    top_right: char,
+    bottom_left: char,
+    bottom_right: char,
+}
+
+fn border_glyphs(style: BorderStyle) -> BorderGlyphs {
+    match style {
+        BorderStyle::None | BorderStyle::Solid => BorderGlyphs {
+            horizontal: '─',
+            vertical: '│',
+            top_left: '┌',
+            top_right: '┐',
+            bottom_left: '└',
+            bottom_right: '┘',
+        },
+        BorderStyle::Double => BorderGlyphs {
+            horizontal: '═',
+            vertical: '║',
+            top_left: '╔',
+            top_right: '╗',
+            bottom_left: '╚',
+            bottom_right: '╝',
+        },
+        BorderStyle::Heavy => BorderGlyphs {
+            horizontal: '━',
+            vertical: '┃',
+            top_left: '┏',
+            top_right: '┓',
+            bottom_left: '┗',
+            bottom_right: '┛',
+        },
+        BorderStyle::Rounded => BorderGlyphs {
+            horizontal: '─',
+            vertical: '│',
+            top_left: '╭',
+            top_right: '╮',
+            bottom_left: '╰',
+            bottom_right: '╯',
+        },
+        BorderStyle::ChunkyRounded => BorderGlyphs {
+            horizontal: '█',
+            vertical: '█',
+            top_left: '🭁',
+            top_right: '🭌',
+            bottom_left: '🭒',
+            bottom_right: '🭝',
+        },
+        BorderStyle::Ascii => BorderGlyphs {
+            horizontal: '-',
+            vertical: '|',
+            top_left: '+',
+            top_right: '+',
+            bottom_left: '+',
+            bottom_right: '+',
+        },
+    }
+}
+
+fn border_char_at(
+    style: &DivStyle,
+    at_left: bool,
+    at_right: bool,
+    at_top: bool,
+    at_bottom: bool,
+) -> char {
+    let border_top = at_top && style.border_top != BorderStyle::None;
+    let border_right = at_right && style.border_right != BorderStyle::None;
+    let border_bottom = at_bottom && style.border_bottom != BorderStyle::None;
+    let border_left = at_left && style.border_left != BorderStyle::None;
+    let corner_style = if border_top {
+        style.border_top
+    } else if border_bottom {
+        style.border_bottom
+    } else if border_left {
+        style.border_left
+    } else if border_right {
+        style.border_right
+    } else {
+        BorderStyle::None
+    };
+    let glyphs = border_glyphs(corner_style);
+
+    match (border_top, border_right, border_bottom, border_left) {
+        (true, true, _, _) => glyphs.top_right,
+        (true, _, _, true) => glyphs.top_left,
+        (_, true, true, _) => glyphs.bottom_right,
+        (_, _, true, true) => glyphs.bottom_left,
+        (true, _, _, _) | (_, _, true, _) => glyphs.horizontal,
+        (_, true, _, _) | (_, _, _, true) => glyphs.vertical,
+        _ => ' ',
+    }
+}
+
 fn axis_max_scroll(overflow: LayoutOverflow, value: u32) -> u32 {
     if overflow == LayoutOverflow::Scroll {
         value
@@ -1812,12 +1977,65 @@ impl Frame {
                 self.cells[start + col] = Cell {
                     background,
                     character: ' ',
+                    foreground: Background::Default,
                     selection_background,
                     selection_order: None,
                     reversed: false,
                 };
             }
         }
+    }
+
+    fn clear_chunky_rounded_corners(&mut self, rect: ClipRect, style: &DivStyle, clip: ClipBounds) {
+        if !has_chunky_rounded_corner(style) {
+            return;
+        }
+
+        let left = rect.left;
+        let right = rect.right - 1;
+        let top = rect.top;
+        let bottom = rect.bottom - 1;
+        if left > right || top > bottom {
+            return;
+        }
+
+        if style.border_top == BorderStyle::ChunkyRounded
+            && style.border_left == BorderStyle::ChunkyRounded
+        {
+            self.clear_cell(left, top, clip);
+        }
+        if style.border_top == BorderStyle::ChunkyRounded
+            && style.border_right == BorderStyle::ChunkyRounded
+            && right != left
+        {
+            self.clear_cell(right, top, clip);
+        }
+        if style.border_bottom == BorderStyle::ChunkyRounded
+            && style.border_left == BorderStyle::ChunkyRounded
+            && bottom != top
+        {
+            self.clear_cell(left, bottom, clip);
+        }
+        if style.border_bottom == BorderStyle::ChunkyRounded
+            && style.border_right == BorderStyle::ChunkyRounded
+            && right != left
+            && bottom != top
+        {
+            self.clear_cell(right, bottom, clip);
+        }
+    }
+
+    fn clear_cell(&mut self, x: i32, y: i32, clip: ClipBounds) {
+        if x < 0
+            || y < 0
+            || x >= self.width as i32
+            || y >= self.height as i32
+            || !clip.contains(x, y)
+        {
+            return;
+        }
+
+        self.cells[y as usize * self.width + x as usize] = Cell::default();
     }
 
     fn write_text(
@@ -1886,6 +2104,122 @@ impl Frame {
         if background != Background::Default {
             self.cells[index].background = background;
         }
+        if selection_background.is_some() {
+            self.cells[index].selection_background = selection_background;
+        }
+    }
+
+    fn stroke_border(
+        &mut self,
+        rect: ClipRect,
+        style: &DivStyle,
+        selection_background: Option<Background>,
+        clip: ClipBounds,
+    ) {
+        if !has_border(style) || rect.left >= rect.right || rect.top >= rect.bottom {
+            return;
+        }
+
+        let left = rect.left;
+        let right = rect.right - 1;
+        let top = rect.top;
+        let bottom = rect.bottom - 1;
+
+        if style.border_top != BorderStyle::None {
+            for x in left..=right {
+                self.write_border_cell(
+                    x,
+                    top,
+                    border_char_at(style, x == left, x == right, true, false),
+                    style.border_color,
+                    selection_background,
+                    clip,
+                );
+            }
+        }
+
+        if style.border_bottom != BorderStyle::None && bottom != top {
+            for x in left..=right {
+                self.write_border_cell(
+                    x,
+                    bottom,
+                    border_char_at(style, x == left, x == right, false, true),
+                    style.border_color,
+                    selection_background,
+                    clip,
+                );
+            }
+        }
+
+        if style.border_left != BorderStyle::None {
+            let start = if style.border_top == BorderStyle::None {
+                top
+            } else {
+                top + 1
+            };
+            let end = if style.border_bottom == BorderStyle::None {
+                bottom
+            } else {
+                bottom - 1
+            };
+            for y in start..=end {
+                self.write_border_cell(
+                    left,
+                    y,
+                    border_glyphs(style.border_left).vertical,
+                    style.border_color,
+                    selection_background,
+                    clip,
+                );
+            }
+        }
+
+        if style.border_right != BorderStyle::None && right != left {
+            let start = if style.border_top == BorderStyle::None {
+                top
+            } else {
+                top + 1
+            };
+            let end = if style.border_bottom == BorderStyle::None {
+                bottom
+            } else {
+                bottom - 1
+            };
+            for y in start..=end {
+                self.write_border_cell(
+                    right,
+                    y,
+                    border_glyphs(style.border_right).vertical,
+                    style.border_color,
+                    selection_background,
+                    clip,
+                );
+            }
+        }
+    }
+
+    fn write_border_cell(
+        &mut self,
+        x: i32,
+        y: i32,
+        character: char,
+        foreground: Background,
+        selection_background: Option<Background>,
+        clip: ClipBounds,
+    ) {
+        if x < 0
+            || y < 0
+            || x >= self.width as i32
+            || y >= self.height as i32
+            || !clip.contains(x, y)
+        {
+            return;
+        }
+
+        let index = y as usize * self.width + x as usize;
+        self.cells[index].character = character;
+        self.cells[index].foreground = foreground;
+        self.cells[index].selection_order = None;
         if selection_background.is_some() {
             self.cells[index].selection_background = selection_background;
         }
@@ -2070,10 +2404,12 @@ impl Frame {
         write!(out, "\x1b[{};{}H", row + 1, start_col + 1)?;
 
         let mut current_background = Background::Default;
+        let mut current_foreground = Background::Default;
         let mut current_reversed = false;
         for col in start_col..end_col {
             let cell = self.cells[row * self.width + col];
             let background = cell.background;
+            let foreground = cell.foreground;
             if cell.reversed != current_reversed {
                 if cell.reversed {
                     write!(out, "\x1b[7m")?;
@@ -2086,10 +2422,14 @@ impl Frame {
                 write!(out, "{}", background.ansi_bg())?;
                 current_background = background;
             }
+            if foreground != current_foreground {
+                write!(out, "{}", foreground.ansi_fg())?;
+                current_foreground = foreground;
+            }
             write!(out, "{}", cell.character)?;
         }
 
-        write!(out, "\x1b[27m\x1b[49m")
+        write!(out, "\x1b[27m\x1b[39m\x1b[49m")
     }
 }
 
@@ -2097,6 +2437,7 @@ impl Frame {
 struct Cell {
     background: Background,
     character: char,
+    foreground: Background,
     selection_background: Option<Background>,
     selection_order: Option<usize>,
     reversed: bool,
@@ -2114,6 +2455,7 @@ impl Default for Cell {
         Self {
             background: Background::Default,
             character: ' ',
+            foreground: Background::Default,
             selection_background: None,
             selection_order: None,
             reversed: false,
