@@ -934,8 +934,12 @@ export class PaintCannon {
     }
 
     const input = this.focusedInput;
-    if (input === undefined || event.ctrlKey || event.altKey || event.metaKey) {
+    if (input === undefined || event.altKey || event.metaKey) {
       return false;
+    }
+
+    if (event.ctrlKey) {
+      return this.handleInputControlKey(input, event);
     }
 
     switch (event.key) {
@@ -944,10 +948,10 @@ export class PaintCannon {
       case 'Delete':
         return input.deleteForward();
       case 'ArrowLeft':
-        input.moveCursor(-1);
+        input.cursorPosition -= 1;
         return true;
       case 'ArrowRight':
-        input.moveCursor(1);
+        input.cursorPosition += 1;
         return true;
       case 'Home':
         input.cursorToStart();
@@ -960,6 +964,35 @@ export class PaintCannon {
           input.insertText(event.key);
           return true;
         }
+        return false;
+    }
+  }
+
+  private handleInputControlKey(input: InputElement, event: KeyboardEvent): boolean {
+    switch (event.code) {
+      case 'KeyA':
+        input.cursorToStart();
+        return true;
+      case 'KeyE':
+        input.cursorToEnd();
+        return true;
+      case 'KeyB':
+        input.cursorPosition -= 1;
+        return true;
+      case 'KeyF':
+        input.cursorPosition += 1;
+        return true;
+      case 'KeyD':
+        return input.deleteForward();
+      case 'KeyH':
+        return input.deleteBackward();
+      case 'KeyK':
+        return input.deleteToEnd();
+      case 'KeyU':
+        return input.deleteToStart();
+      case 'KeyW':
+        return input.deletePreviousWord();
+      default:
         return false;
     }
   }
@@ -1681,6 +1714,24 @@ export class InputElement {
     this.syncValue();
   }
 
+  get cursorPosition(): number {
+    return this.cursor;
+  }
+
+  set cursorPosition(value: number) {
+    this.setCursorPosition(value);
+  }
+
+  setCursorPosition(position: number): void {
+    if (!Number.isFinite(position)) {
+      throw new Error(`cursor position must be a finite number, got ${position}`);
+    }
+
+    const length = Array.from(this.inputValue).length;
+    this.cursor = Math.max(0, Math.min(length, Math.floor(position)));
+    this.syncValue();
+  }
+
   focus(): void {
     this.ownerDocument.focusInput(this);
   }
@@ -1723,10 +1774,50 @@ export class InputElement {
     return true;
   }
 
-  moveCursor(delta: -1 | 1): void {
-    const length = Array.from(this.inputValue).length;
-    this.cursor = Math.max(0, Math.min(length, this.cursor + delta));
+  deleteToStart(): boolean {
+    if (this.cursor === 0) {
+      return false;
+    }
+
+    const chars = Array.from(this.inputValue);
+    chars.splice(0, this.cursor);
+    this.inputValue = chars.join('');
+    this.cursor = 0;
     this.syncValue();
+    return true;
+  }
+
+  deleteToEnd(): boolean {
+    const chars = Array.from(this.inputValue);
+    if (this.cursor >= chars.length) {
+      return false;
+    }
+
+    chars.splice(this.cursor);
+    this.inputValue = chars.join('');
+    this.syncValue();
+    return true;
+  }
+
+  deletePreviousWord(): boolean {
+    if (this.cursor === 0) {
+      return false;
+    }
+
+    const chars = Array.from(this.inputValue);
+    let start = this.cursor;
+    while (start > 0 && chars[start - 1] === ' ') {
+      start -= 1;
+    }
+    while (start > 0 && chars[start - 1] !== ' ') {
+      start -= 1;
+    }
+
+    chars.splice(start, this.cursor - start);
+    this.inputValue = chars.join('');
+    this.cursor = start;
+    this.syncValue();
+    return true;
   }
 
   cursorToStart(): void {

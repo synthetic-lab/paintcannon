@@ -52,9 +52,10 @@ function field(labelText: string, initialValue: string) {
   label.style.color = '#cbd5e1';
   label.appendChild(pc.createTextNode(labelText));
 
-  const input = pc.createElement('input');
+const input = pc.createElement('input');
   input.type = 'text';
   input.value = initialValue;
+  input.cursorPosition = input.value.length;
   input.style.width = 32;
   input.style.height = 3;
   input.style.backgroundColor = '#020617';
