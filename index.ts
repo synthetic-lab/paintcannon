@@ -33,6 +33,7 @@ export type TransitionEventListener = (event: PaintTransitionEvent) => void;
 type ElementEventListener = MouseEventListener | ScrollEventListener | TransitionEventListener;
 export type ClickEventListener = MouseEventListener;
 export type ImageRendering = 'ascii' | 'half-block';
+export type CSSWhiteSpace = 'normal' | 'nowrap' | 'pre' | 'pre-wrap' | 'pre-line';
 export type CSSCursor =
   | 'auto'
   | 'alias'
@@ -2189,6 +2190,14 @@ export class CSSStyleDeclaration {
 
   set minHeight(value: string | number) {
     this.setProperty('min-height', value);
+  }
+
+  get whiteSpace(): CSSWhiteSpace | string {
+    return this.getPropertyValue('white-space');
+  }
+
+  set whiteSpace(value: CSSWhiteSpace | string) {
+    this.setProperty('white-space', value);
   }
 
   get imageRendering(): ImageRendering | string {

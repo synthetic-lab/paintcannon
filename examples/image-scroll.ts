@@ -78,6 +78,7 @@ rail.style.width = '20%';
 rail.style.height = '100%';
 rail.style.backgroundColor = '#020617';
 rail.style.color = '#cbd5e1';
+rail.style.whiteSpace = 'pre';
 
 const scrollbar = pc.createTextNode(scrollbarText(0, 1, 1));
 rail.appendChild(scrollbar);

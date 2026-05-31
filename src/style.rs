@@ -47,6 +47,7 @@ pub(crate) struct DivStyle {
     pub(crate) overflow_x: LayoutOverflow,
     pub(crate) overflow_y: LayoutOverflow,
     pub(crate) image_rendering: ImageRendering,
+    pub(crate) white_space: CssWhiteSpace,
 }
 
 impl Default for DivStyle {
@@ -88,6 +89,7 @@ impl Default for DivStyle {
             overflow_x: LayoutOverflow::Visible,
             overflow_y: LayoutOverflow::Visible,
             image_rendering: ImageRendering::HalfBlock,
+            white_space: CssWhiteSpace::Normal,
         }
     }
 }
@@ -111,6 +113,15 @@ pub(crate) enum LayoutOverflow {
 pub(crate) enum ImageRendering {
     Ascii,
     HalfBlock,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum CssWhiteSpace {
+    Normal,
+    NoWrap,
+    Pre,
+    PreWrap,
+    PreLine,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -964,6 +975,19 @@ pub(crate) fn parse_dimension(value: &str) -> Result<CssDimension> {
         .map_err(|_| Error::from_reason(format!("invalid dimension: {value}")))?;
 
     Ok(CssDimension::Length(number))
+}
+
+pub(crate) fn parse_white_space(value: &str) -> Result<CssWhiteSpace> {
+    match value.trim() {
+        "" | "normal" => Ok(CssWhiteSpace::Normal),
+        "nowrap" => Ok(CssWhiteSpace::NoWrap),
+        "pre" => Ok(CssWhiteSpace::Pre),
+        "pre-wrap" | "preWrap" => Ok(CssWhiteSpace::PreWrap),
+        "pre-line" | "preLine" => Ok(CssWhiteSpace::PreLine),
+        value => Err(Error::from_reason(format!(
+            "unsupported white-space: {value}"
+        ))),
+    }
 }
 
 pub(crate) fn parse_grid_template_tracks(value: &str) -> Result<Vec<CssGridTemplateTrack>> {

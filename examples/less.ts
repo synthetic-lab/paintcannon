@@ -46,6 +46,7 @@ viewport.style.selectionBackgroundColor = '#334155';
 const text = pc.createElement('span');
 text.style.display = 'inline';
 text.style.color = '#e5e7eb';
+text.style.whiteSpace = 'pre-wrap';
 text.appendChild(pc.createTextNode(makeLoremDocument()));
 viewport.appendChild(text);
 
@@ -56,6 +57,7 @@ rail.style.backgroundColor = '#111827';
 rail.style.color = '#93c5fd';
 rail.style.borderLeft = 'solid';
 rail.style.borderColor = '#334155';
+rail.style.whiteSpace = 'pre';
 const scrollbar = pc.createTextNode('');
 rail.appendChild(scrollbar);
 

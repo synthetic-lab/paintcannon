@@ -48,7 +48,10 @@ for (let index = 1; index <= 24; index += 1) {
 
 viewport.appendChild(content);
 
+const scrollbarRail = pc.createElement('div');
+scrollbarRail.style.whiteSpace = 'pre';
 const scrollbar = pc.createTextNode(scrollbarText(0));
+scrollbarRail.appendChild(scrollbar);
 
 viewport.addEventListener('scroll', (event) => {
   updateScrollbar(event.scrollTop, event.scrollHeight, event.scrollLeft, event.scrollWidth);
@@ -59,7 +62,7 @@ pc.addEventListener('resize', () => {
 });
 
 row.appendChild(viewport);
-row.appendChild(scrollbar);
+row.appendChild(scrollbarRail);
 root.appendChild(status);
 root.appendChild(row);
 

@@ -41,6 +41,7 @@ const rail = pc.createElement('div');
 rail.style.width = '15%';
 rail.style.height = '100%';
 rail.style.backgroundColor = 'magenta';
+rail.style.whiteSpace = 'pre';
 
 const content = pc.createElement('div');
 content.style.display = 'flex';

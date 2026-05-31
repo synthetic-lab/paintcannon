@@ -21,7 +21,7 @@ use crate::style::{
     parse_grid_auto_flow, parse_grid_auto_tracks, parse_grid_line, parse_grid_placement,
     parse_grid_template_tracks, parse_image_rendering, parse_justify_content,
     parse_length_percentage, parse_non_negative_number, parse_overflow, parse_transition,
-    Background,
+    parse_white_space, Background,
 };
 use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
@@ -620,6 +620,10 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<RenderCommand> 
         "min-height" | "minHeight" => RenderCommand::SetMinHeight {
             id,
             min_height: parse_dimension(value)?,
+        },
+        "white-space" | "whiteSpace" => RenderCommand::SetWhiteSpace {
+            id,
+            white_space: parse_white_space(value)?,
         },
         "border" => RenderCommand::SetBorder {
             id,

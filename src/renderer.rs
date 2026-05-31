@@ -91,6 +91,10 @@ pub(crate) enum RenderCommand {
         id: u32,
         image_rendering: ImageRendering,
     },
+    SetWhiteSpace {
+        id: u32,
+        white_space: CssWhiteSpace,
+    },
     SetScrollOffset {
         id: u32,
         scroll_left: u32,
@@ -656,6 +660,9 @@ impl Renderer {
                 image_rendering,
             } => {
                 self.update_visual_style(id, |node| node.image_rendering = image_rendering);
+            }
+            RenderCommand::SetWhiteSpace { id, white_space } => {
+                self.update_style(id, |node| node.white_space = white_space);
             }
             RenderCommand::SetScrollOffset {
                 id,
@@ -1388,7 +1395,14 @@ impl Renderer {
         let mut scroll_height = client_height;
 
         if self.is_inline_children(&children) {
-            let inline = self.measure_inline_children_for(id, &children, client_width.max(1));
+            let inline = self.measure_inline_children_for(
+                id,
+                &children,
+                client_width.max(1),
+                node_style(dom_node)
+                    .map(|style| style.white_space)
+                    .unwrap_or(CssWhiteSpace::Normal),
+            );
             scroll_width = scroll_width.max(inline.width);
             scroll_height = scroll_height.max(inline.height);
         } else {
@@ -1477,16 +1491,18 @@ impl Renderer {
         id: u32,
         children: &[u32],
         width: u32,
+        white_space: CssWhiteSpace,
     ) -> InlineMetrics {
         let key = InlineMetricsKey {
             id,
             width: width.max(1),
+            white_space,
         };
         if let Some(metrics) = self.inline_metrics_cache.get(&key).copied() {
             return metrics;
         }
 
-        let metrics = measure_inline_children(children, key.width, &self.nodes);
+        let metrics = measure_inline_children(children, key.width, white_space, &self.nodes);
         self.inline_metrics_cache.insert(key, metrics);
         metrics
     }
@@ -1559,6 +1575,7 @@ impl Renderer {
                         Some(id),
                         selection_background,
                         foreground,
+                        node.style.white_space,
                         child_clip,
                     );
                 } else {
@@ -1630,6 +1647,7 @@ impl Renderer {
                         Some(id),
                         selection_background,
                         foreground,
+                        node.style.white_space,
                         child_clip,
                     );
                 } else {
@@ -1826,29 +1844,31 @@ impl Renderer {
     }
 
     fn is_inline_children(&self, children: &[u32]) -> bool {
-        let mut has_inline_element = false;
+        let mut has_inline_content = false;
         for child in children {
             match self.nodes.get(child) {
-                Some(DomNode::Text(_)) => {}
+                Some(DomNode::Text(_)) => {
+                    has_inline_content = true;
+                }
                 Some(DomNode::Div(node)) if node.style.display == LayoutDisplay::Inline => {
-                    has_inline_element = true;
+                    has_inline_content = true;
                 }
                 Some(DomNode::Span(node)) if node.style.display == LayoutDisplay::Inline => {
-                    has_inline_element = true;
+                    has_inline_content = true;
                 }
                 Some(DomNode::Image(node)) if node.style.display == LayoutDisplay::Inline => {
-                    has_inline_element = true;
+                    has_inline_content = true;
                 }
                 Some(DomNode::Input(node)) if node.style.display == LayoutDisplay::Inline => {
-                    has_inline_element = true;
+                    has_inline_content = true;
                 }
                 Some(DomNode::TextArea(node)) if node.style.display == LayoutDisplay::Inline => {
-                    has_inline_element = true;
+                    has_inline_content = true;
                 }
                 _ => return false,
             }
         }
-        has_inline_element
+        has_inline_content
     }
 
     fn paint_inline_children(
@@ -1862,6 +1882,7 @@ impl Renderer {
         hit_target: Option<u32>,
         selection_background: Option<Background>,
         foreground: Background,
+        white_space: CssWhiteSpace,
         clip: ClipBounds,
     ) {
         let mut cursor = InlineCursor {
@@ -1882,6 +1903,7 @@ impl Renderer {
                 hit_target,
                 selection_background,
                 foreground,
+                white_space,
                 clip,
             );
         }
@@ -1897,6 +1919,7 @@ impl Renderer {
         hit_target: Option<u32>,
         selection_background: Option<Background>,
         foreground: Background,
+        white_space: CssWhiteSpace,
         clip: ClipBounds,
     ) {
         match self.nodes.get(&id) {
@@ -1910,6 +1933,7 @@ impl Renderer {
                     hit_target,
                     selection_background,
                     foreground,
+                    white_space,
                     clip,
                 );
             }
@@ -1930,6 +1954,7 @@ impl Renderer {
                     .paint_color(id, ColorTransitionProperty::Color, Instant::now())
                     .unwrap_or(node.style.color);
                 let foreground = effective_foreground(node_foreground, foreground);
+                let white_space = effective_white_space(white_space, node.style.white_space);
 
                 for child in &node.children {
                     self.paint_inline_node(
@@ -1941,6 +1966,7 @@ impl Renderer {
                         Some(id),
                         selection_background,
                         foreground,
+                        white_space,
                         clip,
                     );
                 }
@@ -1962,6 +1988,7 @@ impl Renderer {
                     .paint_color(id, ColorTransitionProperty::Color, Instant::now())
                     .unwrap_or(node.style.color);
                 let foreground = effective_foreground(node_foreground, foreground);
+                let white_space = effective_white_space(white_space, node.style.white_space);
 
                 for child in &node.children {
                     self.paint_inline_node(
@@ -1973,6 +2000,7 @@ impl Renderer {
                         Some(id),
                         selection_background,
                         foreground,
+                        white_space,
                         clip,
                     );
                 }
@@ -2470,6 +2498,14 @@ fn effective_foreground(own: Background, inherited: Background) -> Background {
     }
 }
 
+fn effective_white_space(inherited: CssWhiteSpace, own: CssWhiteSpace) -> CssWhiteSpace {
+    if own == CssWhiteSpace::Normal {
+        inherited
+    } else {
+        own
+    }
+}
+
 impl ActiveColorTransition {
     fn color_at(self, now: Instant) -> Background {
         let progress = (now - self.started_at).as_secs_f32() / self.duration.as_secs_f32();
@@ -2861,7 +2897,7 @@ fn textarea_taffy_style(node: &TextAreaNode) -> Style {
 }
 
 fn textarea_natural_size(node: &TextAreaNode, wrap_width: Option<usize>) -> (u32, u32) {
-    let layout = TextLayout::new(&node.value, wrap_width, TextWrapMode::Word);
+    let layout = TextLayout::new(&node.value, wrap_width, CssWhiteSpace::PreWrap);
     (layout.width.max(1) as u32, layout.height.max(1) as u32)
 }
 
@@ -2887,11 +2923,6 @@ fn textarea_explicit_width(node: &TextAreaNode) -> Option<usize> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum TextWrapMode {
-    Word,
-}
-
 #[derive(Clone)]
 struct TextLayout {
     glyphs: Vec<PositionedGlyph>,
@@ -2910,17 +2941,22 @@ struct PositionedGlyph {
 }
 
 impl TextLayout {
-    fn new(text: &str, wrap_width: Option<usize>, wrap_mode: TextWrapMode) -> Self {
-        Self::new_with_start_col(text, wrap_width, 0, wrap_mode)
+    fn new(text: &str, wrap_width: Option<usize>, white_space: CssWhiteSpace) -> Self {
+        Self::new_with_start_col(text, wrap_width, 0, white_space)
     }
 
     fn new_with_start_col(
         text: &str,
         wrap_width: Option<usize>,
         start_col: usize,
-        wrap_mode: TextWrapMode,
+        white_space: CssWhiteSpace,
     ) -> Self {
-        let chars = text.chars().collect::<Vec<_>>();
+        let chars = normalize_text_for_white_space(text, white_space);
+        let wrap_width = if white_space_allows_wrapping(white_space) {
+            wrap_width
+        } else {
+            None
+        };
         let mut layout = Self {
             glyphs: Vec::new(),
             cursor_positions: vec![(0, start_col); chars.len() + 1],
@@ -2929,9 +2965,11 @@ impl TextLayout {
             wrap_width: wrap_width.map(|width| width.max(1)),
         };
 
-        match wrap_mode {
-            TextWrapMode::Word => layout.layout_word_wrapped(&chars, start_col),
-        }
+        layout.layout_word_wrapped(
+            &chars,
+            start_col,
+            white_space_preserves_newlines(white_space),
+        );
 
         layout
     }
@@ -2949,7 +2987,7 @@ impl TextLayout {
         self.cursor_positions[self.cursor_positions.len() - 1]
     }
 
-    fn layout_word_wrapped(&mut self, chars: &[char], start_col: usize) {
+    fn layout_word_wrapped(&mut self, chars: &[char], start_col: usize, preserve_newlines: bool) {
         let mut row = 0;
         let mut col = start_col;
         let mut index = 0;
@@ -2963,7 +3001,7 @@ impl TextLayout {
                 continue;
             }
 
-            if character == '\n' {
+            if character == '\n' && preserve_newlines {
                 row += 1;
                 col = 0;
                 self.height = self.height.max(row + 1);
@@ -3035,6 +3073,60 @@ impl TextLayout {
     }
 }
 
+fn normalize_text_for_white_space(text: &str, white_space: CssWhiteSpace) -> Vec<char> {
+    match white_space {
+        CssWhiteSpace::Pre | CssWhiteSpace::PreWrap => text.chars().collect(),
+        CssWhiteSpace::Normal | CssWhiteSpace::NoWrap => collapse_whitespace(text, false),
+        CssWhiteSpace::PreLine => collapse_whitespace(text, true),
+    }
+}
+
+fn collapse_whitespace(text: &str, preserve_newlines: bool) -> Vec<char> {
+    let mut chars = Vec::new();
+    let mut pending_space = false;
+
+    for character in text.chars() {
+        if character == '\r' {
+            continue;
+        }
+        if preserve_newlines && character == '\n' {
+            chars.push('\n');
+            pending_space = false;
+            continue;
+        }
+        if is_css_whitespace(character) {
+            if !pending_space {
+                chars.push(' ');
+                pending_space = true;
+            }
+            continue;
+        }
+
+        chars.push(character);
+        pending_space = false;
+    }
+
+    chars
+}
+
+fn is_css_whitespace(character: char) -> bool {
+    matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{000c}')
+}
+
+fn white_space_allows_wrapping(white_space: CssWhiteSpace) -> bool {
+    matches!(
+        white_space,
+        CssWhiteSpace::Normal | CssWhiteSpace::PreWrap | CssWhiteSpace::PreLine
+    )
+}
+
+fn white_space_preserves_newlines(white_space: CssWhiteSpace) -> bool {
+    matches!(
+        white_space,
+        CssWhiteSpace::Pre | CssWhiteSpace::PreWrap | CssWhiteSpace::PreLine
+    )
+}
+
 fn next_word_end(chars: &[char], start: usize) -> usize {
     let mut index = start;
     while index < chars.len() && !chars[index].is_whitespace() {
@@ -3074,13 +3166,14 @@ fn write_inline_text(
     hit_target: Option<u32>,
     selection_background: Option<Background>,
     foreground: Background,
+    white_space: CssWhiteSpace,
     clip: ClipBounds,
 ) {
     let layout = TextLayout::new_with_start_col(
         text,
         Some(cursor.width.max(1) as usize),
         cursor.col.max(0) as usize,
-        TextWrapMode::Word,
+        white_space,
     );
 
     for glyph in &layout.glyphs {
@@ -3452,7 +3545,7 @@ impl Frame {
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
-        let layout = TextLayout::new(text, None, TextWrapMode::Word);
+        let layout = TextLayout::new(text, None, CssWhiteSpace::Normal);
         for glyph in layout.glyphs {
             self.write_glyph(
                 x + glyph.col as i32,
@@ -3543,7 +3636,7 @@ impl Frame {
         let layout = TextLayout::new(
             value,
             Some(rect.width().max(1) as usize),
-            TextWrapMode::Word,
+            CssWhiteSpace::PreWrap,
         );
         let (cursor_row, cursor_col) = layout.cursor_position(cursor as usize);
         for y in bounds.top..bounds.bottom {
@@ -4101,6 +4194,7 @@ struct TextMetrics {
 struct InlineMetricsKey {
     id: u32,
     width: u32,
+    white_space: CssWhiteSpace,
 }
 
 #[derive(Clone, Copy)]
@@ -4110,7 +4204,7 @@ struct InlineMetrics {
 }
 
 fn measure_text(text: &str) -> TextMetrics {
-    let layout = TextLayout::new(text, None, TextWrapMode::Word);
+    let layout = TextLayout::new(text, None, CssWhiteSpace::Normal);
 
     TextMetrics {
         width: layout.width,
@@ -4121,6 +4215,7 @@ fn measure_text(text: &str) -> TextMetrics {
 fn measure_inline_children(
     children: &[u32],
     width: u32,
+    white_space: CssWhiteSpace,
     nodes: &HashMap<u32, DomNode>,
 ) -> InlineMetrics {
     let mut cursor = InlineMeasureCursor {
@@ -4131,7 +4226,7 @@ fn measure_inline_children(
     };
 
     for child in children {
-        measure_inline_node(*child, nodes, &mut cursor);
+        measure_inline_node(*child, nodes, white_space, &mut cursor);
     }
 
     InlineMetrics {
@@ -4147,17 +4242,24 @@ struct InlineMeasureCursor {
     max_col: u32,
 }
 
-fn measure_inline_node(id: u32, nodes: &HashMap<u32, DomNode>, cursor: &mut InlineMeasureCursor) {
+fn measure_inline_node(
+    id: u32,
+    nodes: &HashMap<u32, DomNode>,
+    white_space: CssWhiteSpace,
+    cursor: &mut InlineMeasureCursor,
+) {
     match nodes.get(&id) {
-        Some(DomNode::Text(node)) => measure_inline_text(&node.text, cursor),
+        Some(DomNode::Text(node)) => measure_inline_text(&node.text, white_space, cursor),
         Some(DomNode::Span(node)) if node.style.display == LayoutDisplay::Inline => {
+            let white_space = effective_white_space(white_space, node.style.white_space);
             for child in &node.children {
-                measure_inline_node(*child, nodes, cursor);
+                measure_inline_node(*child, nodes, white_space, cursor);
             }
         }
         Some(DomNode::Div(node)) if node.style.display == LayoutDisplay::Inline => {
+            let white_space = effective_white_space(white_space, node.style.white_space);
             for child in &node.children {
-                measure_inline_node(*child, nodes, cursor);
+                measure_inline_node(*child, nodes, white_space, cursor);
             }
         }
         Some(DomNode::Image(node)) if node.style.display == LayoutDisplay::Inline => {
@@ -4173,12 +4275,12 @@ fn measure_inline_node(id: u32, nodes: &HashMap<u32, DomNode>, cursor: &mut Inli
     }
 }
 
-fn measure_inline_text(text: &str, cursor: &mut InlineMeasureCursor) {
+fn measure_inline_text(text: &str, white_space: CssWhiteSpace, cursor: &mut InlineMeasureCursor) {
     let layout = TextLayout::new_with_start_col(
         text,
         Some(cursor.width.max(1) as usize),
         cursor.col as usize,
-        TextWrapMode::Word,
+        white_space,
     );
     cursor.max_col = cursor.max_col.max(layout.width as u32);
     cursor.row += layout.end_position().0 as u32;
@@ -4284,6 +4386,16 @@ mod tests {
 
     fn div(renderer: &mut Renderer, id: u32) {
         apply(renderer, RenderCommand::CreateDiv { id });
+    }
+
+    fn text(renderer: &mut Renderer, id: u32, value: &str) {
+        apply(
+            renderer,
+            RenderCommand::CreateText {
+                id,
+                text: value.to_string(),
+            },
+        );
     }
 
     fn textarea(renderer: &mut Renderer, id: u32) {
@@ -4586,7 +4698,7 @@ mod tests {
             max_col: 0,
         };
 
-        measure_inline_text("hello world", &mut cursor);
+        measure_inline_text("hello world", CssWhiteSpace::Normal, &mut cursor);
 
         assert_eq!(cursor.row, 1);
         assert_eq!(cursor.col, 5);
@@ -4602,7 +4714,7 @@ mod tests {
             max_col: 0,
         };
 
-        measure_inline_text("界a", &mut cursor);
+        measure_inline_text("界a", CssWhiteSpace::Normal, &mut cursor);
 
         assert_eq!(cursor.row, 1);
         assert_eq!(cursor.col, 1);
@@ -4630,6 +4742,7 @@ mod tests {
             None,
             None,
             Background::Rgb(255, 255, 255),
+            CssWhiteSpace::Normal,
             ClipBounds::unbounded(),
         );
 
@@ -4639,6 +4752,89 @@ mod tests {
         assert_eq!(frame.cells[9].character, 'd');
         assert_eq!(cursor.row, 1);
         assert_eq!(cursor.col, 5);
+    }
+
+    #[test]
+    fn normal_white_space_collapses_spaces_and_newlines() {
+        let layout = TextLayout::new("hello   \n   world", Some(20), CssWhiteSpace::Normal);
+        let text = layout
+            .glyphs
+            .iter()
+            .map(|glyph| glyph.character)
+            .collect::<String>();
+
+        assert_eq!(text, "hello world");
+        assert_eq!(layout.height, 1);
+    }
+
+    #[test]
+    fn pre_white_space_preserves_spaces_and_newlines_without_wrapping() {
+        let layout = TextLayout::new("ab  cd\nef", Some(3), CssWhiteSpace::Pre);
+
+        assert_eq!(layout.height, 2);
+        assert_eq!(layout.width, 6);
+        assert_eq!(layout.glyphs[2].character, ' ');
+        assert_eq!(layout.glyphs[3].character, ' ');
+    }
+
+    #[test]
+    fn pre_line_preserves_newlines_but_collapses_spaces() {
+        let layout = TextLayout::new("ab  cd\nef", Some(20), CssWhiteSpace::PreLine);
+        let text = layout
+            .glyphs
+            .iter()
+            .map(|glyph| glyph.character)
+            .collect::<String>();
+
+        assert_eq!(text, "ab cdef");
+        assert_eq!(layout.height, 2);
+    }
+
+    #[test]
+    fn nowrap_collapses_spaces_without_wrapping() {
+        let layout = TextLayout::new("hello   world", Some(5), CssWhiteSpace::NoWrap);
+
+        assert_eq!(layout.height, 1);
+        assert_eq!(layout.width, 11);
+    }
+
+    #[test]
+    fn text_only_block_uses_inline_layout_and_inherits_white_space() {
+        let mut renderer = test_renderer();
+
+        div(&mut renderer, 1);
+        set_width(&mut renderer, 1, CssDimension::Length(1.0));
+        set_height(&mut renderer, 1, CssDimension::Length(4.0));
+        apply(
+            &mut renderer,
+            RenderCommand::SetWhiteSpace {
+                id: 1,
+                white_space: CssWhiteSpace::Pre,
+            },
+        );
+        apply(&mut renderer, RenderCommand::SetRoot { id: 1 });
+
+        text(&mut renderer, 2, "|\n#\n|\n|");
+        append(&mut renderer, 1, 2);
+        compute_layout(&mut renderer, 1, 1.0, 4.0);
+
+        let mut frame = Frame::new(1, 4, false);
+        let mut hit_regions = Vec::new();
+        renderer.paint_node(
+            1,
+            0.0,
+            0.0,
+            &mut frame,
+            &mut hit_regions,
+            None,
+            Background::Default,
+            ClipBounds::unbounded(),
+        );
+
+        assert_eq!(frame.cells[0].character, '|');
+        assert_eq!(frame.cells[1].character, '#');
+        assert_eq!(frame.cells[2].character, '|');
+        assert_eq!(frame.cells[3].character, '|');
     }
 
     #[test]
