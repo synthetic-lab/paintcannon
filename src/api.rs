@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -20,6 +21,23 @@ use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
 const RENDER_QUEUE_CAPACITY: usize = 32 * 1024;
 const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
+
+#[napi(object)]
+pub struct BatchCommand {
+    pub r#type: String,
+    pub id: Option<i32>,
+    pub parent: Option<i32>,
+    pub child: Option<i32>,
+    pub text: Option<String>,
+    pub property: Option<String>,
+    pub value: Option<String>,
+}
+
+#[napi(object)]
+pub struct BatchIdMapping {
+    pub temporary_id: i32,
+    pub id: u32,
+}
 
 #[napi]
 pub struct PaintCannon {
@@ -68,24 +86,21 @@ impl PaintCannon {
 
     #[napi]
     pub fn create_div(&mut self) -> Result<u32> {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.allocate_id();
         self.send(RenderCommand::CreateDiv { id })?;
         Ok(id)
     }
 
     #[napi]
     pub fn create_span(&mut self) -> Result<u32> {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.allocate_id();
         self.send(RenderCommand::CreateSpan { id })?;
         Ok(id)
     }
 
     #[napi]
     pub fn create_text_node(&mut self, text: String) -> Result<u32> {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.allocate_id();
         self.send(RenderCommand::CreateText { id, text })?;
         Ok(id)
     }
@@ -107,166 +122,76 @@ impl PaintCannon {
 
     #[napi]
     pub fn set_style_property(&self, id: u32, property: String, value: String) -> Result<()> {
-        let command = match property.as_str() {
-            "display" => RenderCommand::SetDisplay {
-                id,
-                display: parse_display(&value)?,
-            },
-            "overflow" => RenderCommand::SetOverflow {
-                id,
-                overflow: parse_overflow(&value)?,
-            },
-            "overflow-x" | "overflowX" => RenderCommand::SetOverflowX {
-                id,
-                overflow: parse_overflow(&value)?,
-            },
-            "overflow-y" | "overflowY" => RenderCommand::SetOverflowY {
-                id,
-                overflow: parse_overflow(&value)?,
-            },
-            "flex-direction" | "flexDirection" => RenderCommand::SetFlexDirection {
-                id,
-                direction: parse_flex_direction(&value)?,
-            },
-            "flex-wrap" | "flexWrap" => RenderCommand::SetFlexWrap {
-                id,
-                flex_wrap: parse_flex_wrap(&value)?,
-            },
-            "flex-flow" | "flexFlow" => {
-                let (direction, flex_wrap) = parse_flex_flow(&value)?;
-                RenderCommand::SetFlexFlow {
-                    id,
-                    direction,
-                    flex_wrap,
-                }
-            }
-            "flex-basis" | "flexBasis" => RenderCommand::SetFlexBasis {
-                id,
-                flex_basis: parse_dimension(&value)?,
-            },
-            "flex-grow" | "flexGrow" => RenderCommand::SetFlexGrow {
-                id,
-                flex_grow: parse_non_negative_number("flex-grow", &value)?,
-            },
-            "flex-shrink" | "flexShrink" => RenderCommand::SetFlexShrink {
-                id,
-                flex_shrink: parse_non_negative_number("flex-shrink", &value)?,
-            },
-            "flex" => parse_flex_shorthand(id, &value)?,
-            "justify-content" | "justifyContent" => RenderCommand::SetJustifyContent {
-                id,
-                justify_content: parse_justify_content(&value)?,
-            },
-            "align-items" | "alignItems" => RenderCommand::SetAlignItems {
-                id,
-                align_items: parse_align_items(&value)?,
-            },
-            "align-self" | "alignSelf" => RenderCommand::SetAlignSelf {
-                id,
-                align_self: parse_align_items(&value)?,
-            },
-            "align-content" | "alignContent" => RenderCommand::SetAlignContent {
-                id,
-                align_content: parse_justify_content(&value)?,
-            },
-            "justify-items" | "justifyItems" => RenderCommand::SetJustifyItems {
-                id,
-                justify_items: parse_align_items(&value)?,
-            },
-            "justify-self" | "justifySelf" => RenderCommand::SetJustifySelf {
-                id,
-                justify_self: parse_align_items(&value)?,
-            },
-            "gap" => {
-                let (row_gap, column_gap) = parse_gap(&value)?;
-                RenderCommand::SetGap {
-                    id,
-                    row_gap,
-                    column_gap,
-                }
-            }
-            "row-gap" | "rowGap" => RenderCommand::SetRowGap {
-                id,
-                row_gap: parse_length_percentage(&value)?,
-            },
-            "column-gap" | "columnGap" => RenderCommand::SetColumnGap {
-                id,
-                column_gap: parse_length_percentage(&value)?,
-            },
-            "width" => RenderCommand::SetWidth {
-                id,
-                width: parse_dimension(&value)?,
-            },
-            "height" => RenderCommand::SetHeight {
-                id,
-                height: parse_dimension(&value)?,
-            },
-            "background" | "background-color" | "backgroundColor" => {
-                let background = Background::parse(&value).ok_or_else(|| {
-                    Error::from_reason(format!("unsupported background: {value}"))
-                })?;
-                RenderCommand::SetBackground { id, background }
-            }
-            "selection-background-color" | "selectionBackgroundColor" => {
-                let background = Background::parse(&value).ok_or_else(|| {
-                    Error::from_reason(format!("unsupported selection background: {value}"))
-                })?;
-                RenderCommand::SetSelectionBackground { id, background }
-            }
-            "grid-template-columns" | "gridTemplateColumns" => {
-                RenderCommand::SetGridTemplateColumns {
-                    id,
-                    tracks: parse_grid_template_tracks(&value)?,
-                }
-            }
-            "grid-template-rows" | "gridTemplateRows" => RenderCommand::SetGridTemplateRows {
-                id,
-                tracks: parse_grid_template_tracks(&value)?,
-            },
-            "grid-auto-columns" | "gridAutoColumns" => RenderCommand::SetGridAutoColumns {
-                id,
-                tracks: parse_grid_auto_tracks(&value)?,
-            },
-            "grid-auto-rows" | "gridAutoRows" => RenderCommand::SetGridAutoRows {
-                id,
-                tracks: parse_grid_auto_tracks(&value)?,
-            },
-            "grid-auto-flow" | "gridAutoFlow" => RenderCommand::SetGridAutoFlow {
-                id,
-                grid_auto_flow: parse_grid_auto_flow(&value)?,
-            },
-            "grid-column" | "gridColumn" => RenderCommand::SetGridColumn {
-                id,
-                placement: parse_grid_line(&value)?,
-            },
-            "grid-row" | "gridRow" => RenderCommand::SetGridRow {
-                id,
-                placement: parse_grid_line(&value)?,
-            },
-            "grid-column-start" | "gridColumnStart" => RenderCommand::SetGridColumnStart {
-                id,
-                placement: parse_grid_placement(&value)?,
-            },
-            "grid-column-end" | "gridColumnEnd" => RenderCommand::SetGridColumnEnd {
-                id,
-                placement: parse_grid_placement(&value)?,
-            },
-            "grid-row-start" | "gridRowStart" => RenderCommand::SetGridRowStart {
-                id,
-                placement: parse_grid_placement(&value)?,
-            },
-            "grid-row-end" | "gridRowEnd" => RenderCommand::SetGridRowEnd {
-                id,
-                placement: parse_grid_placement(&value)?,
-            },
-            value => {
-                return Err(Error::from_reason(format!(
-                    "unsupported style property: {value}"
-                )))
-            }
-        };
+        self.send(style_command(id, &property, &value)?)
+    }
 
-        self.send(command)
+    #[napi]
+    pub fn apply_batch(&mut self, commands: Vec<BatchCommand>) -> Result<Vec<BatchIdMapping>> {
+        let mut id_map = HashMap::new();
+        let mut mappings = Vec::new();
+        let mut render_commands = Vec::with_capacity(commands.len());
+
+        for command in commands {
+            match command.r#type.as_str() {
+                "createDiv" => {
+                    let temporary_id = required_i32(command.id, "id", "createDiv")?;
+                    let id = self.allocate_id();
+                    id_map.insert(temporary_id, id);
+                    mappings.push(BatchIdMapping { temporary_id, id });
+                    render_commands.push(RenderCommand::CreateDiv { id });
+                }
+                "createSpan" => {
+                    let temporary_id = required_i32(command.id, "id", "createSpan")?;
+                    let id = self.allocate_id();
+                    id_map.insert(temporary_id, id);
+                    mappings.push(BatchIdMapping { temporary_id, id });
+                    render_commands.push(RenderCommand::CreateSpan { id });
+                }
+                "createText" => {
+                    let temporary_id = required_i32(command.id, "id", "createText")?;
+                    let id = self.allocate_id();
+                    let text = required_string(command.text, "text", "createText")?;
+                    id_map.insert(temporary_id, id);
+                    mappings.push(BatchIdMapping { temporary_id, id });
+                    render_commands.push(RenderCommand::CreateText { id, text });
+                }
+                "setText" => {
+                    let id = resolve_batch_id(command.id, "id", "setText", &id_map)?;
+                    let text = required_string(command.text, "text", "setText")?;
+                    render_commands.push(RenderCommand::SetText { id, text });
+                }
+                "setRoot" => {
+                    let id = resolve_batch_id(command.id, "id", "setRoot", &id_map)?;
+                    render_commands.push(RenderCommand::SetRoot { id });
+                }
+                "appendChild" => {
+                    let parent =
+                        resolve_batch_id(command.parent, "parent", "appendChild", &id_map)?;
+                    let child = resolve_batch_id(command.child, "child", "appendChild", &id_map)?;
+                    render_commands.push(RenderCommand::AppendChild { parent, child });
+                }
+                "setStyleProperty" => {
+                    let id = resolve_batch_id(command.id, "id", "setStyleProperty", &id_map)?;
+                    let property =
+                        required_string(command.property, "property", "setStyleProperty")?;
+                    let value = required_string(command.value, "value", "setStyleProperty")?;
+                    render_commands.push(style_command(id, &property, &value)?);
+                }
+                value => {
+                    return Err(Error::from_reason(format!(
+                        "unsupported batch command: {value}"
+                    )));
+                }
+            }
+        }
+
+        if !render_commands.is_empty() {
+            self.send(RenderCommand::Batch {
+                commands: render_commands,
+            })?;
+        }
+
+        Ok(mappings)
     }
 
     #[napi]
@@ -454,6 +379,12 @@ fn signal_process_group(_signal: libc::c_int) -> Result<()> {
 }
 
 impl PaintCannon {
+    fn allocate_id(&mut self) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
     fn send(&self, command: RenderCommand) -> Result<()> {
         self.tx
             .send(command)
@@ -471,6 +402,191 @@ impl PaintCannon {
             let _ = thread.join();
         }
     }
+}
+
+fn style_command(id: u32, property: &str, value: &str) -> Result<RenderCommand> {
+    let command = match property {
+        "display" => RenderCommand::SetDisplay {
+            id,
+            display: parse_display(value)?,
+        },
+        "overflow" => RenderCommand::SetOverflow {
+            id,
+            overflow: parse_overflow(value)?,
+        },
+        "overflow-x" | "overflowX" => RenderCommand::SetOverflowX {
+            id,
+            overflow: parse_overflow(value)?,
+        },
+        "overflow-y" | "overflowY" => RenderCommand::SetOverflowY {
+            id,
+            overflow: parse_overflow(value)?,
+        },
+        "flex-direction" | "flexDirection" => RenderCommand::SetFlexDirection {
+            id,
+            direction: parse_flex_direction(value)?,
+        },
+        "flex-wrap" | "flexWrap" => RenderCommand::SetFlexWrap {
+            id,
+            flex_wrap: parse_flex_wrap(value)?,
+        },
+        "flex-flow" | "flexFlow" => {
+            let (direction, flex_wrap) = parse_flex_flow(value)?;
+            RenderCommand::SetFlexFlow {
+                id,
+                direction,
+                flex_wrap,
+            }
+        }
+        "flex-basis" | "flexBasis" => RenderCommand::SetFlexBasis {
+            id,
+            flex_basis: parse_dimension(value)?,
+        },
+        "flex-grow" | "flexGrow" => RenderCommand::SetFlexGrow {
+            id,
+            flex_grow: parse_non_negative_number("flex-grow", value)?,
+        },
+        "flex-shrink" | "flexShrink" => RenderCommand::SetFlexShrink {
+            id,
+            flex_shrink: parse_non_negative_number("flex-shrink", value)?,
+        },
+        "flex" => parse_flex_shorthand(id, value)?,
+        "justify-content" | "justifyContent" => RenderCommand::SetJustifyContent {
+            id,
+            justify_content: parse_justify_content(value)?,
+        },
+        "align-items" | "alignItems" => RenderCommand::SetAlignItems {
+            id,
+            align_items: parse_align_items(value)?,
+        },
+        "align-self" | "alignSelf" => RenderCommand::SetAlignSelf {
+            id,
+            align_self: parse_align_items(value)?,
+        },
+        "align-content" | "alignContent" => RenderCommand::SetAlignContent {
+            id,
+            align_content: parse_justify_content(value)?,
+        },
+        "justify-items" | "justifyItems" => RenderCommand::SetJustifyItems {
+            id,
+            justify_items: parse_align_items(value)?,
+        },
+        "justify-self" | "justifySelf" => RenderCommand::SetJustifySelf {
+            id,
+            justify_self: parse_align_items(value)?,
+        },
+        "gap" => {
+            let (row_gap, column_gap) = parse_gap(value)?;
+            RenderCommand::SetGap {
+                id,
+                row_gap,
+                column_gap,
+            }
+        }
+        "row-gap" | "rowGap" => RenderCommand::SetRowGap {
+            id,
+            row_gap: parse_length_percentage(value)?,
+        },
+        "column-gap" | "columnGap" => RenderCommand::SetColumnGap {
+            id,
+            column_gap: parse_length_percentage(value)?,
+        },
+        "width" => RenderCommand::SetWidth {
+            id,
+            width: parse_dimension(value)?,
+        },
+        "height" => RenderCommand::SetHeight {
+            id,
+            height: parse_dimension(value)?,
+        },
+        "background" | "background-color" | "backgroundColor" => {
+            let background = Background::parse(value)
+                .ok_or_else(|| Error::from_reason(format!("unsupported background: {value}")))?;
+            RenderCommand::SetBackground { id, background }
+        }
+        "selection-background-color" | "selectionBackgroundColor" => {
+            let background = Background::parse(value).ok_or_else(|| {
+                Error::from_reason(format!("unsupported selection background: {value}"))
+            })?;
+            RenderCommand::SetSelectionBackground { id, background }
+        }
+        "grid-template-columns" | "gridTemplateColumns" => RenderCommand::SetGridTemplateColumns {
+            id,
+            tracks: parse_grid_template_tracks(value)?,
+        },
+        "grid-template-rows" | "gridTemplateRows" => RenderCommand::SetGridTemplateRows {
+            id,
+            tracks: parse_grid_template_tracks(value)?,
+        },
+        "grid-auto-columns" | "gridAutoColumns" => RenderCommand::SetGridAutoColumns {
+            id,
+            tracks: parse_grid_auto_tracks(value)?,
+        },
+        "grid-auto-rows" | "gridAutoRows" => RenderCommand::SetGridAutoRows {
+            id,
+            tracks: parse_grid_auto_tracks(value)?,
+        },
+        "grid-auto-flow" | "gridAutoFlow" => RenderCommand::SetGridAutoFlow {
+            id,
+            grid_auto_flow: parse_grid_auto_flow(value)?,
+        },
+        "grid-column" | "gridColumn" => RenderCommand::SetGridColumn {
+            id,
+            placement: parse_grid_line(value)?,
+        },
+        "grid-row" | "gridRow" => RenderCommand::SetGridRow {
+            id,
+            placement: parse_grid_line(value)?,
+        },
+        "grid-column-start" | "gridColumnStart" => RenderCommand::SetGridColumnStart {
+            id,
+            placement: parse_grid_placement(value)?,
+        },
+        "grid-column-end" | "gridColumnEnd" => RenderCommand::SetGridColumnEnd {
+            id,
+            placement: parse_grid_placement(value)?,
+        },
+        "grid-row-start" | "gridRowStart" => RenderCommand::SetGridRowStart {
+            id,
+            placement: parse_grid_placement(value)?,
+        },
+        "grid-row-end" | "gridRowEnd" => RenderCommand::SetGridRowEnd {
+            id,
+            placement: parse_grid_placement(value)?,
+        },
+        value => {
+            return Err(Error::from_reason(format!(
+                "unsupported style property: {value}"
+            )))
+        }
+    };
+
+    Ok(command)
+}
+
+fn required_i32(value: Option<i32>, field: &str, command: &str) -> Result<i32> {
+    value.ok_or_else(|| Error::from_reason(format!("{command} requires {field}")))
+}
+
+fn required_string(value: Option<String>, field: &str, command: &str) -> Result<String> {
+    value.ok_or_else(|| Error::from_reason(format!("{command} requires {field}")))
+}
+
+fn resolve_batch_id(
+    value: Option<i32>,
+    field: &str,
+    command: &str,
+    id_map: &HashMap<i32, u32>,
+) -> Result<u32> {
+    let value = required_i32(value, field, command)?;
+    if value >= 0 {
+        return Ok(value as u32);
+    }
+
+    id_map
+        .get(&value)
+        .copied()
+        .ok_or_else(|| Error::from_reason(format!("{command} references unknown id {value}")))
 }
 
 impl Drop for PaintCannon {

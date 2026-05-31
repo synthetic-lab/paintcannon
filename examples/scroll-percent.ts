@@ -48,12 +48,14 @@ content.style.flexDirection = 'column';
 content.style.width = '100%';
 
 const rowCount = 10_000;
-for (let index = 1; index <= rowCount; index += 1) {
-  const line = pc.createElement('div');
-  line.style.width = '100%';
-  line.appendChild(pc.createTextNode(`percent row ${String(index).padStart(2, '0')} - resize changes visible content`));
-  content.appendChild(line);
-}
+pc.transaction(() => {
+  for (let index = 1; index <= rowCount; index += 1) {
+    const line = pc.createElement('div');
+    line.style.width = '100%';
+    line.appendChild(pc.createTextNode(`percent row ${String(index).padStart(2, '0')} - resize changes visible content`));
+    content.appendChild(line);
+  }
+});
 
 const scrollbar = pc.createTextNode(scrollbarText(0, rowCount, 1));
 rail.appendChild(scrollbar);

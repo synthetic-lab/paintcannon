@@ -17,6 +17,9 @@ use crate::terminal::{
 };
 
 pub(crate) enum RenderCommand {
+    Batch {
+        commands: Vec<RenderCommand>,
+    },
     CreateDiv {
         id: u32,
     },
@@ -370,6 +373,13 @@ impl Renderer {
 
     fn apply(&mut self, command: RenderCommand) -> bool {
         match command {
+            RenderCommand::Batch { commands } => {
+                for command in commands {
+                    if !self.apply(command) {
+                        return false;
+                    }
+                }
+            }
             RenderCommand::CreateDiv { id } => {
                 let node = DivNode::default();
                 if let Ok(taffy_id) = self.taffy.new_leaf(node.style.to_taffy()) {

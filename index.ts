@@ -72,6 +72,21 @@ export interface NativeScrollMetrics {
   clientHeight: number;
 }
 
+export interface NativeBatchCommand {
+  type: string;
+  id?: number;
+  parent?: number;
+  child?: number;
+  text?: string;
+  property?: string;
+  value?: string;
+}
+
+export interface NativeBatchIdMapping {
+  temporaryId: number;
+  id: number;
+}
+
 export interface NativePaintCannon {
   createDiv(): number;
   createSpan(): number;
@@ -80,6 +95,7 @@ export interface NativePaintCannon {
   setRoot(id: number): void;
   appendChild(parent: number, child: number): void;
   setStyleProperty(id: number, property: string, value: string): void;
+  applyBatch(commands: NativeBatchCommand[]): NativeBatchIdMapping[];
   terminalSize(): TerminalSize;
   readonly kittyKeyboardEnabled: boolean;
   render(): void;
@@ -127,6 +143,11 @@ export class PaintCannon {
   private animationFrameTimer: NodeJS.Timeout | undefined;
   private keyboardEventTimer: NodeJS.Timeout | undefined;
   private suspendedByPaintCannon = false;
+  private transactionDepth = 0;
+  private nextTemporaryId = -1;
+  private batchCommands: NativeBatchCommand[] = [];
+  private batchNodes = new Map<number, PaintNode>();
+  private renderDeferred = false;
   private readonly captureCtrlC: boolean;
   private readonly captureCtrlZ: boolean;
   private readonly captureMouse: boolean;
@@ -176,12 +197,22 @@ export class PaintCannon {
   createElement(tagName: 'span'): SpanElement;
   createElement(tagName: string): PaintElement {
     if (tagName === 'div') {
-      const element = new DivElement(this, this.binding, this.binding.createDiv());
+      const element = new DivElement(
+        this,
+        this.createNativeDiv(),
+        (parent, child) => this.appendNativeChild(parent, child),
+        (id, property, value) => this.setNativeStyleProperty(id, property, value),
+      );
       this.registerElement(element);
       return element;
     }
     if (tagName === 'span') {
-      const element = new SpanElement(this, this.binding, this.binding.createSpan());
+      const element = new SpanElement(
+        this,
+        this.createNativeSpan(),
+        (parent, child) => this.appendNativeChild(parent, child),
+        (id, property, value) => this.setNativeStyleProperty(id, property, value),
+      );
       this.registerElement(element);
       return element;
     }
@@ -191,12 +222,19 @@ export class PaintCannon {
 
   createTextNode(data: string): TextNode {
     const text = String(data);
-    return new TextNode(this, this.binding, this.binding.createTextNode(text), text);
+    const node = new TextNode(
+      this,
+      this.createNativeTextNode(text),
+      (id, value) => this.setNativeTextNodeValue(id, value),
+      text,
+    );
+    this.registerBatchNode(node);
+    return node;
   }
 
   setRoot(element: PaintElement): void {
     assertElement(element);
-    this.binding.setRoot(element.id);
+    this.setNativeRoot(element.id);
   }
 
   get terminalSize(): TerminalSize {
@@ -238,6 +276,33 @@ export class PaintCannon {
 
   cancelAnimationFrame(id: number): void {
     this.animationFrameCallbacks.delete(id);
+  }
+
+  transaction<T>(callback: () => T): T {
+    if (this.stopped) {
+      throw new Error('paintcannon renderer has been stopped');
+    }
+
+    const isOuterTransaction = this.transactionDepth === 0;
+    this.transactionDepth += 1;
+
+    let result: T;
+    try {
+      result = callback();
+    } catch (error) {
+      this.transactionDepth -= 1;
+      if (isOuterTransaction) {
+        this.rollbackTransaction();
+      }
+      throw error;
+    }
+
+    this.transactionDepth -= 1;
+    if (isOuterTransaction) {
+      this.commitTransaction();
+    }
+
+    return result;
   }
 
   addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void {
@@ -322,6 +387,11 @@ export class PaintCannon {
       return;
     }
 
+    if (this.isTransactionActive()) {
+      this.renderDeferred = true;
+      return;
+    }
+
     this.binding.render();
   }
 
@@ -351,7 +421,7 @@ export class PaintCannon {
     this.binding.stop();
   }
 
-  setParent(child: PaintNode, parent: PaintElement): void {
+  private setParent(child: PaintNode, parent: PaintElement): void {
     if (child instanceof DivElement || child instanceof SpanElement) {
       this.parents.set(child.id, parent);
     }
@@ -391,6 +461,184 @@ export class PaintCannon {
 
   getClientHeight(element: PaintElement): number {
     return this.getScrollMetrics(element)?.clientHeight ?? 0;
+  }
+
+  private createNativeDiv(): number {
+    if (!this.isTransactionActive()) {
+      return this.binding.createDiv();
+    }
+
+    const id = this.allocateTemporaryId();
+    this.batchCommands.push({ type: 'createDiv', id });
+    return id;
+  }
+
+  private createNativeSpan(): number {
+    if (!this.isTransactionActive()) {
+      return this.binding.createSpan();
+    }
+
+    const id = this.allocateTemporaryId();
+    this.batchCommands.push({ type: 'createSpan', id });
+    return id;
+  }
+
+  private createNativeTextNode(text: string): number {
+    if (!this.isTransactionActive()) {
+      return this.binding.createTextNode(text);
+    }
+
+    const id = this.allocateTemporaryId();
+    this.batchCommands.push({ type: 'createText', id, text });
+    return id;
+  }
+
+  private setNativeTextNodeValue(id: number, text: string): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'setText', id, text });
+      return;
+    }
+
+    this.binding.setTextNodeValue(id, text);
+  }
+
+  private setNativeRoot(id: number): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'setRoot', id });
+      return;
+    }
+
+    this.binding.setRoot(id);
+  }
+
+  private appendNativeChild(parent: PaintElement, child: PaintNode): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'appendChild', parent: parent.id, child: child.id });
+    } else {
+      this.binding.appendChild(parent.id, child.id);
+    }
+
+    this.setParent(child, parent);
+  }
+
+  private setNativeStyleProperty(id: number, property: string, value: string): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: 'setStyleProperty', id, property, value });
+      return;
+    }
+
+    this.binding.setStyleProperty(id, property, value);
+  }
+
+  private isTransactionActive(): boolean {
+    return this.transactionDepth > 0;
+  }
+
+  private allocateTemporaryId(): number {
+    const id = this.nextTemporaryId;
+    this.nextTemporaryId -= 1;
+    return id;
+  }
+
+  private registerBatchNode(node: PaintNode): void {
+    if (node.id < 0) {
+      this.batchNodes.set(node.id, node);
+    }
+  }
+
+  private commitTransaction(): void {
+    const commands = this.batchCommands;
+    const renderDeferred = this.renderDeferred;
+    this.batchCommands = [];
+    this.renderDeferred = false;
+
+    try {
+      if (commands.length > 0) {
+        const mappings = this.binding.applyBatch(commands);
+        this.applyBatchIdMappings(mappings);
+      }
+    } finally {
+      this.batchNodes.clear();
+    }
+
+    if (renderDeferred && !this.stopped) {
+      this.binding.render();
+    }
+  }
+
+  private rollbackTransaction(): void {
+    this.batchCommands = [];
+    this.batchNodes.clear();
+    this.renderDeferred = false;
+  }
+
+  private applyBatchIdMappings(mappings: NativeBatchIdMapping[]): void {
+    if (mappings.length === 0) {
+      return;
+    }
+
+    const ids = new Map(mappings.map((mapping) => [mapping.temporaryId, mapping.id]));
+    for (const [temporaryId, node] of this.batchNodes) {
+      const id = ids.get(temporaryId);
+      if (id !== undefined) {
+        node.id = id;
+      }
+    }
+
+    this.rekeyElementMap(ids);
+    this.rekeyParentMap(ids);
+    this.rekeyElementEventListeners(ids);
+    this.rekeyScrollMetrics(ids);
+  }
+
+  private rekeyElementMap(ids: Map<number, number>): void {
+    for (const temporaryId of ids.keys()) {
+      this.elements.delete(temporaryId);
+    }
+    for (const element of Array.from(this.elements.values())) {
+      this.elements.set(element.id, element);
+    }
+    for (const node of this.batchNodes.values()) {
+      if (node instanceof DivElement || node instanceof SpanElement) {
+        this.elements.set(node.id, node);
+      }
+    }
+  }
+
+  private rekeyParentMap(ids: Map<number, number>): void {
+    if (this.parents.size === 0) {
+      return;
+    }
+
+    const entries = Array.from(this.parents.entries());
+    this.parents.clear();
+    for (const [childId, parent] of entries) {
+      this.parents.set(ids.get(childId) ?? childId, parent);
+    }
+  }
+
+  private rekeyElementEventListeners(ids: Map<number, number>): void {
+    if (this.elementEventListeners.size === 0) {
+      return;
+    }
+
+    const entries = Array.from(this.elementEventListeners.entries());
+    this.elementEventListeners.clear();
+    for (const [id, listeners] of entries) {
+      this.elementEventListeners.set(ids.get(id) ?? id, listeners);
+    }
+  }
+
+  private rekeyScrollMetrics(ids: Map<number, number>): void {
+    if (this.scrollMetrics.size === 0) {
+      return;
+    }
+
+    const entries = Array.from(this.scrollMetrics.entries());
+    this.scrollMetrics.clear();
+    for (const [id, metrics] of entries) {
+      this.scrollMetrics.set(ids.get(id) ?? id, metrics);
+    }
   }
 
   private scheduleAnimationFrameTick(): void {
@@ -506,6 +754,7 @@ export class PaintCannon {
 
   private registerElement(element: PaintElement): void {
     this.elements.set(element.id, element);
+    this.registerBatchNode(element);
   }
 
   private getScrollMetrics(element: PaintElement): NativeScrollMetrics | undefined {
@@ -859,17 +1108,23 @@ export class DivElement {
 
   constructor(
     owner: PaintCannon,
-    private readonly binding: NativePaintCannon,
-    readonly id: number,
+    id: number,
+    private readonly appendNativeChild: (parent: PaintElement, child: PaintNode) => void,
+    setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {
     this.ownerDocument = owner;
-    this.style = new CSSStyleDeclaration(binding, id);
+    this.id = id;
+    this.style = new CSSStyleDeclaration(
+      () => this.id,
+      setNativeStyleProperty,
+    );
   }
+
+  id: number;
 
   appendChild(child: PaintNode): PaintNode {
     assertPaintNode(child);
-    this.binding.appendChild(this.id, child.id);
-    this.ownerDocument.setParent(child, this);
+    this.appendNativeChild(this, child);
     return child;
   }
 
@@ -924,17 +1179,23 @@ export class SpanElement {
 
   constructor(
     owner: PaintCannon,
-    private readonly binding: NativePaintCannon,
-    readonly id: number,
+    id: number,
+    private readonly appendNativeChild: (parent: PaintElement, child: PaintNode) => void,
+    setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {
     this.ownerDocument = owner;
-    this.style = new CSSStyleDeclaration(binding, id);
+    this.id = id;
+    this.style = new CSSStyleDeclaration(
+      () => this.id,
+      setNativeStyleProperty,
+    );
   }
+
+  id: number;
 
   appendChild(child: PaintNode): PaintNode {
     assertPaintNode(child);
-    this.binding.appendChild(this.id, child.id);
-    this.ownerDocument.setParent(child, this);
+    this.appendNativeChild(this, child);
     return child;
   }
 
@@ -988,12 +1249,15 @@ export class TextNode {
 
   constructor(
     owner: PaintCannon,
-    private readonly binding: NativePaintCannon,
-    readonly id: number,
+    id: number,
+    private readonly setNativeTextNodeValue: (id: number, value: string) => void,
     private data: string = '',
   ) {
     this.ownerDocument = owner;
+    this.id = id;
   }
+
+  id: number;
 
   get nodeValue(): string {
     return this.data;
@@ -1001,7 +1265,7 @@ export class TextNode {
 
   set nodeValue(value: string) {
     this.data = String(value);
-    this.binding.setTextNodeValue(this.id, this.data);
+    this.setNativeTextNodeValue(this.id, this.data);
   }
 
   get textContent(): string {
@@ -1017,15 +1281,15 @@ export class CSSStyleDeclaration {
   private readonly values: Record<string, string> = Object.create(null);
 
   constructor(
-    private readonly binding: NativePaintCannon,
-    private readonly id: number,
+    private readonly getElementId: () => number,
+    private readonly setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {}
 
   setProperty(property: string, value: string | number): void {
     const name = normalizeStyleName(property);
     const stringValue = String(value);
     this.values[name] = stringValue;
-    this.binding.setStyleProperty(this.id, name, stringValue);
+    this.setNativeStyleProperty(this.getElementId(), name, stringValue);
   }
 
   getPropertyValue(property: string): string {

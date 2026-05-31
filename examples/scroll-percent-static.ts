@@ -41,12 +41,14 @@ content.style.flexDirection = 'column';
 content.style.width = '100%';
 
 const rowCount = 10_000;
-for (let index = 1; index <= rowCount; index += 1) {
-  const line = pc.createElement('div');
-  line.style.width = '100%';
-  line.appendChild(pc.createTextNode(`static percent row ${String(index).padStart(5, '0')}`));
-  content.appendChild(line);
-}
+pc.transaction(() => {
+  for (let index = 1; index <= rowCount; index += 1) {
+    const line = pc.createElement('div');
+    line.style.width = '100%';
+    line.appendChild(pc.createTextNode(`static percent row ${String(index).padStart(5, '0')}`));
+    content.appendChild(line);
+  }
+});
 
 viewport.appendChild(content);
 body.appendChild(viewport);
