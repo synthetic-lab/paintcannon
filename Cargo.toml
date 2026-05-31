@@ -8,6 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 crossbeam-channel = "0.5"
+crossterm = "0.29"
 libc = "0.2"
 napi = { version = "3", default-features = false, features = ["napi4"] }
 napi-derive = "3"

@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks';
 
 export interface PaintCannonOptions {
   fps?: number;
+  syntheticKeyupDelayMs?: number;
 }
 
 export interface TerminalSize {
@@ -12,6 +13,18 @@ export interface TerminalSize {
 }
 
 export type AnimationFrameCallback = (timestamp: number) => void;
+export type KeyboardEventType = 'keydown' | 'keyup';
+export type KeyboardEventListener = (event: KeyboardEvent) => void;
+
+export interface KeyboardEvent {
+  type: KeyboardEventType;
+  key: string;
+  code: string;
+  altKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  repeat: boolean;
+}
 
 export interface NativePaintCannon {
   createDiv(): number;
@@ -21,7 +34,10 @@ export interface NativePaintCannon {
   appendChild(parent: number, child: number): void;
   setStyleProperty(id: number, property: string, value: string): void;
   terminalSize(): TerminalSize;
+  readonly kittyKeyboardEnabled: boolean;
   render(): void;
+  drainKeyboardEvents(): KeyboardEvent[];
+  setSyntheticKeyupDelay(delayMs: number): void;
   stop(): void;
 }
 
@@ -39,11 +55,19 @@ export class PaintCannon {
   private stopped = false;
   private nextAnimationFrameId = 1;
   private animationFrameTimer: NodeJS.Timeout | undefined;
+  private keyboardEventTimer: NodeJS.Timeout | undefined;
   private readonly animationFrameCallbacks = new Map<number, AnimationFrameCallback>();
+  private readonly keyboardEventListeners: Record<KeyboardEventType, Set<KeyboardEventListener>> = {
+    keydown: new Set(),
+    keyup: new Set(),
+  };
 
   constructor(options: PaintCannonOptions = {}) {
     this.binding = new native.PaintCannon();
     this.frameIntervalMs = fpsToInterval(options.fps ?? 60);
+    if (options.syntheticKeyupDelayMs !== undefined) {
+      this.setSyntheticKeyupDelay(options.syntheticKeyupDelayMs);
+    }
   }
 
   createElement(tagName: 'div'): DivElement;
@@ -67,6 +91,18 @@ export class PaintCannon {
 
   get terminalSize(): TerminalSize {
     return this.binding.terminalSize();
+  }
+
+  get kittyKeyboardEnabled(): boolean {
+    return this.binding.kittyKeyboardEnabled;
+  }
+
+  setSyntheticKeyupDelay(delayMs: number): void {
+    if (!Number.isFinite(delayMs) || delayMs < 0) {
+      throw new Error(`synthetic keyup delay must be a non-negative number, got ${delayMs}`);
+    }
+
+    this.binding.setSyntheticKeyupDelay(Math.floor(delayMs));
   }
 
   setFrameRate(fps: number): void {
@@ -94,6 +130,31 @@ export class PaintCannon {
     this.animationFrameCallbacks.delete(id);
   }
 
+  addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void {
+    if (type !== 'keydown' && type !== 'keyup') {
+      throw new Error(`unsupported event type: ${type}`);
+    }
+
+    if (this.stopped) {
+      throw new Error('paintcannon renderer has been stopped');
+    }
+
+    this.keyboardEventListeners[type].add(listener);
+    this.scheduleKeyboardEventPump();
+  }
+
+  removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void {
+    if (type !== 'keydown' && type !== 'keyup') {
+      return;
+    }
+
+    this.keyboardEventListeners[type].delete(listener);
+    if (this.keyboardListenerCount() === 0 && this.keyboardEventTimer !== undefined) {
+      clearTimeout(this.keyboardEventTimer);
+      this.keyboardEventTimer = undefined;
+    }
+  }
+
   render(): void {
     if (this.stopped) {
       return;
@@ -112,7 +173,13 @@ export class PaintCannon {
       clearTimeout(this.animationFrameTimer);
       this.animationFrameTimer = undefined;
     }
+    if (this.keyboardEventTimer !== undefined) {
+      clearTimeout(this.keyboardEventTimer);
+      this.keyboardEventTimer = undefined;
+    }
     this.animationFrameCallbacks.clear();
+    this.keyboardEventListeners.keydown.clear();
+    this.keyboardEventListeners.keyup.clear();
     this.binding.stop();
   }
 
@@ -140,6 +207,44 @@ export class PaintCannon {
       this.render();
       this.scheduleAnimationFrameTick();
     }
+  }
+
+  private scheduleKeyboardEventPump(): void {
+    if (
+      this.stopped ||
+      this.keyboardEventTimer !== undefined ||
+      this.keyboardListenerCount() === 0
+    ) {
+      return;
+    }
+
+    this.keyboardEventTimer = setTimeout(() => {
+      this.keyboardEventTimer = undefined;
+      this.runKeyboardEventPump();
+    }, this.frameIntervalMs);
+  }
+
+  private runKeyboardEventPump(): void {
+    if (this.stopped) {
+      return;
+    }
+
+    const events = this.binding.drainKeyboardEvents();
+    if (events.length > 0) {
+      for (const event of events) {
+        const listeners = Array.from(this.keyboardEventListeners[event.type] ?? []);
+        for (const listener of listeners) {
+          listener(event);
+        }
+      }
+      this.render();
+    }
+
+    this.scheduleKeyboardEventPump();
+  }
+
+  private keyboardListenerCount(): number {
+    return this.keyboardEventListeners.keydown.size + this.keyboardEventListeners.keyup.size;
   }
 }
 

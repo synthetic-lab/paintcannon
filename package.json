@@ -8,7 +8,9 @@
   "scripts": {
     "build": "napi build --release --dts dist/native.d.ts && tsc",
     "build:debug": "napi build --dts dist/native.d.ts && tsc",
-    "demo": "npm run build:debug && node dist/examples/basic.js"
+    "demo": "npm run build:debug && node dist/examples/basic.js",
+    "demo:keyboard": "npm run build:debug && node dist/examples/keyboard-events.js",
+    "demo:pong": "npm run build:debug && node dist/examples/pong.js"
   },
   "napi": {
     "binaryName": "paintcannon",
