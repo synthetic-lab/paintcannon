@@ -817,6 +817,7 @@ impl PaintEngine {
         let layout_start = Instant::now();
         let layout_passes_before = self.layout_passes();
         self.ensure_layout(width, height, root);
+        self.arena.clamp_scroll_offsets();
         self.arena.ensure_dirty_textareas_visible();
         let stats = self.arena.stats();
         let layout_profile = self.arena.profile_stats();
@@ -1465,6 +1466,36 @@ mod tests {
 
         assert_eq!(engine.layout_passes(), passes);
         assert_eq!(second.cell(0, 0).unwrap().character, 'b');
+    }
+
+    #[test]
+    fn render_clamps_scroll_offset_after_viewport_grows() {
+        let mut engine = PaintEngine::new();
+        let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Percent(1.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = engine.create_element(viewport_style);
+        let mut content_style = block_style(CssDimension::Length(5.0), CssDimension::Auto);
+        content_style.display = crate::style::LayoutDisplay::Flex;
+        content_style.flex_direction = LayoutFlexDirection::Column;
+        let content = engine.create_element(content_style);
+        for index in 0..10 {
+            let row =
+                engine.create_element(block_style(CssDimension::Length(5.0), CssDimension::Auto));
+            let text = engine.create_text(format!("{index}{index}{index}{index}{index}"));
+            engine.append_child(row, text);
+            engine.append_child(content, row);
+        }
+        engine.append_child(viewport, content);
+        engine.set_root(viewport);
+
+        engine.render_frame(5, 3).unwrap();
+        engine.set_scroll_offset_for_size(viewport, 0, 100, 5, 3);
+        let small = engine.render_frame(5, 3).unwrap();
+        assert_eq!(small.cell(0, 0).unwrap().character, '7');
+
+        let large = engine.render_frame(5, 8).unwrap();
+        assert_eq!(large.cell(0, 0).unwrap().character, '2');
+        assert_eq!(large.cell(0, 7).unwrap().character, '9');
     }
 
     #[test]

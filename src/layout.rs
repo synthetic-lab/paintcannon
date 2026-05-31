@@ -590,6 +590,18 @@ impl LayoutArena {
         self.scroll_metrics_for_node(node)
     }
 
+    pub(crate) fn clamp_scroll_offsets(&mut self) {
+        let nodes = (0..self.nodes.len()).map(NodeId::from).collect::<Vec<_>>();
+        for node in nodes {
+            let Some(metrics) = self.scroll_metrics_for_node(node) else {
+                continue;
+            };
+            let item = &mut self.nodes[node_index(node)];
+            item.scroll_left = metrics.scroll_left;
+            item.scroll_top = metrics.scroll_top;
+        }
+    }
+
     fn scroll_metrics_for_node(&mut self, node_id: NodeId) -> Option<ArenaScrollMetrics> {
         let index = node_index(node_id);
         if matches!(self.nodes[index].kind, LayoutNodeKind::TextArea(_)) {
@@ -2537,6 +2549,41 @@ mod tests {
 
         let metrics = arena.set_scroll_offset(viewport, 0, 100).unwrap();
         assert_eq!(metrics.scroll_top, 7);
+    }
+
+    #[test]
+    fn scroll_offset_clamps_when_viewport_grows_after_resize() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Length(3.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = arena.create_element(viewport_style.clone());
+        let child = fixed_box(&mut arena, 5.0, 10.0);
+        arena.append_child(viewport, child);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+        arena.set_scroll_offset(viewport, 0, 100).unwrap();
+        assert_eq!(arena.scroll_offset(viewport).1, 7);
+
+        viewport_style.height = CssDimension::Length(8.0);
+        arena.set_style(viewport, viewport_style);
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(8.0),
+            },
+        );
+        assert_eq!(arena.scroll_metrics(viewport).unwrap().scroll_top, 2);
+        assert_eq!(arena.scroll_offset(viewport).1, 7);
+
+        arena.clamp_scroll_offsets();
+        assert_eq!(arena.scroll_offset(viewport).1, 2);
     }
 
     #[test]
