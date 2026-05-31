@@ -81,12 +81,32 @@ struct LayoutNode {
     scroll_left: u32,
     scroll_top: u32,
     fragments: Vec<InlineFragment>,
+    measure_cache: InlineMeasureCache,
 }
 
 #[derive(Clone, Copy)]
 struct ContentWidths {
     min: f32,
     max: f32,
+}
+
+#[derive(Default)]
+struct InlineMeasureCache {
+    widths: Vec<InlineWidthCacheEntry>,
+    heights: Vec<InlineHeightCacheEntry>,
+}
+
+#[derive(Clone, Copy)]
+struct InlineWidthCacheEntry {
+    white_space: CssWhiteSpace,
+    widths: ContentWidths,
+}
+
+#[derive(Clone, Copy)]
+struct InlineHeightCacheEntry {
+    white_space: CssWhiteSpace,
+    width: u32,
+    height: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -277,6 +297,7 @@ impl LayoutArena {
     pub(crate) fn compute_layout(&mut self, root: NodeId, available: Size<AvailableSpace>) {
         self.layout_passes += 1;
         self.profile = LayoutProfileStats::default();
+        self.clear_measure_caches();
         compute_root_layout(self, root, available);
     }
 
@@ -335,6 +356,7 @@ impl LayoutArena {
             scroll_left: 0,
             scroll_top: 0,
             fragments: Vec::new(),
+            measure_cache: InlineMeasureCache::default(),
         });
         id
     }
@@ -343,7 +365,7 @@ impl LayoutArena {
         &self.nodes[node_index(node)].fragments
     }
 
-    pub(crate) fn scroll_metrics(&self, node: NodeId) -> Option<ArenaScrollMetrics> {
+    pub(crate) fn scroll_metrics(&mut self, node: NodeId) -> Option<ArenaScrollMetrics> {
         self.scroll_metrics_for_node(node)
     }
 
@@ -368,16 +390,23 @@ impl LayoutArena {
         self.scroll_metrics_for_node(node)
     }
 
-    fn scroll_metrics_for_node(&self, node_id: NodeId) -> Option<ArenaScrollMetrics> {
-        let node = &self.nodes[node_index(node_id)];
-        if !matches!(node.kind, LayoutNodeKind::Element) {
+    fn scroll_metrics_for_node(&mut self, node_id: NodeId) -> Option<ArenaScrollMetrics> {
+        let index = node_index(node_id);
+        if !matches!(self.nodes[index].kind, LayoutNodeKind::Element) {
             return None;
         }
 
-        let content_size = node.layout.content_box_size();
+        let layout = self.nodes[index].layout;
+        let white_space = self.nodes[index].style.white_space;
+        let overflow_x = self.nodes[index].style.overflow_x;
+        let overflow_y = self.nodes[index].style.overflow_y;
+        let scroll_left = self.nodes[index].scroll_left;
+        let scroll_top = self.nodes[index].scroll_top;
+        let children = self.nodes[index].children.clone();
+        let content_size = layout.content_box_size();
         let content_origin = Point {
-            x: node.layout.border.left + node.layout.padding.left,
-            y: node.layout.border.top + node.layout.padding.top,
+            x: layout.border.left + layout.padding.left,
+            y: layout.border.top + layout.padding.top,
         };
         let client_width = float_to_cells(content_size.width);
         let client_height = float_to_cells(content_size.height);
@@ -385,13 +414,12 @@ impl LayoutArena {
         let mut scroll_height = client_height;
 
         if self.is_inline_context(node_id) {
-            let widths = self.inline_content_widths(node_id, node.style.white_space);
-            let height =
-                self.inline_content_height(node_id, node.style.white_space, client_width.max(1));
+            let widths = self.inline_content_widths(node_id, white_space);
+            let height = self.inline_content_height(node_id, white_space, client_width.max(1));
             scroll_width = scroll_width.max(float_to_cells(widths.max));
             scroll_height = scroll_height.max(float_to_cells(height));
         } else {
-            for child in &node.children {
+            for child in &children {
                 let child_layout = self.nodes[node_index(*child)].layout;
                 scroll_width = scroll_width.max(float_to_cells(
                     child_layout.location.x + child_layout.size.width - content_origin.x,
@@ -403,12 +431,12 @@ impl LayoutArena {
         }
 
         Some(ArenaScrollMetrics {
-            scroll_left: node.scroll_left.min(axis_max_scroll(
-                node.style.overflow_x,
+            scroll_left: scroll_left.min(axis_max_scroll(
+                overflow_x,
                 scroll_width.saturating_sub(client_width),
             )),
-            scroll_top: node.scroll_top.min(axis_max_scroll(
-                node.style.overflow_y,
+            scroll_top: scroll_top.min(axis_max_scroll(
+                overflow_y,
                 scroll_height.saturating_sub(client_height),
             )),
             scroll_width,
@@ -443,6 +471,13 @@ impl LayoutArena {
         let children = self.nodes[node_index(node)].children.clone();
         for child in children {
             self.clear_cache_subtree(child);
+        }
+    }
+
+    fn clear_measure_caches(&mut self) {
+        for node in &mut self.nodes {
+            node.measure_cache.widths.clear();
+            node.measure_cache.heights.clear();
         }
     }
 
@@ -645,9 +680,23 @@ impl LayoutArena {
         LayoutOutput::from_sizes(outer_size, measured_size)
     }
 
-    fn inline_content_widths(&self, node_id: NodeId, white_space: CssWhiteSpace) -> ContentWidths {
-        let node = &self.nodes[node_index(node_id)];
-        node.children
+    fn inline_content_widths(
+        &mut self,
+        node_id: NodeId,
+        white_space: CssWhiteSpace,
+    ) -> ContentWidths {
+        let index = node_index(node_id);
+        if let Some(entry) = self.nodes[index]
+            .measure_cache
+            .widths
+            .iter()
+            .find(|entry| entry.white_space == white_space)
+        {
+            return entry.widths;
+        }
+
+        let children = self.nodes[index].children.clone();
+        let widths = children
             .iter()
             .map(|child| self.inline_node_widths(*child, white_space))
             .fold(ContentWidths { min: 1.0, max: 0.0 }, |acc, item| {
@@ -655,24 +704,33 @@ impl LayoutArena {
                     min: acc.min.max(item.min),
                     max: acc.max + item.max,
                 }
-            })
+            });
+        self.nodes[index]
+            .measure_cache
+            .widths
+            .push(InlineWidthCacheEntry {
+                white_space,
+                widths,
+            });
+        widths
     }
 
     fn inline_node_widths(
-        &self,
+        &mut self,
         node_id: NodeId,
         inherited_white_space: CssWhiteSpace,
     ) -> ContentWidths {
-        let node = &self.nodes[node_index(node_id)];
-        match &node.kind {
-            LayoutNodeKind::Text(text) => text_content_widths(text, inherited_white_space),
-            LayoutNodeKind::Element if node.style.display == LayoutDisplay::Inline => {
-                let white_space =
-                    effective_white_space(inherited_white_space, node.style.white_space);
+        let index = node_index(node_id);
+        let kind = self.nodes[index].kind.clone();
+        let style = self.nodes[index].style.clone();
+        match kind {
+            LayoutNodeKind::Text(text) => text_content_widths(&text, inherited_white_space),
+            LayoutNodeKind::Element if style.display == LayoutDisplay::Inline => {
+                let white_space = effective_white_space(inherited_white_space, style.white_space);
                 self.inline_content_widths(node_id, white_space)
             }
             LayoutNodeKind::Image(_) | LayoutNodeKind::Input(_) | LayoutNodeKind::TextArea(_)
-                if node.style.display == LayoutDisplay::Inline =>
+                if style.display == LayoutDisplay::Inline =>
             {
                 let size = self.replaced_node_size(node_id, Size::NONE, Size::MAX_CONTENT);
                 ContentWidths {
@@ -687,37 +745,65 @@ impl LayoutArena {
         }
     }
 
-    fn inline_content_height(&self, node: NodeId, white_space: CssWhiteSpace, width: u32) -> f32 {
+    fn inline_content_height(
+        &mut self,
+        node: NodeId,
+        white_space: CssWhiteSpace,
+        width: u32,
+    ) -> f32 {
+        let width = width.max(1);
+        let index = node_index(node);
+        if let Some(entry) = self.nodes[index]
+            .measure_cache
+            .heights
+            .iter()
+            .find(|entry| entry.white_space == white_space && entry.width == width)
+        {
+            return entry.height;
+        }
+
         let mut cursor = InlineMeasureCursor {
             col: 0,
             row: 0,
-            width: width.max(1),
+            width,
             max_col: 0,
         };
-        for child in &self.nodes[node_index(node)].children {
-            self.measure_inline_node(*child, white_space, &mut cursor);
+        let children = self.nodes[index].children.clone();
+        for child in children {
+            self.measure_inline_node(child, white_space, &mut cursor);
         }
-        (cursor.row + 1).max(1) as f32
+        let height = (cursor.row + 1).max(1) as f32;
+        self.nodes[index]
+            .measure_cache
+            .heights
+            .push(InlineHeightCacheEntry {
+                white_space,
+                width,
+                height,
+            });
+        height
     }
 
     fn measure_inline_node(
-        &self,
+        &mut self,
         node: NodeId,
         inherited_white_space: CssWhiteSpace,
         cursor: &mut InlineMeasureCursor,
     ) {
-        let item = &self.nodes[node_index(node)];
-        match &item.kind {
-            LayoutNodeKind::Text(text) => measure_inline_text(text, inherited_white_space, cursor),
-            LayoutNodeKind::Element if item.style.display == LayoutDisplay::Inline => {
-                let white_space =
-                    effective_white_space(inherited_white_space, item.style.white_space);
-                for child in &item.children {
-                    self.measure_inline_node(*child, white_space, cursor);
+        let index = node_index(node);
+        let kind = self.nodes[index].kind.clone();
+        let style = self.nodes[index].style.clone();
+        match kind {
+            LayoutNodeKind::Text(text) => measure_inline_text(&text, inherited_white_space, cursor),
+            LayoutNodeKind::Element if style.display == LayoutDisplay::Inline => {
+                let white_space = effective_white_space(inherited_white_space, style.white_space);
+                let children = self.nodes[index].children.clone();
+                for child in children {
+                    self.measure_inline_node(child, white_space, cursor);
                 }
             }
             LayoutNodeKind::Image(_) | LayoutNodeKind::Input(_) | LayoutNodeKind::TextArea(_)
-                if item.style.display == LayoutDisplay::Inline =>
+                if style.display == LayoutDisplay::Inline =>
             {
                 let size = self.replaced_node_size(node, Size::NONE, Size::MAX_CONTENT);
                 measure_inline_replaced(size, cursor);

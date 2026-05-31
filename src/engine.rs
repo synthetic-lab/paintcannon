@@ -663,7 +663,7 @@ impl PaintEngine {
         true
     }
 
-    pub(crate) fn scroll_metrics(&self, node: DomId) -> Option<ArenaScrollMetrics> {
+    pub(crate) fn scroll_metrics(&mut self, node: DomId) -> Option<ArenaScrollMetrics> {
         self.node_for(node)
             .and_then(|node| self.arena.scroll_metrics(node))
     }
