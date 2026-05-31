@@ -771,6 +771,14 @@ export class CSSStyleDeclaration {
     this.setProperty('display', value);
   }
 
+  get overflow(): 'visible' | 'hidden' | string {
+    return this.getPropertyValue('overflow');
+  }
+
+  set overflow(value: 'visible' | 'hidden' | string) {
+    this.setProperty('overflow', value);
+  }
+
   get flexDirection(): 'row' | 'column' | string {
     return this.getPropertyValue('flex-direction');
   }

@@ -1,5 +1,7 @@
 use napi::{Error, Result};
+use taffy::geometry::Point;
 use taffy::prelude::*;
+use taffy::style::Overflow;
 
 use crate::renderer::RenderCommand;
 
@@ -29,6 +31,7 @@ pub(crate) struct DivStyle {
     pub(crate) grid_column: CssGridLine,
     pub(crate) grid_row: CssGridLine,
     pub(crate) background: Background,
+    pub(crate) overflow: LayoutOverflow,
 }
 
 impl Default for DivStyle {
@@ -58,6 +61,7 @@ impl Default for DivStyle {
             grid_column: CssGridLine::default(),
             grid_row: CssGridLine::default(),
             background: Background::Default,
+            overflow: LayoutOverflow::Visible,
         }
     }
 }
@@ -68,6 +72,12 @@ pub(crate) enum LayoutDisplay {
     Block,
     Flex,
     Grid,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutOverflow {
+    Visible,
+    Hidden,
 }
 
 #[derive(Clone, Copy)]
@@ -361,6 +371,16 @@ impl DivStyle {
             grid_auto_flow: self.grid_auto_flow.to_taffy(),
             grid_column: self.grid_column.to_taffy(),
             grid_row: self.grid_row.to_taffy(),
+            overflow: Point {
+                x: match self.overflow {
+                    LayoutOverflow::Visible => Overflow::Visible,
+                    LayoutOverflow::Hidden => Overflow::Hidden,
+                },
+                y: match self.overflow {
+                    LayoutOverflow::Visible => Overflow::Visible,
+                    LayoutOverflow::Hidden => Overflow::Hidden,
+                },
+            },
             ..Default::default()
         }
     }
@@ -385,6 +405,14 @@ pub(crate) fn parse_display(value: &str) -> Result<LayoutDisplay> {
         "flex" | "flexbox" => Ok(LayoutDisplay::Flex),
         "grid" => Ok(LayoutDisplay::Grid),
         value => Err(Error::from_reason(format!("unsupported display: {value}"))),
+    }
+}
+
+pub(crate) fn parse_overflow(value: &str) -> Result<LayoutOverflow> {
+    match value.trim() {
+        "visible" => Ok(LayoutOverflow::Visible),
+        "hidden" => Ok(LayoutOverflow::Hidden),
+        value => Err(Error::from_reason(format!("unsupported overflow: {value}"))),
     }
 }
 

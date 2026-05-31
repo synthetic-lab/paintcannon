@@ -10,7 +10,7 @@ use crate::style::{
     parse_align_items, parse_dimension, parse_display, parse_flex_direction, parse_flex_flow,
     parse_flex_shorthand, parse_flex_wrap, parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks,
     parse_grid_line, parse_grid_placement, parse_grid_template_tracks, parse_justify_content,
-    parse_length_percentage, parse_non_negative_number, Background,
+    parse_length_percentage, parse_non_negative_number, parse_overflow, Background,
 };
 use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
@@ -101,6 +101,10 @@ impl PaintCannon {
             "display" => RenderCommand::SetDisplay {
                 id,
                 display: parse_display(&value)?,
+            },
+            "overflow" => RenderCommand::SetOverflow {
+                id,
+                overflow: parse_overflow(&value)?,
             },
             "flex-direction" | "flexDirection" => RenderCommand::SetFlexDirection {
                 id,

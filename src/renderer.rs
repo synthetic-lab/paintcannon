@@ -37,6 +37,10 @@ pub(crate) enum RenderCommand {
         id: u32,
         display: LayoutDisplay,
     },
+    SetOverflow {
+        id: u32,
+        overflow: LayoutOverflow,
+    },
     SetFlexDirection {
         id: u32,
         direction: LayoutFlexDirection,
@@ -307,6 +311,11 @@ impl Renderer {
                     node.display = display;
                 }
             }
+            RenderCommand::SetOverflow { id, overflow } => {
+                if let Some(node) = self.style_mut(id) {
+                    node.overflow = overflow;
+                }
+            }
             RenderCommand::SetFlexDirection { id, direction } => {
                 if let Some(node) = self.style_mut(id) {
                     node.flex_direction = direction;
@@ -542,6 +551,7 @@ impl Renderer {
             &taffy_ids,
             &mut frame,
             &mut hit_regions,
+            None,
         );
         let _ = frame.write_diff_to_stdout(self.previous_frame.as_ref());
         self.previous_frame = Some(frame);
@@ -603,6 +613,7 @@ impl Renderer {
         taffy_ids: &HashMap<u32, NodeId>,
         frame: &mut Frame,
         hit_regions: &mut Vec<HitRegion>,
+        clip: Option<ClipRect>,
     ) {
         let Some(dom_node) = self.nodes.get(&id) else {
             return;
@@ -616,25 +627,26 @@ impl Renderer {
 
         let x = parent_x + layout.location.x;
         let y = parent_y + layout.location.y;
+        let bounds = ClipRect::new(
+            x.round() as i32,
+            y.round() as i32,
+            layout.size.width.round() as i32,
+            layout.size.height.round() as i32,
+        );
 
         match dom_node {
             DomNode::Div(node) => {
-                push_hit_region(
-                    hit_regions,
-                    id,
-                    x.round() as i32,
-                    y.round() as i32,
-                    layout.size.width.round() as i32,
-                    layout.size.height.round() as i32,
-                );
+                push_hit_region(hit_regions, id, bounds, clip);
                 frame.fill_rect(
                     x.round() as i32,
                     y.round() as i32,
                     layout.size.width.round() as i32,
                     layout.size.height.round() as i32,
                     node.style.background,
+                    clip,
                 );
 
+                let child_clip = child_clip_for(node.style.overflow, bounds, clip);
                 if self.is_inline_container(node) {
                     self.paint_inline_children(
                         &node.children,
@@ -644,29 +656,34 @@ impl Renderer {
                         frame,
                         hit_regions,
                         Some(id),
+                        child_clip,
                     );
                 } else {
                     for child in &node.children {
-                        self.paint_node(*child, x, y, taffy, taffy_ids, frame, hit_regions);
+                        self.paint_node(
+                            *child,
+                            x,
+                            y,
+                            taffy,
+                            taffy_ids,
+                            frame,
+                            hit_regions,
+                            child_clip,
+                        );
                     }
                 }
             }
             DomNode::Span(node) => {
-                push_hit_region(
-                    hit_regions,
-                    id,
-                    x.round() as i32,
-                    y.round() as i32,
-                    layout.size.width.round() as i32,
-                    layout.size.height.round() as i32,
-                );
+                push_hit_region(hit_regions, id, bounds, clip);
                 frame.fill_rect(
                     x.round() as i32,
                     y.round() as i32,
                     layout.size.width.round() as i32,
                     layout.size.height.round() as i32,
                     node.style.background,
+                    clip,
                 );
+                let child_clip = child_clip_for(node.style.overflow, bounds, clip);
                 if self.is_inline_children(&node.children) {
                     self.paint_inline_children(
                         &node.children,
@@ -676,15 +693,25 @@ impl Renderer {
                         frame,
                         hit_regions,
                         Some(id),
+                        child_clip,
                     );
                 } else {
                     for child in &node.children {
-                        self.paint_node(*child, x, y, taffy, taffy_ids, frame, hit_regions);
+                        self.paint_node(
+                            *child,
+                            x,
+                            y,
+                            taffy,
+                            taffy_ids,
+                            frame,
+                            hit_regions,
+                            child_clip,
+                        );
                     }
                 }
             }
             DomNode::Text(node) => {
-                frame.write_text(x.round() as i32, y.round() as i32, &node.text);
+                frame.write_text(x.round() as i32, y.round() as i32, &node.text, clip);
             }
         }
     }
@@ -719,6 +746,7 @@ impl Renderer {
         frame: &mut Frame,
         hit_regions: &mut Vec<HitRegion>,
         hit_target: Option<u32>,
+        clip: Option<ClipRect>,
     ) {
         let mut cursor = InlineCursor {
             x,
@@ -736,6 +764,7 @@ impl Renderer {
                 frame,
                 hit_regions,
                 hit_target,
+                clip,
             );
         }
     }
@@ -748,6 +777,7 @@ impl Renderer {
         frame: &mut Frame,
         hit_regions: &mut Vec<HitRegion>,
         hit_target: Option<u32>,
+        clip: Option<ClipRect>,
     ) {
         match self.nodes.get(&id) {
             Some(DomNode::Text(node)) => {
@@ -758,6 +788,7 @@ impl Renderer {
                     frame,
                     hit_regions,
                     hit_target,
+                    clip,
                 );
             }
             Some(DomNode::Span(node)) => {
@@ -775,6 +806,7 @@ impl Renderer {
                         frame,
                         hit_regions,
                         Some(id),
+                        clip,
                     );
                 }
             }
@@ -793,6 +825,7 @@ impl Renderer {
                         frame,
                         hit_regions,
                         Some(id),
+                        clip,
                     );
                 }
             }
@@ -833,6 +866,40 @@ struct HitRegion {
     bottom: i32,
 }
 
+#[derive(Clone, Copy)]
+struct ClipRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+impl ClipRect {
+    fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
+        Self {
+            left: x,
+            top: y,
+            right: x + width.max(0),
+            bottom: y + height.max(0),
+        }
+    }
+
+    fn intersect(self, other: Self) -> Option<Self> {
+        let rect = Self {
+            left: self.left.max(other.left),
+            top: self.top.max(other.top),
+            right: self.right.min(other.right),
+            bottom: self.bottom.min(other.bottom),
+        };
+
+        if rect.left < rect.right && rect.top < rect.bottom {
+            Some(rect)
+        } else {
+            None
+        }
+    }
+}
+
 impl HitRegion {
     fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.left && x < self.right && y >= self.top && y < self.bottom
@@ -842,22 +909,31 @@ impl HitRegion {
 fn push_hit_region(
     hit_regions: &mut Vec<HitRegion>,
     id: u32,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
+    bounds: ClipRect,
+    clip: Option<ClipRect>,
 ) {
-    if width <= 0 || height <= 0 {
+    let Some(bounds) = clip.map_or(Some(bounds), |clip| bounds.intersect(clip)) else {
         return;
-    }
+    };
 
     hit_regions.push(HitRegion {
         id,
-        left: x,
-        top: y,
-        right: x + width,
-        bottom: y + height,
+        left: bounds.left,
+        top: bounds.top,
+        right: bounds.right,
+        bottom: bounds.bottom,
     });
+}
+
+fn child_clip_for(
+    overflow: LayoutOverflow,
+    bounds: ClipRect,
+    clip: Option<ClipRect>,
+) -> Option<ClipRect> {
+    match overflow {
+        LayoutOverflow::Visible => clip,
+        LayoutOverflow::Hidden => clip.map_or(Some(bounds), |clip| bounds.intersect(clip)),
+    }
 }
 
 struct InlineCursor {
@@ -875,6 +951,7 @@ fn write_inline_text(
     frame: &mut Frame,
     hit_regions: &mut Vec<HitRegion>,
     hit_target: Option<u32>,
+    clip: Option<ClipRect>,
 ) {
     for character in text.chars() {
         if character == '\n' {
@@ -890,9 +967,9 @@ fn write_inline_text(
 
         let x = cursor.x + cursor.col;
         let y = cursor.y + cursor.row;
-        frame.write_char(x, y, character, background);
+        frame.write_char(x, y, character, background, clip);
         if let Some(hit_target) = hit_target {
-            push_hit_region(hit_regions, hit_target, x, y, 1, 1);
+            push_hit_region(hit_regions, hit_target, ClipRect::new(x, y, 1, 1), clip);
         }
         cursor.col += 1;
     }
@@ -913,15 +990,31 @@ impl Frame {
         }
     }
 
-    fn fill_rect(&mut self, x: i32, y: i32, width: i32, height: i32, background: Background) {
+    fn fill_rect(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        background: Background,
+        clip: Option<ClipRect>,
+    ) {
         if background == Background::Default || width <= 0 || height <= 0 {
             return;
         }
 
-        let left = x.max(0) as usize;
-        let top = y.max(0) as usize;
-        let right = (x + width).min(self.width as i32).max(0) as usize;
-        let bottom = (y + height).min(self.height as i32).max(0) as usize;
+        let mut bounds = ClipRect::new(x, y, width, height);
+        if let Some(clip) = clip {
+            let Some(clipped) = bounds.intersect(clip) else {
+                return;
+            };
+            bounds = clipped;
+        }
+
+        let left = bounds.left.max(0) as usize;
+        let top = bounds.top.max(0) as usize;
+        let right = bounds.right.min(self.width as i32).max(0) as usize;
+        let bottom = bounds.bottom.min(self.height as i32).max(0) as usize;
 
         for row in top..bottom {
             let start = row * self.width;
@@ -934,10 +1027,13 @@ impl Frame {
         }
     }
 
-    fn write_text(&mut self, x: i32, y: i32, text: &str) {
+    fn write_text(&mut self, x: i32, y: i32, text: &str, clip: Option<ClipRect>) {
         for (line_offset, line) in text.lines().enumerate() {
             let row = y + line_offset as i32;
             if row < 0 || row >= self.height as i32 {
+                continue;
+            }
+            if clip.is_some_and(|clip| row < clip.top || row >= clip.bottom) {
                 continue;
             }
 
@@ -947,7 +1043,7 @@ impl Frame {
                     break;
                 }
 
-                if col >= 0 {
+                if col >= 0 && clip.is_none_or(|clip| col >= clip.left && col < clip.right) {
                     let index = row as usize * self.width + col as usize;
                     self.cells[index].character = character;
                 }
@@ -956,8 +1052,20 @@ impl Frame {
         }
     }
 
-    fn write_char(&mut self, x: i32, y: i32, character: char, background: Background) {
+    fn write_char(
+        &mut self,
+        x: i32,
+        y: i32,
+        character: char,
+        background: Background,
+        clip: Option<ClipRect>,
+    ) {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            return;
+        }
+        if clip.is_some_and(|clip| {
+            x < clip.left || x >= clip.right || y < clip.top || y >= clip.bottom
+        }) {
             return;
         }
 
