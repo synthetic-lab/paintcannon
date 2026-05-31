@@ -232,6 +232,11 @@ pub(crate) enum EngineCommand {
         node: DomId,
         focused: bool,
     },
+    MoveTextAreaCursorVertically {
+        node: DomId,
+        direction: i32,
+        response: Sender<Option<u32>>,
+    },
     SetScrollOffset {
         node: DomId,
         scroll_left: u32,
@@ -720,6 +725,18 @@ impl PaintEngine {
         };
         self.arena.set_textarea_focused(node, focused);
         true
+    }
+
+    pub(crate) fn move_textarea_cursor_vertically_for_size(
+        &mut self,
+        node: DomId,
+        direction: i32,
+        width: usize,
+        height: usize,
+    ) -> Option<u32> {
+        let node = self.node_for(node)?;
+        self.ensure_layout_for_size(width, height);
+        self.arena.move_textarea_cursor_vertically(node, direction)
     }
 
     pub(crate) fn scroll_metrics(&mut self, node: DomId) -> Option<ArenaScrollMetrics> {
@@ -1284,6 +1301,19 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         }
         EngineCommand::SetTextAreaFocused { node, focused } => {
             engine.set_textarea_focused(node, focused);
+        }
+        EngineCommand::MoveTextAreaCursorVertically {
+            node,
+            direction,
+            response,
+        } => {
+            let size = query_terminal_size();
+            let _ = response.send(engine.move_textarea_cursor_vertically_for_size(
+                node,
+                direction,
+                size.cols as usize,
+                size.rows as usize,
+            ));
         }
         EngineCommand::SetScrollOffset {
             node,
@@ -1976,6 +2006,26 @@ mod tests {
 
         assert_eq!(frame.cell(0, 0).unwrap().character, 'h');
         assert_eq!(frame.cell(4, 0).unwrap().character, 'o');
+    }
+
+    #[test]
+    fn textarea_vertical_cursor_move_uses_soft_wrapped_rows() {
+        let mut engine = PaintEngine::new();
+        let textarea = engine.create_textarea(
+            block_style(CssDimension::Length(6.0), CssDimension::Auto),
+            "abcd efgh",
+        );
+        engine.set_root(textarea);
+        engine.set_textarea_value(textarea, "abcd efgh", 7);
+        engine.set_textarea_focused(textarea, true);
+
+        assert_eq!(
+            engine.move_textarea_cursor_vertically_for_size(textarea, -1, 6, 3),
+            Some(2)
+        );
+
+        let frame = engine.render_frame(6, 3).unwrap();
+        assert!(frame.cell(2, 0).unwrap().reversed);
     }
 
     #[test]

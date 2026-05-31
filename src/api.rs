@@ -238,6 +238,19 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn move_text_area_cursor_vertically(&self, id: u32, direction: i32) -> Result<Option<u32>> {
+        let (response_tx, response_rx) = bounded(1);
+        self.send(EngineCommand::MoveTextAreaCursorVertically {
+            node: DomId(id),
+            direction,
+            response: response_tx,
+        })?;
+        response_rx
+            .recv()
+            .map_err(|_| Error::from_reason("renderer thread stopped"))
+    }
+
+    #[napi]
     pub fn set_root(&self, id: u32) -> Result<()> {
         self.send(EngineCommand::SetRoot { root: DomId(id) })
     }

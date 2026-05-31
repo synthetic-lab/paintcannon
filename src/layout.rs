@@ -14,6 +14,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::style::{
     BorderStyle, CssDimension, CssWhiteSpace, DivStyle, LayoutDisplay, LayoutOverflow,
 };
+use crate::text_wrap::WrappedText;
 
 #[derive(Clone)]
 pub(crate) enum LayoutNodeKind {
@@ -275,6 +276,24 @@ impl LayoutArena {
         if let LayoutNodeKind::TextArea(textarea) = &mut self.nodes[node_index(node)].kind {
             textarea.focused = focused;
         }
+    }
+
+    pub(crate) fn move_textarea_cursor_vertically(
+        &mut self,
+        node: NodeId,
+        direction: i32,
+    ) -> Option<u32> {
+        let index = node_index(node);
+        let layout = self.layout(node);
+        let wrap_width = float_to_cells(layout.content_box_size().width).max(1) as usize;
+        let LayoutNodeKind::TextArea(textarea) = &mut self.nodes[index].kind else {
+            return None;
+        };
+        let wrapped = WrappedText::new(&textarea.value, wrap_width);
+        let next = wrapped.cursor_after_vertical_move(textarea.cursor as usize, direction);
+        let next = next.min(textarea.value.chars().count()) as u32;
+        textarea.cursor = next;
+        Some(next)
     }
 
     pub(crate) fn append_child(&mut self, parent: NodeId, child: NodeId) {

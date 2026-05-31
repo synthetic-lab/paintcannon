@@ -183,6 +183,7 @@ export interface NativePaintCannon {
   setInputFocused(id: number, focused: boolean): void;
   setTextAreaValue(id: number, value: string, cursor: number): void;
   setTextAreaFocused(id: number, focused: boolean): void;
+  moveTextAreaCursorVertically(id: number, direction: number): number | null;
   setRoot(id: number): void;
   appendChild(parent: number, child: number): void;
   detachNode(id: number): void;
@@ -349,6 +350,7 @@ export class PaintCannon {
         this.createNativeTextArea(),
         (id, value, cursor) => this.setNativeTextAreaValue(id, value, cursor),
         (id, focused) => this.setNativeTextAreaFocused(id, focused),
+        (id, direction) => this.binding.moveTextAreaCursorVertically(id, direction),
         (id, property, value) => this.setNativeStyleProperty(id, property, value),
       );
       this.registerElement(element);
@@ -1153,14 +1155,12 @@ export class PaintCannon {
         return true;
       case 'ArrowUp':
         if (input instanceof TextAreaElement) {
-          moveTextAreaCursorVertically(input, -1);
-          return true;
+          return input.moveCursorVertically(-1);
         }
         return false;
       case 'ArrowDown':
         if (input instanceof TextAreaElement) {
-          moveTextAreaCursorVertically(input, 1);
-          return true;
+          return input.moveCursorVertically(1);
         }
         return false;
       case 'Home':
@@ -1996,6 +1996,15 @@ export class InputElement {
     this.syncValue();
   }
 
+  protected setCursorPositionFromNative(position: number): void {
+    if (!Number.isFinite(position)) {
+      throw new Error(`cursor position must be a finite number, got ${position}`);
+    }
+
+    const length = Array.from(this.inputValue).length;
+    this.cursor = Math.max(0, Math.min(length, Math.floor(position)));
+  }
+
   focus(): void {
     this.ownerDocument.focusInput(this);
   }
@@ -2129,12 +2138,33 @@ export class InputElement {
 }
 
 export class TextAreaElement extends InputElement {
+  constructor(
+    owner: PaintCannon,
+    id: number,
+    setNativeInputValue: (id: number, value: string, cursor: number) => void,
+    setNativeInputFocused: (id: number, focused: boolean) => void,
+    private readonly moveNativeTextAreaCursorVertically: (id: number, direction: number) => number | null,
+    setNativeStyleProperty: (id: number, property: string, value: string) => void,
+  ) {
+    super(owner, id, setNativeInputValue, setNativeInputFocused, setNativeStyleProperty);
+  }
+
   override get type(): string {
     return 'textarea';
   }
 
   override set type(value: string) {
     throw new Error(`textarea does not support input type assignment, got "${String(value)}"`);
+  }
+
+  moveCursorVertically(direction: -1 | 1): boolean {
+    const cursor = this.moveNativeTextAreaCursorVertically(this.id, direction);
+    if (cursor === null) {
+      return false;
+    }
+
+    this.setCursorPositionFromNative(cursor);
+    return true;
   }
 }
 
@@ -2599,33 +2629,6 @@ function moveTextAreaCursorToLineStart(input: TextAreaElement): void {
 function moveTextAreaCursorToLineEnd(input: TextAreaElement): void {
   const chars = Array.from(input.value);
   input.cursorPosition = lineEnd(chars, input.cursorPosition);
-}
-
-function moveTextAreaCursorVertically(input: TextAreaElement, direction: -1 | 1): void {
-  const chars = Array.from(input.value);
-  const cursor = Math.max(0, Math.min(chars.length, input.cursorPosition));
-  const currentStart = lineStart(chars, cursor);
-  const currentEnd = lineEnd(chars, cursor);
-  const column = cursor - currentStart;
-
-  if (direction < 0) {
-    if (currentStart === 0) {
-      return;
-    }
-
-    const previousEnd = currentStart - 1;
-    const previousStart = lineStart(chars, previousEnd);
-    input.cursorPosition = Math.min(previousStart + column, previousEnd);
-    return;
-  }
-
-  if (currentEnd >= chars.length) {
-    return;
-  }
-
-  const nextStart = currentEnd + 1;
-  const nextEnd = lineEnd(chars, nextStart);
-  input.cursorPosition = Math.min(nextStart + column, nextEnd);
 }
 
 function lineStart(chars: string[], cursor: number): number {
