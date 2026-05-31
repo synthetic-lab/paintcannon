@@ -14,6 +14,9 @@ pub(crate) enum RenderCommand {
     CreateDiv {
         id: u32,
     },
+    CreateSpan {
+        id: u32,
+    },
     CreateText {
         id: u32,
         text: String,
@@ -165,6 +168,7 @@ pub(crate) enum RenderCommand {
 #[derive(Clone)]
 enum DomNode {
     Div(DivNode),
+    Span(SpanNode),
     Text(TextNode),
 }
 
@@ -175,6 +179,21 @@ struct DivNode {
 }
 
 impl Default for DivNode {
+    fn default() -> Self {
+        Self {
+            children: Vec::new(),
+            style: DivStyle::default(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SpanNode {
+    children: Vec<u32>,
+    style: DivStyle,
+}
+
+impl Default for SpanNode {
     fn default() -> Self {
         Self {
             children: Vec::new(),
@@ -222,6 +241,9 @@ impl Renderer {
             RenderCommand::CreateDiv { id } => {
                 self.nodes.insert(id, DomNode::Div(DivNode::default()));
             }
+            RenderCommand::CreateSpan { id } => {
+                self.nodes.insert(id, DomNode::Span(SpanNode::default()));
+            }
             RenderCommand::CreateText { id, text } => {
                 self.nodes.insert(id, DomNode::Text(TextNode { text }));
             }
@@ -235,24 +257,24 @@ impl Renderer {
             }
             RenderCommand::AppendChild { parent, child } => {
                 if self.nodes.contains_key(&child) {
-                    if let Some(DomNode::Div(parent)) = self.nodes.get_mut(&parent) {
-                        parent.children.push(child);
+                    if let Some(parent) = self.children_mut(parent) {
+                        parent.push(child);
                     }
                 }
             }
             RenderCommand::SetDisplay { id, display } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.display = display;
+                if let Some(node) = self.style_mut(id) {
+                    node.display = display;
                 }
             }
             RenderCommand::SetFlexDirection { id, direction } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.flex_direction = direction;
+                if let Some(node) = self.style_mut(id) {
+                    node.flex_direction = direction;
                 }
             }
             RenderCommand::SetFlexWrap { id, flex_wrap } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.flex_wrap = flex_wrap;
+                if let Some(node) = self.style_mut(id) {
+                    node.flex_wrap = flex_wrap;
                 }
             }
             RenderCommand::SetFlexFlow {
@@ -260,24 +282,24 @@ impl Renderer {
                 direction,
                 flex_wrap,
             } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.flex_direction = direction;
-                    node.style.flex_wrap = flex_wrap;
+                if let Some(node) = self.style_mut(id) {
+                    node.flex_direction = direction;
+                    node.flex_wrap = flex_wrap;
                 }
             }
             RenderCommand::SetFlexBasis { id, flex_basis } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.flex_basis = flex_basis;
+                if let Some(node) = self.style_mut(id) {
+                    node.flex_basis = flex_basis;
                 }
             }
             RenderCommand::SetFlexGrow { id, flex_grow } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.flex_grow = flex_grow;
+                if let Some(node) = self.style_mut(id) {
+                    node.flex_grow = flex_grow;
                 }
             }
             RenderCommand::SetFlexShrink { id, flex_shrink } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.flex_shrink = flex_shrink;
+                if let Some(node) = self.style_mut(id) {
+                    node.flex_shrink = flex_shrink;
                 }
             }
             RenderCommand::SetFlex {
@@ -286,43 +308,43 @@ impl Renderer {
                 flex_shrink,
                 flex_basis,
             } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.flex_grow = flex_grow;
-                    node.style.flex_shrink = flex_shrink;
-                    node.style.flex_basis = flex_basis;
+                if let Some(node) = self.style_mut(id) {
+                    node.flex_grow = flex_grow;
+                    node.flex_shrink = flex_shrink;
+                    node.flex_basis = flex_basis;
                 }
             }
             RenderCommand::SetJustifyContent {
                 id,
                 justify_content,
             } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.justify_content = Some(justify_content);
+                if let Some(node) = self.style_mut(id) {
+                    node.justify_content = Some(justify_content);
                 }
             }
             RenderCommand::SetAlignItems { id, align_items } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.align_items = Some(align_items);
+                if let Some(node) = self.style_mut(id) {
+                    node.align_items = Some(align_items);
                 }
             }
             RenderCommand::SetAlignSelf { id, align_self } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.align_self = Some(align_self);
+                if let Some(node) = self.style_mut(id) {
+                    node.align_self = Some(align_self);
                 }
             }
             RenderCommand::SetAlignContent { id, align_content } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.align_content = Some(align_content);
+                if let Some(node) = self.style_mut(id) {
+                    node.align_content = Some(align_content);
                 }
             }
             RenderCommand::SetJustifyItems { id, justify_items } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.justify_items = Some(justify_items);
+                if let Some(node) = self.style_mut(id) {
+                    node.justify_items = Some(justify_items);
                 }
             }
             RenderCommand::SetJustifySelf { id, justify_self } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.justify_self = Some(justify_self);
+                if let Some(node) = self.style_mut(id) {
+                    node.justify_self = Some(justify_self);
                 }
             }
             RenderCommand::SetGap {
@@ -330,89 +352,89 @@ impl Renderer {
                 row_gap,
                 column_gap,
             } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.row_gap = row_gap;
-                    node.style.column_gap = column_gap;
+                if let Some(node) = self.style_mut(id) {
+                    node.row_gap = row_gap;
+                    node.column_gap = column_gap;
                 }
             }
             RenderCommand::SetRowGap { id, row_gap } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.row_gap = row_gap;
+                if let Some(node) = self.style_mut(id) {
+                    node.row_gap = row_gap;
                 }
             }
             RenderCommand::SetColumnGap { id, column_gap } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.column_gap = column_gap;
+                if let Some(node) = self.style_mut(id) {
+                    node.column_gap = column_gap;
                 }
             }
             RenderCommand::SetWidth { id, width } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.width = width;
+                if let Some(node) = self.style_mut(id) {
+                    node.width = width;
                 }
             }
             RenderCommand::SetHeight { id, height } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.height = height;
+                if let Some(node) = self.style_mut(id) {
+                    node.height = height;
                 }
             }
             RenderCommand::SetBackground { id, background } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.background = background;
+                if let Some(node) = self.style_mut(id) {
+                    node.background = background;
                 }
             }
             RenderCommand::SetGridTemplateColumns { id, tracks } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.grid_template_columns = tracks;
+                if let Some(node) = self.style_mut(id) {
+                    node.grid_template_columns = tracks;
                 }
             }
             RenderCommand::SetGridTemplateRows { id, tracks } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.grid_template_rows = tracks;
+                if let Some(node) = self.style_mut(id) {
+                    node.grid_template_rows = tracks;
                 }
             }
             RenderCommand::SetGridAutoColumns { id, tracks } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.grid_auto_columns = tracks;
+                if let Some(node) = self.style_mut(id) {
+                    node.grid_auto_columns = tracks;
                 }
             }
             RenderCommand::SetGridAutoRows { id, tracks } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.grid_auto_rows = tracks;
+                if let Some(node) = self.style_mut(id) {
+                    node.grid_auto_rows = tracks;
                 }
             }
             RenderCommand::SetGridAutoFlow { id, grid_auto_flow } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.grid_auto_flow = grid_auto_flow;
+                if let Some(node) = self.style_mut(id) {
+                    node.grid_auto_flow = grid_auto_flow;
                 }
             }
             RenderCommand::SetGridColumn { id, placement } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.grid_column = placement;
+                if let Some(node) = self.style_mut(id) {
+                    node.grid_column = placement;
                 }
             }
             RenderCommand::SetGridRow { id, placement } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.grid_row = placement;
+                if let Some(node) = self.style_mut(id) {
+                    node.grid_row = placement;
                 }
             }
             RenderCommand::SetGridColumnStart { id, placement } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.grid_column.start = placement;
+                if let Some(node) = self.style_mut(id) {
+                    node.grid_column.start = placement;
                 }
             }
             RenderCommand::SetGridColumnEnd { id, placement } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.grid_column.end = placement;
+                if let Some(node) = self.style_mut(id) {
+                    node.grid_column.end = placement;
                 }
             }
             RenderCommand::SetGridRowStart { id, placement } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.grid_row.start = placement;
+                if let Some(node) = self.style_mut(id) {
+                    node.grid_row.start = placement;
                 }
             }
             RenderCommand::SetGridRowEnd { id, placement } => {
-                if let Some(DomNode::Div(node)) = self.nodes.get_mut(&id) {
-                    node.style.grid_row.end = placement;
+                if let Some(node) = self.style_mut(id) {
+                    node.grid_row.end = placement;
                 }
             }
             RenderCommand::Render => {
@@ -425,6 +447,22 @@ impl Renderer {
         }
 
         true
+    }
+
+    fn children_mut(&mut self, id: u32) -> Option<&mut Vec<u32>> {
+        match self.nodes.get_mut(&id)? {
+            DomNode::Div(node) => Some(&mut node.children),
+            DomNode::Span(node) => Some(&mut node.children),
+            DomNode::Text(_) => None,
+        }
+    }
+
+    fn style_mut(&mut self, id: u32) -> Option<&mut DivStyle> {
+        match self.nodes.get_mut(&id)? {
+            DomNode::Div(node) => Some(&mut node.style),
+            DomNode::Span(node) => Some(&mut node.style),
+            DomNode::Text(_) => None,
+        }
     }
 
     fn render(&mut self) {
@@ -462,16 +500,20 @@ impl Renderer {
     ) -> Option<NodeId> {
         let taffy_id = match self.nodes.get(&id)? {
             DomNode::Div(node) => {
-                let children = node
-                    .children
-                    .iter()
-                    .filter_map(|child| self.build_taffy(*child, taffy, taffy_ids))
-                    .collect::<Vec<_>>();
+                let children = if self.is_inline_container(node) {
+                    Vec::new()
+                } else {
+                    node.children
+                        .iter()
+                        .filter_map(|child| self.build_taffy(*child, taffy, taffy_ids))
+                        .collect::<Vec<_>>()
+                };
 
                 taffy
                     .new_with_children(node.style.to_taffy(), &children)
                     .ok()?
             }
+            DomNode::Span(node) => taffy.new_leaf(node.style.to_taffy()).ok()?,
             DomNode::Text(node) => taffy.new_leaf(node.style()).ok()?,
         };
 
@@ -511,14 +553,135 @@ impl Renderer {
                     node.style.background,
                 );
 
-                for child in &node.children {
-                    self.paint_node(*child, x, y, taffy, taffy_ids, frame);
+                if self.is_inline_container(node) {
+                    self.paint_inline_children(
+                        &node.children,
+                        x.round() as i32,
+                        y.round() as i32,
+                        layout.size.width.round() as i32,
+                        frame,
+                    );
+                } else {
+                    for child in &node.children {
+                        self.paint_node(*child, x, y, taffy, taffy_ids, frame);
+                    }
                 }
+            }
+            DomNode::Span(node) => {
+                frame.fill_rect(
+                    x.round() as i32,
+                    y.round() as i32,
+                    layout.size.width.round() as i32,
+                    layout.size.height.round() as i32,
+                    node.style.background,
+                );
+                self.paint_inline_children(
+                    &node.children,
+                    x.round() as i32,
+                    y.round() as i32,
+                    layout.size.width.round() as i32,
+                    frame,
+                );
             }
             DomNode::Text(node) => {
                 frame.write_text(x.round() as i32, y.round() as i32, &node.text);
             }
         }
+    }
+
+    fn is_inline_container(&self, node: &DivNode) -> bool {
+        let mut has_span = false;
+        for child in &node.children {
+            match self.nodes.get(child) {
+                Some(DomNode::Text(_)) => {}
+                Some(DomNode::Span(_)) => has_span = true,
+                _ => return false,
+            }
+        }
+        has_span
+    }
+
+    fn paint_inline_children(
+        &self,
+        children: &[u32],
+        x: i32,
+        y: i32,
+        width: i32,
+        frame: &mut Frame,
+    ) {
+        let mut cursor = InlineCursor {
+            x,
+            y,
+            col: 0,
+            row: 0,
+            width: width.max(1),
+        };
+
+        for child in children {
+            self.paint_inline_node(*child, &mut cursor, Background::Default, frame);
+        }
+    }
+
+    fn paint_inline_node(
+        &self,
+        id: u32,
+        cursor: &mut InlineCursor,
+        background: Background,
+        frame: &mut Frame,
+    ) {
+        match self.nodes.get(&id) {
+            Some(DomNode::Text(node)) => {
+                write_inline_text(&node.text, cursor, background, frame);
+            }
+            Some(DomNode::Span(node)) => {
+                let background = if node.style.background == Background::Default {
+                    background
+                } else {
+                    node.style.background
+                };
+
+                for child in &node.children {
+                    self.paint_inline_node(*child, cursor, background, frame);
+                }
+            }
+            Some(DomNode::Div(_)) | None => {}
+        }
+    }
+}
+
+struct InlineCursor {
+    x: i32,
+    y: i32,
+    col: i32,
+    row: i32,
+    width: i32,
+}
+
+fn write_inline_text(
+    text: &str,
+    cursor: &mut InlineCursor,
+    background: Background,
+    frame: &mut Frame,
+) {
+    for character in text.chars() {
+        if character == '\n' {
+            cursor.col = 0;
+            cursor.row += 1;
+            continue;
+        }
+
+        if cursor.col >= cursor.width {
+            cursor.col = 0;
+            cursor.row += 1;
+        }
+
+        frame.write_char(
+            cursor.x + cursor.col,
+            cursor.y + cursor.row,
+            character,
+            background,
+        );
+        cursor.col += 1;
     }
 }
 
@@ -577,6 +740,18 @@ impl Frame {
                 }
                 col += 1;
             }
+        }
+    }
+
+    fn write_char(&mut self, x: i32, y: i32, character: char, background: Background) {
+        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            return;
+        }
+
+        let index = y as usize * self.width + x as usize;
+        self.cells[index].character = character;
+        if background != Background::Default {
+            self.cells[index].background = background;
         }
     }
 

@@ -32,6 +32,7 @@ export interface KeyboardEvent {
 
 export interface NativePaintCannon {
   createDiv(): number;
+  createSpan(): number;
   createTextNode(text: string): number;
   setTextNodeValue(id: number, text: string): void;
   setRoot(id: number): void;
@@ -53,7 +54,8 @@ export interface NativeBinding {
   PaintCannon: new (forceCompatMode?: boolean) => NativePaintCannon;
 }
 
-export type PaintNode = DivElement | TextNode;
+export type PaintElement = DivElement | SpanElement;
+export type PaintNode = PaintElement | TextNode;
 
 export const native: NativeBinding = loadNativeBinding();
 
@@ -96,12 +98,16 @@ export class PaintCannon {
   }
 
   createElement(tagName: 'div'): DivElement;
-  createElement(tagName: string): DivElement {
-    if (tagName !== 'div') {
-      throw new Error(`paintcannon only supports <div> right now, got <${tagName}>`);
+  createElement(tagName: 'span'): SpanElement;
+  createElement(tagName: string): PaintElement {
+    if (tagName === 'div') {
+      return new DivElement(this, this.binding, this.binding.createDiv());
+    }
+    if (tagName === 'span') {
+      return new SpanElement(this, this.binding, this.binding.createSpan());
     }
 
-    return new DivElement(this, this.binding, this.binding.createDiv());
+    throw new Error(`paintcannon only supports <div> and <span> right now, got <${tagName}>`);
   }
 
   createTextNode(data: string): TextNode {
@@ -109,7 +115,7 @@ export class PaintCannon {
     return new TextNode(this, this.binding, this.binding.createTextNode(text), text);
   }
 
-  setRoot(element: DivElement): void {
+  setRoot(element: PaintElement): void {
     assertElement(element);
     this.binding.setRoot(element.id);
   }
@@ -310,6 +316,26 @@ export class PaintCannon {
 }
 
 export class DivElement {
+  readonly ownerDocument: PaintCannon;
+  readonly style: CSSStyleDeclaration;
+
+  constructor(
+    owner: PaintCannon,
+    private readonly binding: NativePaintCannon,
+    readonly id: number,
+  ) {
+    this.ownerDocument = owner;
+    this.style = new CSSStyleDeclaration(binding, id);
+  }
+
+  appendChild(child: PaintNode): PaintNode {
+    assertPaintNode(child);
+    this.binding.appendChild(this.id, child.id);
+    return child;
+  }
+}
+
+export class SpanElement {
   readonly ownerDocument: PaintCannon;
   readonly style: CSSStyleDeclaration;
 
@@ -627,14 +653,14 @@ export class CSSStyleDeclaration {
   }
 }
 
-function assertElement(value: unknown): asserts value is DivElement {
-  if (!(value instanceof DivElement)) {
-    throw new TypeError('expected a paintcannon div element');
+function assertElement(value: unknown): asserts value is PaintElement {
+  if (!(value instanceof DivElement) && !(value instanceof SpanElement)) {
+    throw new TypeError('expected a paintcannon element');
   }
 }
 
 function assertPaintNode(value: unknown): asserts value is PaintNode {
-  if (!(value instanceof DivElement) && !(value instanceof TextNode)) {
+  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof TextNode)) {
     throw new TypeError('expected a paintcannon node');
   }
 }

@@ -59,6 +59,14 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn create_span(&mut self) -> Result<u32> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.send(RenderCommand::CreateSpan { id })?;
+        Ok(id)
+    }
+
+    #[napi]
     pub fn create_text_node(&mut self, text: String) -> Result<u32> {
         let id = self.next_id;
         self.next_id += 1;
