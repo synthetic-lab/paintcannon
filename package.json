@@ -2,11 +2,12 @@
   "name": "paintcannon-monorepo",
   "private": true,
   "workspaces": [
-    "paintcannon"
+    "paintcannon",
+    "paintcannon-react"
   ],
   "scripts": {
-    "build": "npm run build --workspace paintcannon",
-    "build:debug": "npm run build:debug --workspace paintcannon",
+    "build": "npm run build --workspaces",
+    "build:debug": "npm run build:debug --workspace paintcannon && npm run build --workspace paintcannon-react",
     "demo": "npm run demo --workspace paintcannon",
     "demo:alt-restart": "npm run demo:alt-restart --workspace paintcannon",
     "demo:borders": "npm run demo:borders --workspace paintcannon",
@@ -20,11 +21,14 @@
     "demo:image-scroll": "npm run demo:image-scroll --workspace paintcannon",
     "demo:less": "npm run demo:less --workspace paintcannon",
     "demo:mouse": "npm run demo:mouse --workspace paintcannon",
+    "demo:padding": "npm run demo:padding --workspace paintcannon",
+    "demo:margin": "npm run demo:margin --workspace paintcannon",
     "demo:overflow": "npm run demo:overflow --workspace paintcannon",
     "demo:pong": "npm run demo:pong --workspace paintcannon",
     "demo:scroll": "npm run demo:scroll --workspace paintcannon",
     "demo:scroll-percent": "npm run demo:scroll-percent --workspace paintcannon",
     "demo:scroll-percent-static": "npm run demo:scroll-percent-static --workspace paintcannon",
+    "demo:span-flex": "npm run demo:span-flex --workspace paintcannon",
     "demo:spans": "npm run demo:spans --workspace paintcannon",
     "demo:textarea": "npm run demo:textarea --workspace paintcannon",
     "demo:transitions": "npm run demo:transitions --workspace paintcannon"

@@ -1,0 +1,25 @@
+{
+  "name": "paintcannon-react",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc",
+    "demo": "npm run build && node dist/examples/counter.js"
+  },
+  "dependencies": {
+    "paintcannon": "0.0.0",
+    "react": "^19.0.0",
+    "react-reconciler": "^0.31.0",
+    "scheduler": "^0.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.0.0",
+    "@types/react-reconciler": "^0.33.0",
+    "@types/scheduler": "^0.26.0",
+    "typescript": "^6.0.3"
+  }
+}
