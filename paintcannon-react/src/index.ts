@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import React from 'react';
 import createReconciler, {type ReactContext} from 'react-reconciler';
 import {
@@ -105,8 +107,13 @@ interface RootContainer {
 }
 
 type Props = Record<string, unknown>;
+type PackageInfo = {
+  name: string;
+  version: string;
+};
 
 let currentUpdatePriority = NoEventPriority;
+const packageInfo = loadPackageInfo();
 
 const reconciler = createReconciler({
   getRootHostContext: () => ({}),
@@ -239,8 +246,8 @@ const reconciler = createReconciler({
   startSuspendingCommit: () => {},
   suspendInstance: () => {},
   waitForCommitToBeReady: () => null,
-  rendererPackageName: 'paintcannon-react',
-  rendererVersion: '0.0.0',
+  rendererPackageName: packageInfo.name,
+  rendererVersion: packageInfo.version,
 });
 
 export function createRoot(options: CreateRootOptions = {}): PaintCannonReactRoot {
@@ -417,6 +424,21 @@ function reportReactError(error: unknown): void {
   if (error !== null && error !== undefined) {
     console.error(error);
   }
+}
+
+function loadPackageInfo(): PackageInfo {
+  const packageJsonPath = path.join(__dirname, '..', '..', 'package.json');
+  const packageJson = fs.readFileSync(packageJsonPath, 'utf8');
+  const parsed = JSON.parse(packageJson) as Partial<PackageInfo> | undefined;
+
+  if (typeof parsed?.name !== 'string' || typeof parsed.version !== 'string') {
+    throw new Error(`Invalid package metadata in ${packageJsonPath}`);
+  }
+
+  return {
+    name: parsed.name,
+    version: parsed.version,
+  };
 }
 
 const eventProps = [
