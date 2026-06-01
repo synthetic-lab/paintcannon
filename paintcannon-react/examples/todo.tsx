@@ -39,6 +39,7 @@ function TodoApp(): React.ReactElement {
   const {exit, paintCannon} = useApp();
   const listRef = useRef<DivElement | null>(null);
   const mainInputRef = useRef<InputElement | null>(null);
+  const editReturnSelectionIdRef = useRef<number | undefined>(undefined);
   const [draft, setDraft] = useState('');
   const [todos, setTodos] = useState<Todo[]>([
     {id: 1, text: 'Ship the React reconciler', completed: true},
@@ -49,6 +50,7 @@ function TodoApp(): React.ReactElement {
   const [editingId, setEditingId] = useState<number | undefined>();
   const [editingText, setEditingText] = useState('');
   const [selectedIndex, setSelectedIndex] = useState<number | undefined>();
+  const [mainInputFocused, setMainInputFocused] = useState(false);
   const [hovered, setHovered] = useState<HoverTarget | undefined>();
   const [scrollMetrics, setScrollMetrics] = useState<TodoScrollMetrics>({
     scrollTop: 0,
@@ -139,7 +141,8 @@ function TodoApp(): React.ReactElement {
     setDraft('');
   };
 
-  const beginEdit = (todo: Todo): void => {
+  const beginEdit = (todo: Todo, returnToSelection = false): void => {
+    editReturnSelectionIdRef.current = returnToSelection ? todo.id : undefined;
     setSelectedIndex(undefined);
     setEditingId(todo.id);
     setEditingText(todo.text);
@@ -151,27 +154,49 @@ function TodoApp(): React.ReactElement {
     });
   };
 
+  const restoreSelectionAfterEdit = (id: number): boolean => {
+    const index = todos.findIndex(todo => todo.id === id);
+    if (index === -1) {
+      return false;
+    }
+
+    mainInputRef.current?.blur();
+    setSelectedIndex(index);
+    return true;
+  };
+
   const commitEdit = (): void => {
     if (editingId === undefined) {
       return;
     }
 
+    const editedId = editingId;
+    const returnSelectionId = editReturnSelectionIdRef.current;
+    editReturnSelectionIdRef.current = undefined;
     const text = editingText.trim();
     if (text.length === 0) {
-      setTodos(current => current.filter(todo => todo.id !== editingId));
+      setTodos(current => current.filter(todo => todo.id !== editedId));
     } else {
       setTodos(current => current.map(todo => (
-        todo.id === editingId ? {...todo, text} : todo
+        todo.id === editedId ? {...todo, text} : todo
       )));
     }
     setEditingId(undefined);
     setEditingText('');
+    if (text.length > 0 && returnSelectionId === editedId && restoreSelectionAfterEdit(editedId)) {
+      return;
+    }
     focusMainInputAfterCommit();
   };
 
   const cancelEdit = (): void => {
+    const returnSelectionId = editReturnSelectionIdRef.current;
+    editReturnSelectionIdRef.current = undefined;
     setEditingId(undefined);
     setEditingText('');
+    if (returnSelectionId !== undefined && restoreSelectionAfterEdit(returnSelectionId)) {
+      return;
+    }
     focusMainInputAfterCommit();
   };
 
@@ -223,9 +248,7 @@ function TodoApp(): React.ReactElement {
   };
 
   const selectedTodo = selectedIndex === undefined ? undefined : todos[selectedIndex];
-  const selectionInstruction = selectedIndex === undefined
-    ? 'Press Down to select todos'
-    : 'Press Up or Down to select items; T toggles, E edits, X deletes';
+  const selectionInstruction = selectionHint(selectedTodo);
   const selectedTodoId = selectedTodo?.id;
 
   return (
@@ -260,7 +283,9 @@ function TodoApp(): React.ReactElement {
           }
           if (selectedTodo !== undefined && event.key.toLowerCase() === 'e') {
             event.preventDefault();
-            beginEdit(selectedTodo);
+            if (!selectedTodo.completed) {
+              beginEdit(selectedTodo, true);
+            }
             return;
           }
           if (selectedTodo !== undefined && event.key.toLowerCase() === 'x') {
@@ -304,15 +329,19 @@ function TodoApp(): React.ReactElement {
               height: 3,
               border: 'rounded',
               borderColor: '#475569',
-              backgroundColor: '#020617',
-              color: '#f8fafc',
-              placeholderColor: '#64748b',
+              backgroundColor: mainInputFocused ? selectedRowBackground : '#020617',
+              color: mainInputFocused ? '#ffffff' : '#f8fafc',
+              placeholderColor: mainInputFocused ? '#94a3b8' : '#64748b',
             }}
             onChange={(event: PaintChangeEvent) => {
               setDraft(event.target.value);
             }}
             onFocus={() => {
+              setMainInputFocused(true);
               setSelectedIndex(undefined);
+            }}
+            onBlur={() => {
+              setMainInputFocused(false);
             }}
             onKeyDown={(event: PaintKeyboardEvent) => {
               if (event.key === 'ArrowDown') {
@@ -446,6 +475,17 @@ function ScrollRail({metrics}: {metrics: TodoScrollMetrics}): React.ReactElement
 const todoListVerticalChrome = 2;
 const todoRowHeight = 3;
 const todoRowStride = 4;
+const selectedRowBackground = '#1e3a5f';
+
+function selectionHint(selectedTodo: Todo | undefined): string {
+  if (selectedTodo === undefined) {
+    return 'Press Down to select todos';
+  }
+
+  return selectedTodo.completed
+    ? 'Press Up or Down to select items; T toggles, X deletes'
+    : 'Press Up or Down to select items; T toggles, E edits, X deletes';
+}
 
 function TodoRow({
   todo,
@@ -485,7 +525,7 @@ function TodoRow({
         gap: 1,
         width: '100%',
         flexShrink: 0,
-        backgroundColor: selected ? '#1e3a5f' : undefined,
+        backgroundColor: selected ? selectedRowBackground : undefined,
       }}
     >
       <Button
@@ -505,7 +545,8 @@ function TodoRow({
           autoFocus
           value={editingText}
           style={{
-            width: 54,
+            flexGrow: 1,
+            flexShrink: 1,
             height: 3,
             border: 'rounded',
             borderColor: '#38bdf8',
@@ -528,7 +569,8 @@ function TodoRow({
       ) : (
         <Div
           style={{
-            width: 54,
+            flexGrow: 1,
+            flexShrink: 1,
             color: todo.completed ? '#64748b' : '#f8fafc',
           }}
         >
