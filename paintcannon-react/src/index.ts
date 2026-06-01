@@ -104,6 +104,13 @@ export interface PaintCannonReactRoot {
   readonly container: DivElement | SpanElement;
   render(element: React.ReactNode): void;
   unmount(): void;
+  exit(errorOrResult?: unknown): void;
+  waitUntilExit(): Promise<unknown>;
+}
+
+export interface PaintCannonReactApp {
+  exit(errorOrResult?: unknown): void;
+  waitUntilExit(): Promise<unknown>;
 }
 
 interface HostElement {
@@ -134,6 +141,7 @@ type PackageInfo = {
 
 let currentUpdatePriority = NoEventPriority;
 const packageInfo = loadPackageInfo();
+const AppContext = React.createContext<PaintCannonReactApp | undefined>(undefined);
 
 const reconciler = createReconciler({
   getRootHostContext: () => ({}),
@@ -295,15 +303,60 @@ export function createRoot(options: CreateRootOptions = {}): PaintCannonReactRoo
     reportReactError,
     () => {},
   );
+  let exited = false;
+  let resolveExit: (value: unknown) => void;
+  let rejectExit: (error: Error) => void;
+  const exitPromise = new Promise<unknown>((resolve, reject) => {
+    resolveExit = resolve;
+    rejectExit = reject;
+  });
+  const settleExit = (errorOrResult?: unknown): void => {
+    if (errorOrResult instanceof Error) {
+      rejectExit(errorOrResult);
+      return;
+    }
+    resolveExit(errorOrResult);
+  };
+  const app: PaintCannonReactApp = {
+    exit(errorOrResult?: unknown): void {
+      if (exited) {
+        return;
+      }
+
+      exited = true;
+      reconciler.updateContainer(null, reactRoot, null, () => {
+        paintCannon.stop();
+        settleExit(errorOrResult);
+      });
+    },
+    waitUntilExit(): Promise<unknown> {
+      return exitPromise;
+    },
+  };
 
   return {
     paintCannon,
     container,
     render(element: React.ReactNode): void {
-      reconciler.updateContainer(element, reactRoot, null, null);
+      if (exited) {
+        throw new Error('paintcannon-react root has exited');
+      }
+
+      reconciler.updateContainer(
+        React.createElement(AppContext.Provider, { value: app }, element),
+        reactRoot,
+        null,
+        null,
+      );
     },
     unmount(): void {
-      reconciler.updateContainer(null, reactRoot, null, null);
+      app.exit();
+    },
+    exit(errorOrResult?: unknown): void {
+      app.exit(errorOrResult);
+    },
+    waitUntilExit(): Promise<unknown> {
+      return app.waitUntilExit();
     },
   };
 }
@@ -312,6 +365,14 @@ export function render(element: React.ReactNode, options: CreateRootOptions = {}
   const root = createRoot(options);
   root.render(element);
   return root;
+}
+
+export function useApp(): PaintCannonReactApp {
+  const app = React.useContext(AppContext);
+  if (app === undefined) {
+    throw new Error('useApp() must be used inside a paintcannon-react render tree');
+  }
+  return app;
 }
 
 function appendVirtualChild(parent: HostParent, child: HostNode): void {
