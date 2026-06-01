@@ -1,6 +1,6 @@
 import { PaintCannon, type KeyboardEvent } from '../index';
 
-const pc = new PaintCannon({ fps: 30 });
+const pc = new PaintCannon({ captureCtrlC: true, fps: 30 });
 
 const root = pc.createElement('div');
 pc.setRoot(root);
@@ -22,7 +22,7 @@ title.style.height = '3px';
 title.style.backgroundColor = 'blue';
 title.appendChild(
   pc.createTextNode(
-    `press keys - q or Escape exits - kitty=${pc.kittyKeyboardEnabled ? 'yes' : 'no'}`,
+    `press keys - q, Escape, or Ctrl-C exits - kitty=${pc.kittyKeyboardEnabled ? 'yes' : 'no'}`,
   ),
 );
 
@@ -46,18 +46,15 @@ function onKeyboardEvent(event: KeyboardEvent) {
   eventCount += 1;
   statusText.nodeValue = `${eventCount}: type=${event.type} key=${event.key} code=${event.code} repeat=${event.repeat} ctrl=${event.ctrlKey} alt=${event.altKey} meta=${event.metaKey} shift=${event.shiftKey}`;
 
-  if (event.key === 'q' || event.key === 'Escape') {
+  if (event.key === 'q' || event.key === 'Escape' || (event.ctrlKey && event.code === 'KeyC')) {
+    event.preventDefault();
     pc.stop();
+    process.exit(0);
   }
 }
 
 pc.addEventListener('keydown', onKeyboardEvent);
 pc.addEventListener('keyup', onKeyboardEvent);
-
-process.once('SIGINT', () => {
-  pc.stop();
-  process.exit(130);
-});
 
 function paint() {
   pc.requestAnimationFrame(paint);
