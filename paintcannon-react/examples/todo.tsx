@@ -206,10 +206,27 @@ function TodoApp(): React.ReactElement {
     });
   };
 
+  const toggleTodo = (id: number): void => {
+    setTodos(current => current.map(item => (
+      item.id === id ? {...item, completed: !item.completed} : item
+    )));
+  };
+
+  const deleteTodo = (id: number): void => {
+    setTodos(current => current.filter(item => item.id !== id));
+    if (selectedTodoId === id) {
+      setSelectedIndex(undefined);
+    }
+    if (editingId === id) {
+      cancelEdit();
+    }
+  };
+
+  const selectedTodo = selectedIndex === undefined ? undefined : todos[selectedIndex];
   const selectionInstruction = selectedIndex === undefined
     ? 'Press Down to select todos'
-    : 'Press Up or Down to select items';
-  const selectedTodoId = selectedIndex === undefined ? undefined : todos[selectedIndex]?.id;
+    : 'Press Up or Down to select items; T toggles, E edits, X deletes';
+  const selectedTodoId = selectedTodo?.id;
 
   return (
     <Div
@@ -234,6 +251,21 @@ function TodoApp(): React.ReactElement {
           if (event.key === 'ArrowUp') {
             event.preventDefault();
             moveSelectionUp();
+            return;
+          }
+          if (selectedTodo !== undefined && event.key.toLowerCase() === 't') {
+            event.preventDefault();
+            toggleTodo(selectedTodo.id);
+            return;
+          }
+          if (selectedTodo !== undefined && event.key.toLowerCase() === 'e') {
+            event.preventDefault();
+            beginEdit(selectedTodo);
+            return;
+          }
+          if (selectedTodo !== undefined && event.key.toLowerCase() === 'x') {
+            event.preventDefault();
+            deleteTodo(selectedTodo.id);
             return;
           }
         }
@@ -349,18 +381,10 @@ function TodoApp(): React.ReactElement {
                   beginEdit={beginEdit}
                   commitEdit={commitEdit}
                   toggleTodo={() => {
-                    setTodos(current => current.map(item => (
-                      item.id === todo.id ? {...item, completed: !item.completed} : item
-                    )));
+                    toggleTodo(todo.id);
                   }}
                   deleteTodo={() => {
-                    setTodos(current => current.filter(item => item.id !== todo.id));
-                    if (selectedTodoId === todo.id) {
-                      setSelectedIndex(undefined);
-                    }
-                    if (editingId === todo.id) {
-                      cancelEdit();
-                    }
+                    deleteTodo(todo.id);
                   }}
                 />
               ))
