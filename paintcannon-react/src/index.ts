@@ -14,11 +14,14 @@ import type {
   FocusElementEventType,
   FocusEventListener,
   InputElement,
+  KeyboardEventListener,
+  KeyboardEventType,
   MouseElementEventType,
   MouseEventListener,
   PaintCannonOptions,
   PaintElement,
   PaintFocusEvent,
+  PaintKeyboardEvent,
   PaintMouseEvent,
   PaintNode,
   PaintScrollEvent,
@@ -29,7 +32,7 @@ import type {
   TransitionElementEventType,
   TransitionEventListener,
 } from 'paintcannon';
-import { ELEMENT_EVENT_TYPES, PaintCannon } from 'paintcannon';
+import { ELEMENT_EVENT_TYPES, KEYBOARD_EVENT_TYPES, PaintCannon } from 'paintcannon';
 
 type HostType = 'paintcannon.div' | 'paintcannon.span' | 'paintcannon.input' | 'paintcannon.textarea';
 type HostNode = HostElement | HostText;
@@ -49,8 +52,15 @@ type ElementEventListenerFor<T extends ElementEventType> =
 type ElementEventProps = {
   [T in ElementEventType as EventPropName<T>]?: ElementEventListenerFor<T>;
 };
+type KeyboardEventPropName<T extends KeyboardEventType = KeyboardEventType> =
+  T extends 'keydown' ? 'onKeyDown' :
+  T extends 'keyup' ? 'onKeyUp' :
+  never;
+type KeyboardEventProps = {
+  [T in KeyboardEventType as KeyboardEventPropName<T>]?: KeyboardEventListener;
+};
 
-export interface CommonProps extends ElementEventProps {
+export interface CommonProps extends ElementEventProps, KeyboardEventProps {
   children?: React.ReactNode;
   style?: StyleProps;
 }
@@ -354,6 +364,9 @@ function insertPaintChild(parent: PaintElement, child: PaintNode, before: PaintN
 }
 
 function destroyHostNode(host: HostNode): void {
+  if (host.kind === 'element') {
+    removeKeyboardEvents(host.node.ownerDocument, host.props);
+  }
   host.node.destroy();
 }
 
@@ -401,6 +414,8 @@ function applyStyle(node: PaintElement, oldStyle: StyleProps | undefined, newSty
 }
 
 function applyEvents(node: PaintElement, oldProps: Props, newProps: Props): void {
+  applyKeyboardEvents(node.ownerDocument, oldProps, newProps);
+
   for (const [prop, eventType] of eventProps) {
     const previous = oldProps[prop] as ((event: unknown) => void) | undefined;
     const next = newProps[prop] as ((event: unknown) => void) | undefined;
@@ -412,6 +427,31 @@ function applyEvents(node: PaintElement, oldProps: Props, newProps: Props): void
     }
     if (next !== undefined) {
       addElementListener(node, eventType, next);
+    }
+  }
+}
+
+function applyKeyboardEvents(paintCannon: PaintCannon, oldProps: Props, newProps: Props): void {
+  for (const [prop, eventType] of keyboardEventProps) {
+    const previous = oldProps[prop] as KeyboardEventListener | undefined;
+    const next = newProps[prop] as KeyboardEventListener | undefined;
+    if (previous === next) {
+      continue;
+    }
+    if (previous !== undefined) {
+      paintCannon.removeEventListener(eventType, previous);
+    }
+    if (next !== undefined) {
+      paintCannon.addEventListener(eventType, next);
+    }
+  }
+}
+
+function removeKeyboardEvents(paintCannon: PaintCannon, props: Props): void {
+  for (const [prop, eventType] of keyboardEventProps) {
+    const listener = props[prop] as KeyboardEventListener | undefined;
+    if (listener !== undefined) {
+      paintCannon.removeEventListener(eventType, listener);
     }
   }
 }
@@ -455,6 +495,10 @@ const eventProps = [
   ...ELEMENT_EVENT_TYPES.map((eventType) => [eventPropName(eventType), eventType] as const),
 ] satisfies ReadonlyArray<readonly [EventPropName, ElementEventType]>;
 
+const keyboardEventProps = [
+  ...KEYBOARD_EVENT_TYPES.map((eventType) => [keyboardEventPropName(eventType), eventType] as const),
+] satisfies ReadonlyArray<readonly [KeyboardEventPropName, KeyboardEventType]>;
+
 function eventPropName<T extends ElementEventType>(eventType: T): EventPropName<T> {
   if (eventType.startsWith('mouse')) {
     return `onMouse${capitalize(eventType.slice('mouse'.length))}` as EventPropName<T>;
@@ -469,11 +513,19 @@ function capitalize(value: string): string {
   return `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
 }
 
+function keyboardEventPropName<T extends KeyboardEventType>(eventType: T): KeyboardEventPropName<T> {
+  if (eventType === 'keydown') {
+    return 'onKeyDown' as KeyboardEventPropName<T>;
+  }
+  return 'onKeyUp' as KeyboardEventPropName<T>;
+}
+
 export type {
   PaintCannon,
   PaintCannonOptions,
   PaintElement,
   PaintFocusEvent,
+  PaintKeyboardEvent,
   PaintMouseEvent,
   PaintScrollEvent,
 };

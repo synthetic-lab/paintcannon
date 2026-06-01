@@ -20,7 +20,8 @@ export interface TerminalSize {
 }
 
 export type AnimationFrameCallback = (timestamp: number) => void;
-export type KeyboardEventType = 'keydown' | 'keyup';
+export const KEYBOARD_EVENT_TYPES = ['keydown', 'keyup'] as const;
+export type KeyboardEventType = typeof KEYBOARD_EVENT_TYPES[number];
 export type PaintCannonEventType = KeyboardEventType | 'resize';
 export type KeyboardEventListener = (event: PaintKeyboardEvent) => void;
 export type ResizeEventListener = (event: PaintResizeEvent) => void;
