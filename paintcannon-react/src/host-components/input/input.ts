@@ -1,6 +1,6 @@
 import type {InputElement as PaintInputElement} from 'paintcannon';
-import type {HostComponent, TextControlProps} from './shared.ts';
-import {typeString} from './shared.ts';
+import type {HostComponent, TextControlProps} from '../shared.ts';
+import {typeString} from '../shared.ts';
 
 export type Props = TextControlProps & {
   type?: 'text';

@@ -1,6 +1,6 @@
 import type {SpanElement as PaintSpanElement} from 'paintcannon';
-import type {CommonProps, HostComponent, Scrollable} from './shared.ts';
-import {typeString} from './shared.ts';
+import type {CommonProps, HostComponent, Scrollable} from '../shared.ts';
+import {typeString} from '../shared.ts';
 
 export type Props = CommonProps & Partial<Scrollable>;
 export type Element = PaintSpanElement;

@@ -1,6 +1,6 @@
 import type {ButtonElement as PaintButtonElement} from 'paintcannon';
-import type {CommonProps, HostComponent, Scrollable} from './shared.ts';
-import {typeString} from './shared.ts';
+import type {CommonProps, HostComponent, Scrollable} from '../shared.ts';
+import {typeString} from '../shared.ts';
 
 export type Props = CommonProps & Partial<Scrollable> & {
   type?: 'submit' | 'button';
