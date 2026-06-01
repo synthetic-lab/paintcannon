@@ -13,6 +13,7 @@
     "demo:keyboard": "npm run build && node dist/examples/keyboard.js",
     "demo:lifecycle": "npm run build && node dist/examples/lifecycle.js",
     "demo:spinner": "npm run build && node dist/examples/spinner.js",
+    "demo:todo": "npm run build && node dist/examples/todo.js",
     "test": "vitest run"
   },
   "dependencies": {
