@@ -1,4 +1,10 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
+import type {
+  CSSStyleProperties,
+  PaintChangeEvent,
+  PaintKeyboardEvent,
+  PaintScrollEvent,
+} from 'paintcannon';
 import {
   Button,
   Div,
@@ -7,11 +13,7 @@ import {
   Span,
   render,
   useApp,
-  type CSSStyleProperties,
   type DivElement,
-  type PaintChangeEvent,
-  type PaintKeyboardEvent,
-  type PaintScrollEvent,
 } from '../src/index.ts';
 
 interface Todo {

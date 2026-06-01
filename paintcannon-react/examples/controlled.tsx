@@ -1,5 +1,6 @@
 import React, {useState} from 'react';
-import {Div, Input, Span, Textarea, render, useApp, type PaintChangeEvent} from '../src/index.ts';
+import type {PaintChangeEvent} from 'paintcannon';
+import {Div, Input, Span, Textarea, render, useApp} from '../src/index.ts';
 
 interface ControlledState {
   value: string;
