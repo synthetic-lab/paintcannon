@@ -608,7 +608,7 @@ function TodoRow({
         </Div>
       )}
       {todo.completed ? (
-        <Div style={{width: 3, height: 3}} />
+        <Div style={{width: 3, height: 3, flexShrink: 0}} />
       ) : (
         <Button
           type="button"
@@ -644,6 +644,7 @@ function addButtonStyle(hovered: boolean): CSSStyleProperties {
   return {
     width: 14,
     height: 3,
+    flexShrink: 0,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -661,6 +662,7 @@ function checkboxStyle(completed: boolean, hovered: boolean): CSSStyleProperties
     return {
       width: 3,
       height: 3,
+      flexShrink: 0,
       border: 'chunky-rounded',
       borderColor: backgroundColor,
       backgroundColor,
@@ -673,6 +675,7 @@ function checkboxStyle(completed: boolean, hovered: boolean): CSSStyleProperties
   return {
     width: 3,
     height: 3,
+    flexShrink: 0,
     border: 'chunky-rounded',
     borderColor: backgroundColor,
     backgroundColor,
@@ -687,6 +690,7 @@ function iconButtonStyle(kind: 'edit' | 'delete', hovered: boolean): CSSStylePro
     return {
       width: 3,
       height: 3,
+      flexShrink: 0,
       border: 'chunky-rounded',
       borderColor: backgroundColor,
       backgroundColor,
@@ -699,6 +703,7 @@ function iconButtonStyle(kind: 'edit' | 'delete', hovered: boolean): CSSStylePro
   return {
     width: 3,
     height: 3,
+    flexShrink: 0,
     border: 'chunky-rounded',
     borderColor: backgroundColor,
     backgroundColor,
