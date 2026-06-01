@@ -876,8 +876,8 @@ mod tests {
     use taffy::{AvailableSpace, Size};
 
     use crate::style::{
-        BorderStyle, CssDimension, CssLengthPercentage, ImageRendering, LayoutDisplay,
-        LayoutFlexDirection,
+        BorderStyle, CssDimension, CssLengthPercentage, ImageRendering, LayoutAlignItems,
+        LayoutDisplay, LayoutFlexDirection,
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
@@ -1273,6 +1273,190 @@ mod tests {
             && region.top == 0
             && region.right == 1
             && region.bottom == 1));
+    }
+
+    #[test]
+    fn inline_span_as_flex_child_is_blockified_and_stretches_by_default() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(20.0), CssDimension::Length(5.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = arena.create_element(root_style);
+
+        let mut span_style = DivStyle::default();
+        span_style.display = LayoutDisplay::Inline;
+        span_style.color = Background::Cyan;
+        let span = arena.create_element(span_style);
+        let text = arena.create_text("paintcannon-react");
+        arena.append_child(span, text);
+        arena.append_child(root, span);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(20.0),
+                height: AvailableSpace::Definite(5.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 20, 5, false);
+
+        assert_eq!(arena.layout(span).size.width, 20.0);
+        assert_eq!(arena.layout(span).size.height, 1.0);
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'p');
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().foreground,
+            Background::Cyan
+        );
+    }
+
+    #[test]
+    fn inline_span_as_centered_flex_child_shrink_wraps_and_paints_text() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(20.0), CssDimension::Length(5.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        root_style.align_items = Some(LayoutAlignItems::Center);
+        let root = arena.create_element(root_style);
+
+        let mut span_style = DivStyle::default();
+        span_style.display = LayoutDisplay::Inline;
+        span_style.color = Background::Cyan;
+        let span = arena.create_element(span_style);
+        let text = arena.create_text("paintcannon-react");
+        arena.append_child(span, text);
+        arena.append_child(root, span);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(20.0),
+                height: AvailableSpace::Definite(5.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 20, 5, false);
+
+        assert_eq!(arena.layout(span).size.width, 17.0);
+        assert_eq!(arena.layout(span).size.height, 1.0);
+        assert_eq!(arena.layout(span).location.x, 2.0);
+        assert_eq!(output.frame.cell(2, 0).unwrap().character, 'p');
+        assert_eq!(
+            output.frame.cell(2, 0).unwrap().foreground,
+            Background::Cyan
+        );
+    }
+
+    #[test]
+    fn centered_flex_column_paints_direct_span_before_button_sibling() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(30.0), CssDimension::Length(10.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        root_style.align_items = Some(LayoutAlignItems::Center);
+        root_style.justify_content = Some(crate::style::LayoutJustifyContent::Center);
+        root_style.row_gap = CssLengthPercentage::Length(1.0);
+        let root = arena.create_element(root_style);
+
+        let mut span_style = DivStyle::default();
+        span_style.display = LayoutDisplay::Inline;
+        span_style.color = Background::Cyan;
+        let span = arena.create_element(span_style);
+        let title = arena.create_text("paintcannon-react");
+        arena.append_child(span, title);
+
+        let mut button_style = DivStyle::default();
+        button_style.border_top = BorderStyle::ChunkyRounded;
+        button_style.border_right = BorderStyle::ChunkyRounded;
+        button_style.border_bottom = BorderStyle::ChunkyRounded;
+        button_style.border_left = BorderStyle::ChunkyRounded;
+        button_style.padding_top = CssLengthPercentage::Length(1.0);
+        button_style.padding_right = CssLengthPercentage::Length(1.0);
+        button_style.padding_bottom = CssLengthPercentage::Length(1.0);
+        button_style.padding_left = CssLengthPercentage::Length(1.0);
+        let button = arena.create_element(button_style);
+        let button_text = arena.create_text("button");
+        arena.append_child(button, button_text);
+
+        arena.append_child(root, span);
+        arena.append_child(root, button);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(30.0),
+                height: AvailableSpace::Definite(10.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 30, 10, false);
+        let title_cell = (0..output.frame.height()).find_map(|y| {
+            (0..output.frame.width()).find_map(|x| {
+                let cell = output.frame.cell(x, y).unwrap();
+                (cell.character == 'p').then_some((x, y, cell))
+            })
+        });
+
+        let Some((x, y, cell)) = title_cell else {
+            panic!("expected title text to paint");
+        };
+        assert_eq!(x, 7);
+        assert_eq!(y, 2);
+        assert_eq!(cell.foreground, Background::Cyan);
+    }
+
+    #[test]
+    fn percent_flex_app_root_paints_direct_span_before_button_sibling() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(block_style(
+            CssDimension::Length(30.0),
+            CssDimension::Length(10.0),
+        ));
+
+        let mut app_style = block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
+        app_style.display = LayoutDisplay::Flex;
+        app_style.flex_direction = LayoutFlexDirection::Column;
+        app_style.align_items = Some(LayoutAlignItems::Center);
+        app_style.justify_content = Some(crate::style::LayoutJustifyContent::Center);
+        app_style.row_gap = CssLengthPercentage::Length(1.0);
+        let app = arena.create_element(app_style);
+
+        let mut span_style = DivStyle::default();
+        span_style.display = LayoutDisplay::Inline;
+        span_style.color = Background::Cyan;
+        let span = arena.create_element(span_style);
+        let title = arena.create_text("paintcannon-react");
+        arena.append_child(span, title);
+
+        let mut button_style = DivStyle::default();
+        button_style.border_top = BorderStyle::ChunkyRounded;
+        button_style.border_right = BorderStyle::ChunkyRounded;
+        button_style.border_bottom = BorderStyle::ChunkyRounded;
+        button_style.border_left = BorderStyle::ChunkyRounded;
+        button_style.padding_top = CssLengthPercentage::Length(1.0);
+        button_style.padding_right = CssLengthPercentage::Length(1.0);
+        button_style.padding_bottom = CssLengthPercentage::Length(1.0);
+        button_style.padding_left = CssLengthPercentage::Length(1.0);
+        let button = arena.create_element(button_style);
+        let button_text = arena.create_text("button");
+        arena.append_child(button, button_text);
+
+        arena.append_child(app, span);
+        arena.append_child(app, button);
+        arena.append_child(root, app);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(30.0),
+                height: AvailableSpace::Definite(10.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 30, 10, false);
+        let painted_title = (0..output.frame.height()).any(|y| {
+            (0..output.frame.width()).any(|x| output.frame.cell(x, y).unwrap().character == 'p')
+        });
+
+        assert!(painted_title);
+        assert_eq!(arena.layout(span).size.height, 1.0);
+        assert_eq!(arena.layout(button).size.height, 5.0);
     }
 
     #[test]

@@ -811,7 +811,10 @@ impl LayoutArena {
     fn is_inline_context(&self, node: NodeId) -> bool {
         let node = &self.nodes[node_index(node)];
         matches!(node.kind, LayoutNodeKind::Element)
-            && node.style.display == LayoutDisplay::Block
+            && matches!(
+                node.style.display,
+                LayoutDisplay::Block | LayoutDisplay::Inline
+            )
             && self.has_only_inline_children(&node.children)
     }
 
