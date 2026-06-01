@@ -3,7 +3,7 @@ PaintCannon exposes a DOM API subset via NAPI-RS bindings to JS and renders to
 terminal backends very quickly. Think of PaintCannon as a tiny browser that
 renders to a terminal backend instead of a GUI in your window manager.
 
-![./paintcannon.png](A cannon shooting paint)
+![A cannon shooting paint](https://raw.githubusercontent.com/synthetic-lab/paintcannon/refs/heads/main/paintcannon.png)
 
 PaintCannon supports the following CSS:
 
