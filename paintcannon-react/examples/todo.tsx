@@ -14,6 +14,7 @@ import {
   render,
   useApp,
   type DivElement,
+  type InputElement,
 } from '../src/index.ts';
 
 interface Todo {
@@ -37,6 +38,7 @@ type HoverTarget =
 function TodoApp(): React.ReactElement {
   const {exit, paintCannon} = useApp();
   const listRef = useRef<DivElement | null>(null);
+  const mainInputRef = useRef<InputElement | null>(null);
   const [draft, setDraft] = useState('');
   const [todos, setTodos] = useState<Todo[]>([
     {id: 1, text: 'Ship the React reconciler', completed: true},
@@ -102,6 +104,12 @@ function TodoApp(): React.ReactElement {
     setEditingText(todo.text);
   };
 
+  const focusMainInputAfterCommit = (): void => {
+    queueMicrotask(() => {
+      mainInputRef.current?.focus();
+    });
+  };
+
   const commitEdit = (): void => {
     if (editingId === undefined) {
       return;
@@ -117,11 +125,13 @@ function TodoApp(): React.ReactElement {
     }
     setEditingId(undefined);
     setEditingText('');
+    focusMainInputAfterCommit();
   };
 
   const cancelEdit = (): void => {
     setEditingId(undefined);
     setEditingText('');
+    focusMainInputAfterCommit();
   };
 
   return (
@@ -164,6 +174,7 @@ function TodoApp(): React.ReactElement {
           }}
         >
           <Input
+            ref={mainInputRef}
             autoFocus
             value={draft}
             placeholder="Add a todo"

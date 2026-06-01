@@ -122,6 +122,55 @@ describe('keyboard events', () => {
 
     expect(events).toEqual(['textarea:a']);
   });
+
+  it('can leave edit mode on blur and defer focus to another input', async () => {
+    const events: string[] = [];
+    let mainInput: InputElement | undefined;
+    let editInput: InputElement | undefined;
+
+    function App(): React.ReactElement {
+      const [editing, setEditing] = React.useState(true);
+
+      return (
+        <Div>
+          <Input
+            ref={value => {
+              mainInput = value;
+            }}
+            onKeyDown={event => events.push(`main:${event.key}`)}
+          />
+          {editing ? (
+            <Input
+              ref={value => {
+                editInput = value;
+              }}
+              autoFocus
+              onBlur={() => {
+                setEditing(false);
+                queueMicrotask(() => mainInput?.focus());
+              }}
+              onKeyDown={event => events.push(`edit:${event.key}`)}
+            />
+          ) : null}
+        </Div>
+      );
+    }
+
+    const root = render(<App />, { fps: 120 });
+
+    await commit();
+    expect(mainInput).toBeDefined();
+    expect(editInput).toBeDefined();
+
+    editInput?.focus();
+    mainInput?.focus();
+    await Promise.resolve();
+    await commit();
+    dispatchKey(root.paintCannon, 'a');
+    root.paintCannon.stop();
+
+    expect(events).toEqual(['main:a']);
+  });
 });
 
 describe('controlled text controls', () => {
