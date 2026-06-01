@@ -103,17 +103,42 @@ describe('core keyboard events', () => {
   it('applies default text input when keydown is not prevented', () => {
     const { paintCannon, mockNative, root } = createPaintTree();
     const input = paintCannon.createElement('input');
+    const events: string[] = [];
     root.appendChild(input);
+    root.addEventListener('change', (event) => {
+      events.push(`root:${event.target === input}:${event.currentTarget === root}:${event.target.value}`);
+    });
 
     input.focus();
     mockNative.keyboardEvents.push(keyDown('x'));
     runKeyboardEventPump(paintCannon);
     paintCannon.stop();
 
+    expect(events).toEqual(['root:true:true:x']);
     expect(input.value).toBe('x');
     expect(input.cursorPosition).toBe(1);
     expect(mockNative.textControls.get(input.id)).toMatchObject({
       value: 'x',
+      cursor: 1,
+    });
+  });
+
+  it('reapplying the current value preserves the cursor', () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const input = paintCannon.createElement('input');
+    root.appendChild(input);
+
+    input.focus();
+    mockNative.keyboardEvents.push(keyDown('a'), keyDown('b'));
+    runKeyboardEventPump(paintCannon);
+    input.cursorPosition = 1;
+    input.value = input.value;
+    paintCannon.stop();
+
+    expect(input.value).toBe('ab');
+    expect(input.cursorPosition).toBe(1);
+    expect(mockNative.textControls.get(input.id)).toMatchObject({
+      value: 'ab',
       cursor: 1,
     });
   });

@@ -13,6 +13,8 @@
     "demo:alt-restart": "npm run demo:alt-restart --workspace paintcannon",
     "demo:borders": "npm run demo:borders --workspace paintcannon",
     "demo:counter": "npm run demo:counter --workspace paintcannon",
+    "demo:controlled": "npm run demo:controlled --workspace paintcannon-react",
+    "demo:controlled:core": "npm run demo:controlled --workspace paintcannon",
     "demo:chunky-rounded": "npm run demo:chunky-rounded --workspace paintcannon",
     "demo:destroy": "npm run demo:destroy --workspace paintcannon",
     "demo:detach": "npm run demo:detach --workspace paintcannon",

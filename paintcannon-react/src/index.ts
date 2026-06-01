@@ -10,6 +10,8 @@ import {
 import * as Scheduler from 'scheduler';
 import type {
   CSSStyleDeclaration,
+  ChangeElementEventType,
+  ChangeEventListener,
   DivElement,
   ElementEventType,
   FocusElementEventType,
@@ -21,6 +23,7 @@ import type {
   MouseElementEventType,
   MouseEventListener,
   PaintCannonOptions,
+  PaintChangeEvent,
   PaintElement,
   PaintFocusEvent,
   PaintKeyboardEvent,
@@ -72,6 +75,7 @@ type ElementEventListenerFor<T extends ElementEventType> =
   T extends MouseElementEventType ? MouseEventListener :
   T extends FocusElementEventType ? FocusEventListener :
   T extends FormElementEventType ? SubmitEventListener :
+  T extends ChangeElementEventType ? ChangeEventListener :
   T extends TransitionElementEventType ? TransitionEventListener :
   T extends 'scroll' ? ScrollEventListener :
   never;
@@ -789,6 +793,7 @@ function capitalize(value: string): string {
 export type {
   PaintCannon,
   PaintCannonOptions,
+  PaintChangeEvent,
   PaintElement,
   PaintFocusEvent,
   PaintKeyboardEvent,

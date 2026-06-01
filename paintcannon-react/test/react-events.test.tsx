@@ -124,6 +124,55 @@ describe('keyboard events', () => {
   });
 });
 
+describe('controlled text controls', () => {
+  it('supports React-style value plus onChange without manually controlling cursorPosition', async () => {
+    const changes: string[] = [];
+    let input: InputElement | undefined;
+
+    function App(): React.ReactElement {
+      const [value, setValue] = React.useState('');
+      return (
+        <Input
+          ref={element => {
+            input = element;
+          }}
+          autoFocus
+          value={value}
+          onChange={event => {
+            changes.push(event.target.value);
+            setValue(event.target.value);
+          }}
+        />
+      );
+    }
+
+    const root = render(<App />, { fps: 120 });
+    const mockNative = mockNativeInstances[0];
+    if (mockNative === undefined) {
+      throw new Error('expected mock native instance');
+    }
+
+    await commit();
+    mockNative.keyboardEvents.push({
+      type: 'keydown',
+      key: 'a',
+      code: 'KeyA',
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      shiftKey: false,
+      repeat: false,
+    });
+    runKeyboardEventPump(root.paintCannon);
+    await commit();
+    root.paintCannon.stop();
+
+    expect(changes).toEqual(['a']);
+    expect(input?.value).toBe('a');
+    expect(input?.cursorPosition).toBe(1);
+  });
+});
+
 describe('resize events', () => {
   it('uses the normal render path instead of sync rendering inside the input pump', () => {
     const sizes: Array<[number, number]> = [];

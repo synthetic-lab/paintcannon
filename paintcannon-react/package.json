@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc",
     "demo": "npm run build && node dist/examples/counter.js",
+    "demo:controlled": "npm run build && node dist/examples/controlled.js",
     "demo:form": "npm run build && node dist/examples/form.js",
     "demo:keyboard": "npm run build && node dist/examples/keyboard.js",
     "demo:lifecycle": "npm run build && node dist/examples/lifecycle.js",
