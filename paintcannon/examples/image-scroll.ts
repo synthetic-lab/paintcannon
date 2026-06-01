@@ -25,6 +25,7 @@ pc.setRoot(root);
 const header = pc.createElement('div');
 header.style.width = '100%';
 header.style.height = 2;
+header.style.flexShrink = 0;
 header.style.backgroundColor = '#1f2937';
 header.style.color = '#e5e7eb';
 
@@ -36,11 +37,13 @@ body.style.display = 'flex';
 body.style.flexDirection = 'row';
 body.style.width = '100%';
 body.style.flex = '1 1 0px';
+body.style.minHeight = 0;
 body.style.gap = 1;
 
 const viewport = pc.createElement('div');
 viewport.style.width = '80%';
 viewport.style.height = '100%';
+viewport.style.minHeight = 0;
 viewport.style.overflowY = 'scroll';
 viewport.style.overflowX = 'hidden';
 viewport.style.backgroundColor = '#111827';
