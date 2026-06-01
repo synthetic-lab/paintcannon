@@ -705,6 +705,18 @@ fn paint_input(
         );
     }
     if let Some(cursor_col) = cursor_col {
+        frame.write_glyph(
+            rect.left + cursor_col as i32,
+            rect.top,
+            chars.get(start + cursor_col).copied().unwrap_or(' '),
+            1,
+            GlyphStyle {
+                background,
+                foreground,
+                selection_background,
+            },
+            clip,
+        );
         frame.set_reversed(rect.left + cursor_col as i32, rect.top, true, clip);
     }
 }
@@ -776,6 +788,24 @@ fn paint_textarea(
             && col as i32 >= 0
             && (col as i32) < rect.width()
         {
+            let cursor_character = layout
+                .glyphs
+                .iter()
+                .find(|glyph| glyph.row == row && glyph.col == col)
+                .map(|glyph| glyph.character)
+                .unwrap_or(' ');
+            frame.write_glyph(
+                rect.left + col as i32,
+                rect.top + visible_row as i32,
+                cursor_character,
+                1,
+                GlyphStyle {
+                    background,
+                    foreground,
+                    selection_background,
+                },
+                clip,
+            );
             frame.set_reversed(
                 rect.left + col as i32,
                 rect.top + visible_row as i32,
@@ -1850,6 +1880,35 @@ mod tests {
     }
 
     #[test]
+    fn focused_empty_input_cursor_uses_text_color_not_placeholder_color() {
+        let mut arena = LayoutArena::new();
+        let mut style = block_style(CssDimension::Length(8.0), CssDimension::Length(1.0));
+        style.color = Background::White;
+        style.placeholder_color = Background::Rgb(148, 163, 184);
+        let input = arena.create_input(style, "");
+        arena.set_input_placeholder(input, "search");
+        arena.set_input_focused(input, true);
+
+        arena.compute_layout(
+            input,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, input, 8, 1, false);
+
+        let cursor = output.frame.cell(0, 0).unwrap();
+        assert_eq!(cursor.character, 's');
+        assert_eq!(cursor.foreground, Background::White);
+        assert!(cursor.reversed);
+        assert_eq!(
+            output.frame.cell(1, 0).unwrap().foreground,
+            Background::Rgb(148, 163, 184)
+        );
+    }
+
+    #[test]
     fn paints_input_own_background_color_and_border() {
         let mut arena = LayoutArena::new();
         let mut style = block_style(CssDimension::Length(8.0), CssDimension::Length(3.0));
@@ -1970,6 +2029,35 @@ mod tests {
             Background::Magenta
         );
         assert_eq!(output.frame.cell(1, 0).unwrap().character, 'k');
+    }
+
+    #[test]
+    fn focused_empty_textarea_cursor_uses_text_color_not_placeholder_color() {
+        let mut arena = LayoutArena::new();
+        let mut style = block_style(CssDimension::Length(5.0), CssDimension::Length(2.0));
+        style.color = Background::White;
+        style.placeholder_color = Background::Magenta;
+        let textarea = arena.create_textarea(style, "");
+        arena.set_textarea_placeholder(textarea, "hello");
+        arena.set_textarea_focused(textarea, true);
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+        let output = paint_arena(&arena, textarea, 5, 2, false);
+
+        let cursor = output.frame.cell(0, 0).unwrap();
+        assert_eq!(cursor.character, 'h');
+        assert_eq!(cursor.foreground, Background::White);
+        assert!(cursor.reversed);
+        assert_eq!(
+            output.frame.cell(1, 0).unwrap().foreground,
+            Background::Magenta
+        );
     }
 
     #[test]
