@@ -1937,6 +1937,30 @@ mod tests {
         ))
     }
 
+    fn image_scroll_demo_image_block(arena: &mut LayoutArena, label: &str) -> NodeId {
+        let mut style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        style.display = LayoutDisplay::Flex;
+        style.flex_direction = LayoutFlexDirection::Column;
+        style.row_gap = CssLengthPercentage::Length(1.0);
+        let block = arena.create_element(style);
+
+        let title =
+            arena.create_element(block_style(CssDimension::Percent(1.0), CssDimension::Auto));
+        let title_text = arena.create_text(label);
+        arena.append_child(title, title_text);
+        arena.append_child(block, title);
+
+        let image = arena.create_image(
+            block_style(CssDimension::Length(48.0), CssDimension::Length(14.0)),
+            16,
+            8,
+            8,
+            16,
+        );
+        arena.append_child(block, image);
+        block
+    }
+
     #[test]
     fn inline_context_gets_full_layout_input_and_wraps_at_resolved_percent_width() {
         let mut arena = LayoutArena::new();
@@ -2944,6 +2968,115 @@ mod tests {
         assert_eq!(metrics.client_height, 4);
         assert_eq!(metrics.scroll_width, 8);
         assert_eq!(metrics.scroll_height, 10);
+    }
+
+    #[test]
+    fn image_scroll_demo_layout_constrains_viewport_and_reports_scroll_metrics() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = arena.create_element(root_style);
+
+        let mut header_style = block_style(CssDimension::Percent(1.0), CssDimension::Length(2.0));
+        header_style.flex_shrink = 0.0;
+        let header = arena.create_element(header_style);
+        let header_text =
+            arena.create_text("Image scroll demo. Wheel over the panel. Ctrl-C exits.");
+        arena.append_child(header, header_text);
+
+        let mut body_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        body_style.display = LayoutDisplay::Flex;
+        body_style.flex_direction = LayoutFlexDirection::Row;
+        body_style.flex_grow = 1.0;
+        body_style.flex_shrink = 1.0;
+        body_style.flex_basis = CssDimension::Length(0.0);
+        body_style.min_height = CssDimension::Length(0.0);
+        body_style.column_gap = CssLengthPercentage::Length(1.0);
+        let body = arena.create_element(body_style);
+
+        let mut viewport_style =
+            block_style(CssDimension::Percent(0.8), CssDimension::Percent(1.0));
+        viewport_style.min_height = CssDimension::Length(0.0);
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.overflow_x = LayoutOverflow::Hidden;
+        viewport_style.border_top = BorderStyle::Rounded;
+        viewport_style.border_right = BorderStyle::Rounded;
+        viewport_style.border_bottom = BorderStyle::Rounded;
+        viewport_style.border_left = BorderStyle::Rounded;
+        let viewport = arena.create_element(viewport_style);
+
+        let mut content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        content_style.display = LayoutDisplay::Flex;
+        content_style.flex_direction = LayoutFlexDirection::Column;
+        content_style.row_gap = CssLengthPercentage::Length(1.0);
+        let content = arena.create_element(content_style);
+
+        for index in 1..=8 {
+            let row =
+                arena.create_element(block_style(CssDimension::Percent(1.0), CssDimension::Auto));
+            let text = arena.create_text(format!("before image row {index}"));
+            arena.append_child(row, text);
+            arena.append_child(content, row);
+        }
+
+        let first_image = image_scroll_demo_image_block(
+            &mut arena,
+            "image A should clip against the scroll viewport",
+        );
+        arena.append_child(content, first_image);
+
+        for index in 1..=14 {
+            let row =
+                arena.create_element(block_style(CssDimension::Percent(1.0), CssDimension::Auto));
+            let text = arena.create_text(format!("middle row {index}"));
+            arena.append_child(row, text);
+            arena.append_child(content, row);
+        }
+
+        let second_image =
+            image_scroll_demo_image_block(&mut arena, "image B should scroll out like normal text");
+        arena.append_child(content, second_image);
+
+        for index in 1..=18 {
+            let row =
+                arena.create_element(block_style(CssDimension::Percent(1.0), CssDimension::Auto));
+            let text = arena.create_text(format!("after image row {index}"));
+            arena.append_child(row, text);
+            arena.append_child(content, row);
+        }
+
+        arena.append_child(viewport, content);
+
+        let rail = arena.create_element(block_style(
+            CssDimension::Percent(0.2),
+            CssDimension::Percent(1.0),
+        ));
+        let scrollbar = arena.create_text("#");
+        arena.append_child(rail, scrollbar);
+
+        arena.append_child(body, viewport);
+        arena.append_child(body, rail);
+        arena.append_child(root, header);
+        arena.append_child(root, body);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(80.0),
+                height: AvailableSpace::Definite(24.0),
+            },
+        );
+
+        let viewport_metrics = arena.scroll_metrics(viewport).unwrap();
+        let rail_metrics = arena.scroll_metrics(rail).unwrap();
+
+        assert_eq!(arena.layout(header).size.height, 2.0);
+        assert_eq!(arena.layout(body).size.height, 22.0);
+        assert_eq!(arena.layout(viewport).size.height, 22.0);
+        assert_eq!(viewport_metrics.client_height, 20);
+        assert_eq!(viewport_metrics.scroll_height, 113);
+        assert_eq!(rail_metrics.client_height, 22);
     }
 
     #[test]
