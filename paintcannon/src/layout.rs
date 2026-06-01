@@ -2408,6 +2408,68 @@ mod tests {
     }
 
     #[test]
+    fn flex_row_long_text_does_not_shrink_fixed_width_controls() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Length(72.0), CssDimension::Auto);
+        row_style.display = LayoutDisplay::Flex;
+        row_style.flex_direction = LayoutFlexDirection::Row;
+        row_style.align_items = Some(LayoutAlignItems::Center);
+        row_style.column_gap = CssLengthPercentage::Length(1.0);
+        let row = arena.create_element(row_style);
+
+        let mut checkbox_style = block_style(CssDimension::Length(3.0), CssDimension::Length(3.0));
+        checkbox_style.border_top = BorderStyle::ChunkyRounded;
+        checkbox_style.border_right = BorderStyle::ChunkyRounded;
+        checkbox_style.border_bottom = BorderStyle::ChunkyRounded;
+        checkbox_style.border_left = BorderStyle::ChunkyRounded;
+        let checkbox = arena.create_element(checkbox_style);
+        let checkbox_text = arena.create_text(" ");
+        arena.append_child(checkbox, checkbox_text);
+        arena.append_child(row, checkbox);
+
+        let mut text_style = block_style(CssDimension::Auto, CssDimension::Auto);
+        text_style.flex_grow = 1.0;
+        text_style.flex_shrink = 1.0;
+        let text_box = arena.create_element(text_style);
+        let text =
+            arena.create_text("hahahahahahahahahahahahahahahahahahahahahahahahahahahahahaha");
+        arena.append_child(text_box, text);
+        arena.append_child(row, text_box);
+
+        let mut edit_style = block_style(CssDimension::Length(3.0), CssDimension::Length(3.0));
+        edit_style.border_top = BorderStyle::ChunkyRounded;
+        edit_style.border_right = BorderStyle::ChunkyRounded;
+        edit_style.border_bottom = BorderStyle::ChunkyRounded;
+        edit_style.border_left = BorderStyle::ChunkyRounded;
+        let edit = arena.create_element(edit_style);
+        let edit_text = arena.create_text("e");
+        arena.append_child(edit, edit_text);
+        arena.append_child(row, edit);
+
+        let mut delete_style = block_style(CssDimension::Length(3.0), CssDimension::Length(3.0));
+        delete_style.border_top = BorderStyle::ChunkyRounded;
+        delete_style.border_right = BorderStyle::ChunkyRounded;
+        delete_style.border_bottom = BorderStyle::ChunkyRounded;
+        delete_style.border_left = BorderStyle::ChunkyRounded;
+        let delete = arena.create_element(delete_style);
+        let delete_text = arena.create_text("x");
+        arena.append_child(delete, delete_text);
+        arena.append_child(row, delete);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(72.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        assert_eq!(arena.layout(checkbox).size.width, 3.0);
+        assert_eq!(arena.layout(edit).size.width, 3.0);
+        assert_eq!(arena.layout(delete).size.width, 3.0);
+    }
+
+    #[test]
     fn border_contributes_to_inline_context_outer_size() {
         let mut arena = LayoutArena::new();
         let mut style = block_style(CssDimension::Auto, CssDimension::Auto);
