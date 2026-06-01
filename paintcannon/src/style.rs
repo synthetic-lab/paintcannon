@@ -23,6 +23,14 @@ pub(crate) struct DivStyle {
     pub(crate) justify_self: Option<LayoutAlignItems>,
     pub(crate) row_gap: CssLengthPercentage,
     pub(crate) column_gap: CssLengthPercentage,
+    pub(crate) padding_top: CssLengthPercentage,
+    pub(crate) padding_right: CssLengthPercentage,
+    pub(crate) padding_bottom: CssLengthPercentage,
+    pub(crate) padding_left: CssLengthPercentage,
+    pub(crate) margin_top: CssLengthPercentageAuto,
+    pub(crate) margin_right: CssLengthPercentageAuto,
+    pub(crate) margin_bottom: CssLengthPercentageAuto,
+    pub(crate) margin_left: CssLengthPercentageAuto,
     pub(crate) width: CssDimension,
     pub(crate) height: CssDimension,
     pub(crate) min_height: CssDimension,
@@ -66,6 +74,14 @@ impl Default for DivStyle {
             justify_self: None,
             row_gap: CssLengthPercentage::Length(0.0),
             column_gap: CssLengthPercentage::Length(0.0),
+            padding_top: CssLengthPercentage::Length(0.0),
+            padding_right: CssLengthPercentage::Length(0.0),
+            padding_bottom: CssLengthPercentage::Length(0.0),
+            padding_left: CssLengthPercentage::Length(0.0),
+            margin_top: CssLengthPercentageAuto::Length(0.0),
+            margin_right: CssLengthPercentageAuto::Length(0.0),
+            margin_bottom: CssLengthPercentageAuto::Length(0.0),
+            margin_left: CssLengthPercentageAuto::Length(0.0),
             width: CssDimension::Auto,
             height: CssDimension::Auto,
             min_height: CssDimension::Length(0.0),
@@ -295,6 +311,23 @@ impl CssLengthPercentage {
         match self {
             Self::Length(value) => LengthPercentage::length(value),
             Self::Percent(value) => LengthPercentage::percent(value),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CssLengthPercentageAuto {
+    Auto,
+    Length(f32),
+    Percent(f32),
+}
+
+impl CssLengthPercentageAuto {
+    fn to_taffy(self) -> LengthPercentageAuto {
+        match self {
+            Self::Auto => LengthPercentageAuto::AUTO,
+            Self::Length(value) => LengthPercentageAuto::length(value),
+            Self::Percent(value) => LengthPercentageAuto::percent(value),
         }
     }
 }
@@ -572,6 +605,18 @@ impl DivStyle {
                 right: border_size(self.border_right),
                 top: border_size(self.border_top),
                 bottom: border_size(self.border_bottom),
+            },
+            padding: Rect {
+                left: self.padding_left.to_taffy(),
+                right: self.padding_right.to_taffy(),
+                top: self.padding_top.to_taffy(),
+                bottom: self.padding_bottom.to_taffy(),
+            },
+            margin: Rect {
+                left: self.margin_left.to_taffy(),
+                right: self.margin_right.to_taffy(),
+                top: self.margin_top.to_taffy(),
+                bottom: self.margin_bottom.to_taffy(),
             },
             grid_template_columns: self
                 .grid_template_columns
@@ -934,6 +979,77 @@ pub(crate) fn parse_gap(value: &str) -> Result<(CssLengthPercentage, CssLengthPe
     }
 }
 
+pub(crate) fn parse_box_lengths(
+    property: &str,
+    value: &str,
+) -> Result<(
+    CssLengthPercentage,
+    CssLengthPercentage,
+    CssLengthPercentage,
+    CssLengthPercentage,
+)> {
+    let parts = value.split_whitespace().collect::<Vec<_>>();
+    match parts.as_slice() {
+        [all] => {
+            let all = parse_length_percentage(all)?;
+            Ok((all, all, all, all))
+        }
+        [vertical, horizontal] => {
+            let vertical = parse_length_percentage(vertical)?;
+            let horizontal = parse_length_percentage(horizontal)?;
+            Ok((vertical, horizontal, vertical, horizontal))
+        }
+        [top, horizontal, bottom] => {
+            let top = parse_length_percentage(top)?;
+            let horizontal = parse_length_percentage(horizontal)?;
+            let bottom = parse_length_percentage(bottom)?;
+            Ok((top, horizontal, bottom, horizontal))
+        }
+        [top, right, bottom, left] => Ok((
+            parse_length_percentage(top)?,
+            parse_length_percentage(right)?,
+            parse_length_percentage(bottom)?,
+            parse_length_percentage(left)?,
+        )),
+        _ => Err(Error::from_reason(format!("invalid {property}: {value}"))),
+    }
+}
+
+pub(crate) fn parse_margin_lengths(
+    value: &str,
+) -> Result<(
+    CssLengthPercentageAuto,
+    CssLengthPercentageAuto,
+    CssLengthPercentageAuto,
+    CssLengthPercentageAuto,
+)> {
+    let parts = value.split_whitespace().collect::<Vec<_>>();
+    match parts.as_slice() {
+        [all] => {
+            let all = parse_length_percentage_auto(all)?;
+            Ok((all, all, all, all))
+        }
+        [vertical, horizontal] => {
+            let vertical = parse_length_percentage_auto(vertical)?;
+            let horizontal = parse_length_percentage_auto(horizontal)?;
+            Ok((vertical, horizontal, vertical, horizontal))
+        }
+        [top, horizontal, bottom] => {
+            let top = parse_length_percentage_auto(top)?;
+            let horizontal = parse_length_percentage_auto(horizontal)?;
+            let bottom = parse_length_percentage_auto(bottom)?;
+            Ok((top, horizontal, bottom, horizontal))
+        }
+        [top, right, bottom, left] => Ok((
+            parse_length_percentage_auto(top)?,
+            parse_length_percentage_auto(right)?,
+            parse_length_percentage_auto(bottom)?,
+            parse_length_percentage_auto(left)?,
+        )),
+        _ => Err(Error::from_reason(format!("invalid margin: {value}"))),
+    }
+}
+
 pub(crate) fn parse_length_percentage(value: &str) -> Result<CssLengthPercentage> {
     let value = value.trim();
     if let Some(percent) = value.strip_suffix('%') {
@@ -951,6 +1067,18 @@ pub(crate) fn parse_length_percentage(value: &str) -> Result<CssLengthPercentage
         .parse::<f32>()
         .map_err(|_| Error::from_reason(format!("invalid length: {value}")))?;
     Ok(CssLengthPercentage::Length(number))
+}
+
+pub(crate) fn parse_length_percentage_auto(value: &str) -> Result<CssLengthPercentageAuto> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("auto") {
+        return Ok(CssLengthPercentageAuto::Auto);
+    }
+
+    match parse_length_percentage(value)? {
+        CssLengthPercentage::Length(value) => Ok(CssLengthPercentageAuto::Length(value)),
+        CssLengthPercentage::Percent(value) => Ok(CssLengthPercentageAuto::Percent(value)),
+    }
 }
 
 pub(crate) fn parse_dimension(value: &str) -> Result<CssDimension> {

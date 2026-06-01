@@ -18,9 +18,10 @@ use crate::paint::{paint_arena_with_options, HitRegion, PaintOptions};
 use crate::selection::{SelectionAction, SelectionMouseEvent, SelectionState};
 use crate::style::{
     Background, BorderStyle, ColorTransitionProperty, CssDimension, CssGridLine, CssGridPlacement,
-    CssGridTemplateTrack, CssLengthPercentage, CssTrackSizing, CssWhiteSpace, CursorStyle,
-    DivStyle, ImageRendering, LayoutAlignItems, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap,
-    LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, TransitionSpec,
+    CssGridTemplateTrack, CssLengthPercentage, CssLengthPercentageAuto, CssTrackSizing,
+    CssWhiteSpace, CursorStyle, DivStyle, ImageRendering, LayoutAlignItems, LayoutDisplay,
+    LayoutFlexDirection, LayoutFlexWrap, LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow,
+    TransitionSpec,
 };
 use crate::terminal::{copy_text_to_clipboard, query_terminal_size, write_pointer_shape};
 use crate::transition::{TransitionEvent, TransitionEventType, TransitionState};
@@ -91,6 +92,26 @@ pub(crate) enum StyleMutation {
     },
     RowGap(CssLengthPercentage),
     ColumnGap(CssLengthPercentage),
+    Padding {
+        top: CssLengthPercentage,
+        right: CssLengthPercentage,
+        bottom: CssLengthPercentage,
+        left: CssLengthPercentage,
+    },
+    PaddingTop(CssLengthPercentage),
+    PaddingRight(CssLengthPercentage),
+    PaddingBottom(CssLengthPercentage),
+    PaddingLeft(CssLengthPercentage),
+    Margin {
+        top: CssLengthPercentageAuto,
+        right: CssLengthPercentageAuto,
+        bottom: CssLengthPercentageAuto,
+        left: CssLengthPercentageAuto,
+    },
+    MarginTop(CssLengthPercentageAuto),
+    MarginRight(CssLengthPercentageAuto),
+    MarginBottom(CssLengthPercentageAuto),
+    MarginLeft(CssLengthPercentageAuto),
     Width(CssDimension),
     Height(CssDimension),
     MinHeight(CssDimension),
@@ -161,6 +182,11 @@ pub(crate) enum EngineCommand {
     AppendChild {
         parent: DomId,
         child: DomId,
+    },
+    InsertChildBefore {
+        parent: DomId,
+        child: DomId,
+        before: DomId,
     },
     SetRoot {
         root: DomId,
@@ -445,6 +471,44 @@ impl PaintEngine {
         self.children.entry(parent).or_default().push(child);
         self.layout_dirty = true;
         self.arena.append_child(parent_node, child_node);
+        true
+    }
+
+    pub(crate) fn insert_child_before(
+        &mut self,
+        parent: DomId,
+        child: DomId,
+        before: DomId,
+    ) -> bool {
+        let Some(parent_node) = self.node_for(parent) else {
+            return false;
+        };
+        let Some(child_node) = self.node_for(child) else {
+            return false;
+        };
+        let Some(before_node) = self.node_for(before) else {
+            return false;
+        };
+
+        if let Some(old_parent) = self.parents.insert(child, parent) {
+            if let Some(old_parent_node) = self.node_for(old_parent) {
+                self.arena.remove_child(old_parent_node, child_node);
+            }
+            if let Some(siblings) = self.children.get_mut(&old_parent) {
+                siblings.retain(|id| *id != child);
+            }
+        }
+
+        let siblings = self.children.entry(parent).or_default();
+        siblings.retain(|id| *id != child);
+        let index = siblings
+            .iter()
+            .position(|id| *id == before)
+            .unwrap_or(siblings.len());
+        siblings.insert(index, child);
+        self.layout_dirty = true;
+        self.arena
+            .insert_child_before(parent_node, child_node, before_node);
         true
     }
 
@@ -1104,6 +1168,36 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
         }
         StyleMutation::RowGap(row_gap) => style.row_gap = row_gap,
         StyleMutation::ColumnGap(column_gap) => style.column_gap = column_gap,
+        StyleMutation::Padding {
+            top,
+            right,
+            bottom,
+            left,
+        } => {
+            style.padding_top = top;
+            style.padding_right = right;
+            style.padding_bottom = bottom;
+            style.padding_left = left;
+        }
+        StyleMutation::PaddingTop(padding) => style.padding_top = padding,
+        StyleMutation::PaddingRight(padding) => style.padding_right = padding,
+        StyleMutation::PaddingBottom(padding) => style.padding_bottom = padding,
+        StyleMutation::PaddingLeft(padding) => style.padding_left = padding,
+        StyleMutation::Margin {
+            top,
+            right,
+            bottom,
+            left,
+        } => {
+            style.margin_top = top;
+            style.margin_right = right;
+            style.margin_bottom = bottom;
+            style.margin_left = left;
+        }
+        StyleMutation::MarginTop(margin) => style.margin_top = margin,
+        StyleMutation::MarginRight(margin) => style.margin_right = margin,
+        StyleMutation::MarginBottom(margin) => style.margin_bottom = margin,
+        StyleMutation::MarginLeft(margin) => style.margin_left = margin,
         StyleMutation::Width(width) => style.width = width,
         StyleMutation::Height(height) => style.height = height,
         StyleMutation::MinHeight(min_height) => style.min_height = min_height,
@@ -1216,6 +1310,13 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         }
         EngineCommand::AppendChild { parent, child } => {
             engine.append_child(parent, child);
+        }
+        EngineCommand::InsertChildBefore {
+            parent,
+            child,
+            before,
+        } => {
+            engine.insert_child_before(parent, child, before);
         }
         EngineCommand::SetRoot { root } => {
             engine.set_root(root);

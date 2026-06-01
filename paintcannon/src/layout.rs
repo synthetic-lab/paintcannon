@@ -373,8 +373,47 @@ impl LayoutArena {
     }
 
     pub(crate) fn append_child(&mut self, parent: NodeId, child: NodeId) {
+        if let Some(previous_parent) = self.nodes[node_index(child)].parent {
+            let children = &mut self.nodes[node_index(previous_parent)].children;
+            if let Some(index) = children.iter().position(|id| *id == child) {
+                children.remove(index);
+                self.clear_cache_from(previous_parent);
+            }
+        }
+        let children = &mut self.nodes[node_index(parent)].children;
+        if let Some(index) = children.iter().position(|id| *id == child) {
+            children.remove(index);
+        }
         self.nodes[node_index(parent)].children.push(child);
         self.nodes[node_index(child)].parent = Some(parent);
+        self.clear_cache_from(parent);
+    }
+
+    pub(crate) fn insert_child_before(&mut self, parent: NodeId, child: NodeId, before: NodeId) {
+        if child == before {
+            return;
+        }
+
+        let child_index = node_index(child);
+        if let Some(previous_parent) = self.nodes[child_index].parent {
+            let children = &mut self.nodes[node_index(previous_parent)].children;
+            if let Some(index) = children.iter().position(|id| *id == child) {
+                children.remove(index);
+                self.clear_cache_from(previous_parent);
+            }
+        }
+
+        let parent_index = node_index(parent);
+        let children = &mut self.nodes[parent_index].children;
+        if let Some(index) = children.iter().position(|id| *id == child) {
+            children.remove(index);
+        }
+        let index = children
+            .iter()
+            .position(|id| *id == before)
+            .unwrap_or(children.len());
+        children.insert(index, child);
+        self.nodes[child_index].parent = Some(parent);
         self.clear_cache_from(parent);
     }
 
@@ -1862,8 +1901,9 @@ fn effective_white_space(inherited: CssWhiteSpace, own: CssWhiteSpace) -> CssWhi
 mod tests {
     use super::*;
     use crate::style::{
-        BorderStyle, CssDimension, CssGridTemplateTrack, CssTrackSizing, LayoutAlignItems,
-        LayoutFlexDirection, LayoutJustifyContent, LayoutOverflow,
+        BorderStyle, CssDimension, CssGridTemplateTrack, CssLengthPercentage,
+        CssLengthPercentageAuto, CssTrackSizing, LayoutAlignItems, LayoutFlexDirection,
+        LayoutJustifyContent, LayoutOverflow,
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
@@ -2017,6 +2057,99 @@ mod tests {
 
         assert_eq!(arena.layout(first).location.y, 0.0);
         assert_eq!(arena.layout(second).location.y, 2.0);
+    }
+
+    #[test]
+    fn insert_child_before_reorders_without_duplicate_children() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(block_style(CssDimension::Auto, CssDimension::Auto));
+        let first = fixed_box(&mut arena, 1.0, 1.0);
+        let second = fixed_box(&mut arena, 1.0, 1.0);
+        let third = fixed_box(&mut arena, 1.0, 1.0);
+        arena.append_child(root, first);
+        arena.append_child(root, third);
+
+        arena.insert_child_before(root, second, third);
+        assert_eq!(arena.children(root), &[first, second, third]);
+
+        arena.insert_child_before(root, third, second);
+        assert_eq!(arena.children(root), &[first, third, second]);
+    }
+
+    #[test]
+    fn padding_and_margin_affect_layout() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(20.0), CssDimension::Auto);
+        root_style.padding_top = CssLengthPercentage::Length(1.0);
+        root_style.padding_left = CssLengthPercentage::Length(2.0);
+        let root = arena.create_element(root_style);
+        let mut child_style = block_style(CssDimension::Length(4.0), CssDimension::Length(2.0));
+        child_style.margin_top = CssLengthPercentageAuto::Length(3.0);
+        child_style.margin_left = CssLengthPercentageAuto::Length(5.0);
+        let child = arena.create_element(child_style);
+        arena.append_child(root, child);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(20.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        assert_eq!(arena.layout(child).location.x, 7.0);
+        assert_eq!(arena.layout(child).location.y, 4.0);
+        assert_eq!(arena.layout(root).size.height, 6.0);
+    }
+
+    #[test]
+    fn auto_height_inline_context_includes_symmetric_vertical_padding() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(10.0), CssDimension::Auto);
+        root_style.padding_top = CssLengthPercentage::Length(1.0);
+        root_style.padding_right = CssLengthPercentage::Length(4.0);
+        root_style.padding_bottom = CssLengthPercentage::Length(1.0);
+        root_style.padding_left = CssLengthPercentage::Length(4.0);
+        let root = arena.create_element(root_style);
+        let text = arena.create_text("hi");
+        arena.append_child(root, text);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        let layout = arena.layout(root);
+        assert_eq!(layout.size.height, 3.0);
+        assert_eq!(layout.padding.top, 1.0);
+        assert_eq!(layout.padding.bottom, 1.0);
+    }
+
+    #[test]
+    fn auto_margins_are_passed_to_taffy() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(20.0), CssDimension::Length(5.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Row;
+        let root = arena.create_element(root_style);
+        let mut child_style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
+        child_style.margin_left = CssLengthPercentageAuto::Auto;
+        child_style.margin_right = CssLengthPercentageAuto::Auto;
+        let child = arena.create_element(child_style);
+        arena.append_child(root, child);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(20.0),
+                height: AvailableSpace::Definite(5.0),
+            },
+        );
+
+        assert_eq!(arena.layout(child).location.x, 8.0);
     }
 
     #[test]

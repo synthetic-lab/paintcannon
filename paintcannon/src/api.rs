@@ -20,12 +20,12 @@ use crate::engine::{
 use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseEvent, TerminalResizeEvent};
 use crate::layout::ArenaScrollMetrics;
 use crate::style::{
-    parse_align_items, parse_border_style, parse_cursor, parse_dimension, parse_display,
-    parse_flex_direction, parse_flex_flow, parse_flex_shorthand, parse_flex_wrap, parse_gap,
-    parse_grid_auto_flow, parse_grid_auto_tracks, parse_grid_line, parse_grid_placement,
+    parse_align_items, parse_border_style, parse_box_lengths, parse_cursor, parse_dimension,
+    parse_display, parse_flex_direction, parse_flex_flow, parse_flex_shorthand, parse_flex_wrap,
+    parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks, parse_grid_line, parse_grid_placement,
     parse_grid_template_tracks, parse_image_rendering, parse_justify_content,
-    parse_length_percentage, parse_non_negative_number, parse_overflow, parse_transition,
-    parse_white_space, Background,
+    parse_length_percentage, parse_length_percentage_auto, parse_margin_lengths,
+    parse_non_negative_number, parse_overflow, parse_transition, parse_white_space, Background,
 };
 use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
@@ -71,6 +71,7 @@ pub struct BatchCommand {
     pub id: Option<i32>,
     pub parent: Option<i32>,
     pub child: Option<i32>,
+    pub before: Option<i32>,
     pub text: Option<String>,
     pub src: Option<String>,
     pub cursor: Option<u32>,
@@ -295,6 +296,15 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn insert_child_before(&self, parent: u32, child: u32, before: u32) -> Result<()> {
+        self.send(EngineCommand::InsertChildBefore {
+            parent: DomId(parent),
+            child: DomId(child),
+            before: DomId(before),
+        })
+    }
+
+    #[napi]
     pub fn detach_node(&self, id: u32) -> Result<()> {
         self.send(EngineCommand::DetachNode { node: DomId(id) })
     }
@@ -491,6 +501,19 @@ impl PaintCannon {
                     render_commands.push(EngineCommand::AppendChild {
                         parent: DomId(parent),
                         child: DomId(child),
+                    });
+                }
+                "insertChildBefore" => {
+                    let parent =
+                        resolve_batch_id(command.parent, "parent", "insertChildBefore", &id_map)?;
+                    let child =
+                        resolve_batch_id(command.child, "child", "insertChildBefore", &id_map)?;
+                    let before =
+                        resolve_batch_id(command.before, "before", "insertChildBefore", &id_map)?;
+                    render_commands.push(EngineCommand::InsertChildBefore {
+                        parent: DomId(parent),
+                        child: DomId(child),
+                        before: DomId(before),
                     });
                 }
                 "detachNode" => {
@@ -901,6 +924,46 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
         }
         "row-gap" | "rowGap" => StyleMutation::RowGap(parse_length_percentage(value)?),
         "column-gap" | "columnGap" => StyleMutation::ColumnGap(parse_length_percentage(value)?),
+        "padding" => {
+            let (top, right, bottom, left) = parse_box_lengths("padding", value)?;
+            StyleMutation::Padding {
+                top,
+                right,
+                bottom,
+                left,
+            }
+        }
+        "padding-top" | "paddingTop" => StyleMutation::PaddingTop(parse_length_percentage(value)?),
+        "padding-right" | "paddingRight" => {
+            StyleMutation::PaddingRight(parse_length_percentage(value)?)
+        }
+        "padding-bottom" | "paddingBottom" => {
+            StyleMutation::PaddingBottom(parse_length_percentage(value)?)
+        }
+        "padding-left" | "paddingLeft" => {
+            StyleMutation::PaddingLeft(parse_length_percentage(value)?)
+        }
+        "margin" => {
+            let (top, right, bottom, left) = parse_margin_lengths(value)?;
+            StyleMutation::Margin {
+                top,
+                right,
+                bottom,
+                left,
+            }
+        }
+        "margin-top" | "marginTop" => {
+            StyleMutation::MarginTop(parse_length_percentage_auto(value)?)
+        }
+        "margin-right" | "marginRight" => {
+            StyleMutation::MarginRight(parse_length_percentage_auto(value)?)
+        }
+        "margin-bottom" | "marginBottom" => {
+            StyleMutation::MarginBottom(parse_length_percentage_auto(value)?)
+        }
+        "margin-left" | "marginLeft" => {
+            StyleMutation::MarginLeft(parse_length_percentage_auto(value)?)
+        }
         "width" => StyleMutation::Width(parse_dimension(value)?),
         "height" => StyleMutation::Height(parse_dimension(value)?),
         "min-height" | "minHeight" => StyleMutation::MinHeight(parse_dimension(value)?),

@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::time::Instant;
 
-use taffy::NodeId;
+use taffy::{tree::Layout, NodeId};
 
 use crate::frame::{ClipBounds, ClipRect, Frame, GlyphStyle};
 use crate::layout::{
@@ -154,6 +154,7 @@ impl<'a, 'out> Painter<'a, 'out> {
 
     fn paint_element(&mut self, id: NodeId, bounds: ClipRect, state: PaintState) {
         let style = self.arena.style(id);
+        let layout = self.arena.layout(id);
         let background = effective_background(
             self.paint_color(
                 id,
@@ -169,7 +170,7 @@ impl<'a, 'out> Painter<'a, 'out> {
         let selection_background = style.selection_background.or(state.selection_background);
 
         push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
-        let content = content_box_rect(bounds, style);
+        let content = content_box_rect(bounds, layout);
         self.output
             .frame
             .fill_rect(bounds, background, selection_background, state.clip);
@@ -232,7 +233,8 @@ impl<'a, 'out> Painter<'a, 'out> {
             state.background,
         );
         let selection_background = style.selection_background.or(state.selection_background);
-        let content = content_box_rect(bounds, style);
+        let layout = self.arena.layout(id);
+        let content = content_box_rect(bounds, layout);
         let child_clip = child_clip_for(style.overflow_x, style.overflow_y, content, state.clip);
 
         push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
@@ -284,7 +286,8 @@ impl<'a, 'out> Painter<'a, 'out> {
         let placeholder_foreground =
             effective_background(style.placeholder_color, state.foreground);
         let selection_background = style.selection_background.or(state.selection_background);
-        let content = content_box_rect(bounds, style);
+        let layout = self.arena.layout(id);
+        let content = content_box_rect(bounds, layout);
 
         push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
         self.output
@@ -337,7 +340,8 @@ impl<'a, 'out> Painter<'a, 'out> {
         let placeholder_foreground =
             effective_background(style.placeholder_color, state.foreground);
         let selection_background = style.selection_background.or(state.selection_background);
-        let content = content_box_rect(bounds, style);
+        let layout = self.arena.layout(id);
+        let content = content_box_rect(bounds, layout);
         let (_, scroll_top) = self.arena.scroll_offset(id);
 
         push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
@@ -833,25 +837,17 @@ fn child_clip_for(
     clip.intersect(ClipBounds::from_rect_axes(bounds, clips_x, clips_y))
 }
 
-fn content_box_rect(bounds: ClipRect, style: &DivStyle) -> ClipRect {
-    let left = bounds.left + border_extent_cells(style.border_left);
-    let top = bounds.top + border_extent_cells(style.border_top);
-    let right = bounds.right - border_extent_cells(style.border_right);
-    let bottom = bounds.bottom - border_extent_cells(style.border_bottom);
+fn content_box_rect(bounds: ClipRect, layout: Layout) -> ClipRect {
+    let left = bounds.left + (layout.border.left + layout.padding.left).round() as i32;
+    let top = bounds.top + (layout.border.top + layout.padding.top).round() as i32;
+    let right = bounds.right - (layout.border.right + layout.padding.right).round() as i32;
+    let bottom = bounds.bottom - (layout.border.bottom + layout.padding.bottom).round() as i32;
 
     ClipRect {
         left: left.min(right),
         top: top.min(bottom),
         right: right.max(left),
         bottom: bottom.max(top),
-    }
-}
-
-fn border_extent_cells(style: crate::style::BorderStyle) -> i32 {
-    if style == crate::style::BorderStyle::None {
-        0
-    } else {
-        1
     }
 }
 
@@ -880,7 +876,8 @@ mod tests {
     use taffy::{AvailableSpace, Size};
 
     use crate::style::{
-        BorderStyle, CssDimension, ImageRendering, LayoutDisplay, LayoutFlexDirection,
+        BorderStyle, CssDimension, CssLengthPercentage, ImageRendering, LayoutDisplay,
+        LayoutFlexDirection,
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
@@ -918,6 +915,37 @@ mod tests {
         assert_eq!(
             output.frame.cell(0, 0).unwrap().foreground,
             Background::White
+        );
+    }
+
+    #[test]
+    fn paints_inline_text_inside_padding_box() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(10.0), CssDimension::Length(4.0));
+        root_style.background = Background::Blue;
+        root_style.padding_top = CssLengthPercentage::Length(1.0);
+        root_style.padding_right = CssLengthPercentage::Length(4.0);
+        root_style.padding_bottom = CssLengthPercentage::Length(1.0);
+        root_style.padding_left = CssLengthPercentage::Length(4.0);
+        let root = arena.create_element(root_style);
+        let text = arena.create_text("hi");
+        arena.append_child(root, text);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(4.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 10, 4, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, ' ');
+        assert_eq!(output.frame.cell(4, 1).unwrap().character, 'h');
+        assert_eq!(output.frame.cell(5, 1).unwrap().character, 'i');
+        assert_eq!(
+            output.frame.cell(4, 1).unwrap().background,
+            Background::Blue
         );
     }
 

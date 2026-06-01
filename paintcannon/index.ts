@@ -157,6 +157,7 @@ export interface NativeBatchCommand {
   id?: number;
   parent?: number;
   child?: number;
+  before?: number;
   text?: string;
   src?: string;
   cursor?: number;
@@ -190,6 +191,7 @@ export interface NativePaintCannon {
   setTextControlCursorAtPoint(id: number, x: number, y: number): number | null;
   setRoot(id: number): void;
   appendChild(parent: number, child: number): void;
+  insertChildBefore(parent: number, child: number, before: number): void;
   detachNode(id: number): void;
   destroyNode(id: number): void;
   setStyleProperty(id: number, property: string, value: string): void;
@@ -237,6 +239,64 @@ export type PaintElement = DivElement | SpanElement | ImageElement | InputElemen
 export type PaintNode = PaintElement | TextNode;
 
 export const native: NativeBinding = loadNativeBinding();
+
+const livePaintCannons = new Set<PaintCannon>();
+let processCleanupInstalled = false;
+let handlingFatalError = false;
+const cleanupSignalHandlers = new Map<NodeJS.Signals, NodeJS.SignalsListener>();
+
+function registerLivePaintCannon(paintCannon: PaintCannon): void {
+  livePaintCannons.add(paintCannon);
+  installProcessCleanupHandlers();
+}
+
+function cleanupLivePaintCannons(): void {
+  for (const paintCannon of Array.from(livePaintCannons)) {
+    try {
+      paintCannon.releaseForProcessExit();
+    } catch {
+      // Process cleanup must be best-effort; throwing here would hide the real crash.
+    }
+  }
+}
+
+function installProcessCleanupHandlers(): void {
+  if (processCleanupInstalled) {
+    return;
+  }
+
+  processCleanupInstalled = true;
+  process.once('exit', cleanupLivePaintCannons);
+  process.prependListener('uncaughtExceptionMonitor', cleanupLivePaintCannons);
+  process.prependListener('unhandledRejection', (reason) => {
+    cleanupLivePaintCannons();
+    if (process.listenerCount('unhandledRejection') === 1) {
+      setImmediate(() => {
+        throw reason instanceof Error ? reason : new Error(String(reason));
+      });
+    }
+  });
+
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    const handler: NodeJS.SignalsListener = () => {
+      if (handlingFatalError) {
+        return;
+      }
+
+      handlingFatalError = true;
+      cleanupLivePaintCannons();
+      const installedHandler = cleanupSignalHandlers.get(signal);
+      if (installedHandler !== undefined) {
+        process.off(signal, installedHandler);
+        cleanupSignalHandlers.delete(signal);
+      }
+      process.kill(process.pid, signal);
+    };
+
+    cleanupSignalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+}
 
 export class PaintCannon {
   private readonly binding: NativePaintCannon;
@@ -293,6 +353,7 @@ export class PaintCannon {
     this.captureCtrlC = options.captureCtrlC ?? false;
     this.captureCtrlZ = options.captureCtrlZ ?? false;
     this.captureMouse = options.captureMouse ?? false;
+    registerLivePaintCannon(this);
     process.on('SIGCONT', this.handleSigcont);
     if (options.syntheticKeyupDelayMs !== undefined) {
       this.setSyntheticKeyupDelay(options.syntheticKeyupDelayMs);
@@ -311,6 +372,7 @@ export class PaintCannon {
         this,
         this.createNativeDiv(),
         (parent, child) => this.appendNativeChild(parent, child),
+        (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
         (id, property, value) => this.setNativeStyleProperty(id, property, value),
       );
       this.registerElement(element);
@@ -321,6 +383,7 @@ export class PaintCannon {
         this,
         this.createNativeSpan(),
         (parent, child) => this.appendNativeChild(parent, child),
+        (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
         (id, property, value) => this.setNativeStyleProperty(id, property, value),
       );
       this.registerElement(element);
@@ -428,12 +491,8 @@ export class PaintCannon {
   }
 
   transaction<T>(callback: () => T): T {
-    if (this.stopped) {
-      throw new Error('paintcannon renderer has been stopped');
-    }
-
     const isOuterTransaction = this.transactionDepth === 0;
-    this.transactionDepth += 1;
+    this.beginTransaction();
 
     let result: T;
     try {
@@ -448,10 +507,29 @@ export class PaintCannon {
 
     this.transactionDepth -= 1;
     if (isOuterTransaction) {
-      this.commitTransaction();
+      this.flushTransaction();
     }
 
     return result;
+  }
+
+  beginTransaction(): void {
+    if (this.stopped) {
+      throw new Error('paintcannon renderer has been stopped');
+    }
+
+    this.transactionDepth += 1;
+  }
+
+  commitTransaction(): void {
+    if (this.transactionDepth <= 0) {
+      throw new Error('no active paintcannon transaction to commit');
+    }
+
+    this.transactionDepth -= 1;
+    if (this.transactionDepth === 0) {
+      this.flushTransaction();
+    }
   }
 
   addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
@@ -579,7 +657,28 @@ export class PaintCannon {
     this.parents.clear();
     this.scrollMetrics.clear();
     this.hoveredElement = undefined;
+    livePaintCannons.delete(this);
     process.off('SIGCONT', this.handleSigcont);
+    this.binding.stop();
+  }
+
+  releaseForProcessExit(): void {
+    if (this.stopped) {
+      return;
+    }
+
+    this.stopped = true;
+    if (this.animationFrameTimer !== undefined) {
+      clearTimeout(this.animationFrameTimer);
+      this.animationFrameTimer = undefined;
+    }
+    if (this.keyboardEventTimer !== undefined) {
+      clearTimeout(this.keyboardEventTimer);
+      this.keyboardEventTimer = undefined;
+    }
+    livePaintCannons.delete(this);
+    process.off('SIGCONT', this.handleSigcont);
+    this.binding.releaseTerminal();
     this.binding.stop();
   }
 
@@ -774,6 +873,21 @@ export class PaintCannon {
     this.setParent(child, parent);
   }
 
+  private insertNativeChildBefore(parent: PaintElement, child: PaintNode, before: PaintNode): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({
+        type: 'insertChildBefore',
+        parent: parent.id,
+        child: child.id,
+        before: before.id,
+      });
+    } else {
+      this.binding.insertChildBefore(parent.id, child.id, before.id);
+    }
+
+    this.setParent(child, parent);
+  }
+
   detachChild(parent: PaintElement, child: PaintNode): PaintNode {
     assertElement(parent);
     assertPaintNode(child);
@@ -919,7 +1033,7 @@ export class PaintCannon {
     }
   }
 
-  private commitTransaction(): void {
+  private flushTransaction(): void {
     const commands = this.batchCommands;
     const renderDeferred = this.renderDeferred;
     this.batchCommands = [];
@@ -1746,6 +1860,7 @@ export class DivElement {
     owner: PaintCannon,
     id: number,
     private readonly appendNativeChild: (parent: PaintElement, child: PaintNode) => void,
+    private readonly insertNativeChildBefore: (parent: PaintElement, child: PaintNode, before: PaintNode) => void,
     setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {
     this.ownerDocument = owner;
@@ -1761,6 +1876,13 @@ export class DivElement {
   appendChild(child: PaintNode): PaintNode {
     assertPaintNode(child);
     this.appendNativeChild(this, child);
+    return child;
+  }
+
+  insertBefore(child: PaintNode, before: PaintNode): PaintNode {
+    assertPaintNode(child);
+    assertPaintNode(before);
+    this.insertNativeChildBefore(this, child, before);
     return child;
   }
 
@@ -1831,6 +1953,7 @@ export class SpanElement {
     owner: PaintCannon,
     id: number,
     private readonly appendNativeChild: (parent: PaintElement, child: PaintNode) => void,
+    private readonly insertNativeChildBefore: (parent: PaintElement, child: PaintNode, before: PaintNode) => void,
     setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {
     this.ownerDocument = owner;
@@ -1846,6 +1969,13 @@ export class SpanElement {
   appendChild(child: PaintNode): PaintNode {
     assertPaintNode(child);
     this.appendNativeChild(this, child);
+    return child;
+  }
+
+  insertBefore(child: PaintNode, before: PaintNode): PaintNode {
+    assertPaintNode(child);
+    assertPaintNode(before);
+    this.insertNativeChildBefore(this, child, before);
     return child;
   }
 
@@ -2482,6 +2612,86 @@ export class CSSStyleDeclaration {
 
   set columnGap(value: string | number) {
     this.setProperty('column-gap', value);
+  }
+
+  get padding(): string {
+    return this.getPropertyValue('padding');
+  }
+
+  set padding(value: string | number) {
+    this.setProperty('padding', value);
+  }
+
+  get paddingTop(): string {
+    return this.getPropertyValue('padding-top');
+  }
+
+  set paddingTop(value: string | number) {
+    this.setProperty('padding-top', value);
+  }
+
+  get paddingRight(): string {
+    return this.getPropertyValue('padding-right');
+  }
+
+  set paddingRight(value: string | number) {
+    this.setProperty('padding-right', value);
+  }
+
+  get paddingBottom(): string {
+    return this.getPropertyValue('padding-bottom');
+  }
+
+  set paddingBottom(value: string | number) {
+    this.setProperty('padding-bottom', value);
+  }
+
+  get paddingLeft(): string {
+    return this.getPropertyValue('padding-left');
+  }
+
+  set paddingLeft(value: string | number) {
+    this.setProperty('padding-left', value);
+  }
+
+  get margin(): string {
+    return this.getPropertyValue('margin');
+  }
+
+  set margin(value: string | number) {
+    this.setProperty('margin', value);
+  }
+
+  get marginTop(): string {
+    return this.getPropertyValue('margin-top');
+  }
+
+  set marginTop(value: string | number) {
+    this.setProperty('margin-top', value);
+  }
+
+  get marginRight(): string {
+    return this.getPropertyValue('margin-right');
+  }
+
+  set marginRight(value: string | number) {
+    this.setProperty('margin-right', value);
+  }
+
+  get marginBottom(): string {
+    return this.getPropertyValue('margin-bottom');
+  }
+
+  set marginBottom(value: string | number) {
+    this.setProperty('margin-bottom', value);
+  }
+
+  get marginLeft(): string {
+    return this.getPropertyValue('margin-left');
+  }
+
+  set marginLeft(value: string | number) {
+    this.setProperty('margin-left', value);
   }
 
   get width(): string {
