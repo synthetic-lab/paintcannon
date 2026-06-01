@@ -238,9 +238,11 @@ function TodoApp(): React.ReactElement {
   };
 
   const deleteTodo = (id: number): void => {
+    const nextSelectedIndex = indexAfterDelete(todos, id, selectedTodoId);
+    setSelectedIndex(nextSelectedIndex);
     setTodos(current => current.filter(item => item.id !== id));
-    if (selectedTodoId === id) {
-      setSelectedIndex(undefined);
+    if (nextSelectedIndex === undefined && selectedTodoId === id) {
+      focusMainInputAfterCommit();
     }
     if (editingId === id) {
       cancelEdit();
@@ -485,6 +487,34 @@ function selectionHint(selectedTodo: Todo | undefined): string {
   return selectedTodo.completed
     ? 'Press Up or Down to select items; T toggles, X deletes'
     : 'Press Up or Down to select items; T toggles, E edits, X deletes';
+}
+
+function indexAfterDelete(
+  todos: Todo[],
+  deletedId: number,
+  selectedId: number | undefined,
+): number | undefined {
+  if (selectedId === undefined) {
+    return undefined;
+  }
+
+  const deletedIndex = todos.findIndex(todo => todo.id === deletedId);
+  if (deletedIndex === -1) {
+    const selectedIndex = todos.findIndex(todo => todo.id === selectedId);
+    return selectedIndex === -1 ? undefined : selectedIndex;
+  }
+
+  const nextTodos = todos.filter(todo => todo.id !== deletedId);
+  if (nextTodos.length === 0) {
+    return undefined;
+  }
+
+  if (selectedId === deletedId) {
+    return Math.max(0, deletedIndex - 1);
+  }
+
+  const selectedNextIndex = nextTodos.findIndex(todo => todo.id === selectedId);
+  return selectedNextIndex === -1 ? undefined : selectedNextIndex;
 }
 
 function TodoRow({
