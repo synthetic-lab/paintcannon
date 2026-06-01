@@ -656,31 +656,38 @@ impl LayoutArena {
         let overflow_y = self.nodes[index].style.overflow_y;
         let scroll_left = self.nodes[index].scroll_left;
         let scroll_top = self.nodes[index].scroll_top;
-        let content_size = layout.content_box_size();
-        let content_origin = Point {
-            x: layout.border.left + layout.padding.left,
-            y: layout.border.top + layout.padding.top,
+        let padding_size = padding_box_size(layout);
+        let padding_origin = Point {
+            x: layout.border.left,
+            y: layout.border.top,
         };
-        let client_width = float_to_cells(content_size.width);
-        let client_height = float_to_cells(content_size.height);
+        let client_width = float_to_cells(padding_size.width);
+        let client_height = float_to_cells(padding_size.height);
         let mut scroll_width = client_width;
         let mut scroll_height = client_height;
 
         if self.is_inline_context(node_id) {
             let widths = self.inline_content_widths(node_id, white_space);
-            let height = self.inline_content_height(node_id, white_space, client_width.max(1));
-            scroll_width = scroll_width.max(float_to_cells(widths.max));
-            scroll_height = scroll_height.max(float_to_cells(height));
+            let content_width = float_to_cells(layout.content_box_size().width).max(1);
+            let height = self.inline_content_height(node_id, white_space, content_width);
+            scroll_width = scroll_width.max(float_to_cells(
+                layout.padding.left + widths.max + layout.padding.right,
+            ));
+            scroll_height = scroll_height.max(float_to_cells(
+                layout.padding.top + height + layout.padding.bottom,
+            ));
         } else {
             let child_count = self.nodes[index].children.len();
             for child_index in 0..child_count {
                 let child = self.nodes[index].children[child_index];
                 let child_layout = self.layout(child);
                 scroll_width = scroll_width.max(float_to_cells(
-                    child_layout.location.x + child_layout.size.width - content_origin.x,
+                    child_layout.location.x + child_layout.size.width - padding_origin.x
+                        + layout.padding.right,
                 ));
                 scroll_height = scroll_height.max(float_to_cells(
-                    child_layout.location.y + child_layout.size.height - content_origin.y,
+                    child_layout.location.y + child_layout.size.height - padding_origin.y
+                        + layout.padding.bottom,
                 ));
             }
         }
@@ -1593,6 +1600,13 @@ fn border_edge_cells(style: BorderStyle) -> f32 {
 
 fn float_to_cells(value: f32) -> u32 {
     value.max(0.0).round() as u32
+}
+
+fn padding_box_size(layout: Layout) -> Size<f32> {
+    Size {
+        width: (layout.size.width - layout.border.horizontal_axis_sum()).max(0.0),
+        height: (layout.size.height - layout.border.vertical_axis_sum()).max(0.0),
+    }
 }
 
 fn measure_inline_replaced(size: Size<f32>, cursor: &mut InlineMeasureCursor) {
@@ -2786,7 +2800,7 @@ mod tests {
     }
 
     #[test]
-    fn bordered_scroll_container_uses_content_box_metrics() {
+    fn bordered_padded_scroll_container_uses_padding_box_metrics() {
         let mut arena = LayoutArena::new();
         let mut viewport_style = block_style(CssDimension::Length(10.0), CssDimension::Length(6.0));
         viewport_style.overflow_y = LayoutOverflow::Scroll;
@@ -2794,8 +2808,12 @@ mod tests {
         viewport_style.border_right = BorderStyle::Solid;
         viewport_style.border_bottom = BorderStyle::Solid;
         viewport_style.border_left = BorderStyle::Solid;
+        viewport_style.padding_top = CssLengthPercentage::Length(1.0);
+        viewport_style.padding_right = CssLengthPercentage::Length(1.0);
+        viewport_style.padding_bottom = CssLengthPercentage::Length(1.0);
+        viewport_style.padding_left = CssLengthPercentage::Length(1.0);
         let viewport = arena.create_element(viewport_style);
-        let child = fixed_box(&mut arena, 8.0, 8.0);
+        let child = fixed_box(&mut arena, 6.0, 8.0);
         arena.append_child(viewport, child);
 
         arena.compute_layout(
@@ -2810,7 +2828,7 @@ mod tests {
         assert_eq!(metrics.client_width, 8);
         assert_eq!(metrics.client_height, 4);
         assert_eq!(metrics.scroll_width, 8);
-        assert_eq!(metrics.scroll_height, 8);
+        assert_eq!(metrics.scroll_height, 10);
     }
 
     #[test]

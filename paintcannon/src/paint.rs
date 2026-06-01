@@ -171,6 +171,7 @@ impl<'a, 'out> Painter<'a, 'out> {
 
         push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
         let content = content_box_rect(bounds, layout);
+        let scrollport = padding_box_rect(bounds, layout);
         self.output
             .frame
             .fill_rect(bounds, background, selection_background, state.clip);
@@ -178,7 +179,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             .frame
             .clear_chunky_rounded_corners(bounds, style, state.clip);
 
-        let child_clip = child_clip_for(style.overflow_x, style.overflow_y, content, state.clip);
+        let child_clip = child_clip_for(style.overflow_x, style.overflow_y, scrollport, state.clip);
         let (scroll_left, scroll_top) = self.arena.scroll_offset(id);
         let child_state = PaintState {
             parent_x: bounds.left - scroll_offset_cells(style.overflow_x, scroll_left),
@@ -851,6 +852,20 @@ fn content_box_rect(bounds: ClipRect, layout: Layout) -> ClipRect {
     }
 }
 
+fn padding_box_rect(bounds: ClipRect, layout: Layout) -> ClipRect {
+    let left = bounds.left + layout.border.left.round() as i32;
+    let top = bounds.top + layout.border.top.round() as i32;
+    let right = bounds.right - layout.border.right.round() as i32;
+    let bottom = bounds.bottom - layout.border.bottom.round() as i32;
+
+    ClipRect {
+        left: left.min(right),
+        top: top.min(bottom),
+        right: right.max(left),
+        bottom: bottom.max(top),
+    }
+}
+
 fn scroll_offset_cells(overflow: LayoutOverflow, value: u32) -> i32 {
     if overflow == LayoutOverflow::Scroll {
         value.min(i32::MAX as u32) as i32
@@ -981,6 +996,38 @@ mod tests {
         );
         assert_eq!(output.frame.cell(1, 0).unwrap().character, '─');
         assert_eq!(output.frame.cell(1, 1).unwrap().background, Background::Red);
+    }
+
+    #[test]
+    fn scroll_container_clips_children_to_padding_box() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(6.0));
+        viewport_style.border_top = BorderStyle::Solid;
+        viewport_style.border_right = BorderStyle::Solid;
+        viewport_style.border_bottom = BorderStyle::Solid;
+        viewport_style.border_left = BorderStyle::Solid;
+        viewport_style.padding_top = CssLengthPercentage::Length(1.0);
+        viewport_style.padding_bottom = CssLengthPercentage::Length(1.0);
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = arena.create_element(viewport_style);
+        let mut child_style = block_style(CssDimension::Length(4.0), CssDimension::Length(8.0));
+        child_style.background = Background::Red;
+        let child = arena.create_element(child_style);
+        arena.append_child(viewport, child);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::Definite(6.0),
+            },
+        );
+        arena.set_scroll_offset(viewport, 0, 1);
+        let output = paint_arena(&arena, viewport, 6, 6, false);
+
+        assert_eq!(output.frame.cell(1, 1).unwrap().background, Background::Red);
+        assert_eq!(output.frame.cell(1, 4).unwrap().background, Background::Red);
+        assert_eq!(output.frame.cell(1, 5).unwrap().character, '─');
     }
 
     #[test]
