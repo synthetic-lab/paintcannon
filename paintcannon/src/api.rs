@@ -967,6 +967,7 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
         "width" => StyleMutation::Width(parse_dimension(value)?),
         "height" => StyleMutation::Height(parse_dimension(value)?),
         "min-height" | "minHeight" => StyleMutation::MinHeight(parse_dimension(value)?),
+        "max-height" | "maxHeight" => StyleMutation::MaxHeight(parse_dimension(value)?),
         "white-space" | "whiteSpace" => StyleMutation::WhiteSpace(parse_white_space(value)?),
         "border" => StyleMutation::Border(parse_border_style(value)?),
         "border-top" | "borderTop" => StyleMutation::BorderTop(parse_border_style(value)?),
@@ -1167,5 +1168,17 @@ mod tests {
         };
 
         assert!(create_command_style_mut(&mut command).is_none());
+    }
+
+    #[test]
+    fn max_height_style_command_is_supported() {
+        let command = style_command(1, "max-height", "90%").unwrap();
+        match command {
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::MaxHeight(CssDimension::Percent(value)),
+                ..
+            } => assert_eq!(value, 0.9),
+            _ => panic!("expected max-height style mutation"),
+        }
     }
 }

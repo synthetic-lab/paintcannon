@@ -2307,6 +2307,40 @@ mod tests {
     }
 
     #[test]
+    fn percent_max_height_constrains_scroll_container() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(block_style(
+            CssDimension::Length(10.0),
+            CssDimension::Length(10.0),
+        ));
+
+        let mut viewport_style = block_style(CssDimension::Length(10.0), CssDimension::Auto);
+        viewport_style.max_height = CssDimension::Percent(0.5);
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = arena.create_element(viewport_style);
+
+        let content = arena.create_element(block_style(
+            CssDimension::Length(10.0),
+            CssDimension::Length(10.0),
+        ));
+        arena.append_child(viewport, content);
+        arena.append_child(root, viewport);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(10.0),
+            },
+        );
+
+        let metrics = arena.scroll_metrics(viewport).unwrap();
+        assert_eq!(arena.layout(viewport).size.height, 5.0);
+        assert_eq!(metrics.client_height, 5);
+        assert_eq!(metrics.scroll_height, 10);
+    }
+
+    #[test]
     fn border_contributes_to_inline_context_outer_size() {
         let mut arena = LayoutArena::new();
         let mut style = block_style(CssDimension::Auto, CssDimension::Auto);

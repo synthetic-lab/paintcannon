@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 crossbeam-channel = "0.5"
 crossterm = "0.29"
 libc = "0.2"
-napi = { version = "3", default-features = false, features = ["napi4"] }
+napi = { version = "3", default-features = false, features = ["napi4", "dyn-symbols"] }
 napi-derive = "3"
 png = "0.18"
 taffy = "0.10"

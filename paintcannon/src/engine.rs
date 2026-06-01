@@ -115,6 +115,7 @@ pub(crate) enum StyleMutation {
     Width(CssDimension),
     Height(CssDimension),
     MinHeight(CssDimension),
+    MaxHeight(CssDimension),
     Border(BorderStyle),
     BorderTop(BorderStyle),
     BorderRight(BorderStyle),
@@ -1201,6 +1202,7 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
         StyleMutation::Width(width) => style.width = width,
         StyleMutation::Height(height) => style.height = height,
         StyleMutation::MinHeight(min_height) => style.min_height = min_height,
+        StyleMutation::MaxHeight(max_height) => style.max_height = max_height,
         StyleMutation::Border(border) => {
             style.border_top = border;
             style.border_right = border;

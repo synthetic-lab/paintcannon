@@ -271,6 +271,27 @@ describe('core resize events', () => {
   });
 });
 
+describe('core style validation', () => {
+  it('supports maxHeight and rejects unsupported style keys before native calls', () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+
+    root.style.maxHeight = '90%';
+    expect(root.style.maxHeight).toBe('90%');
+    expect(mockNative.styleMutations).toContainEqual({
+      id: root.id,
+      property: 'max-height',
+      value: '90%',
+    });
+
+    const before = mockNative.styleMutations.length;
+    expect(() => root.style.setProperty('definitelyNotAProperty' as never, '1')).toThrow(
+      /unsupported style property/,
+    );
+    expect(mockNative.styleMutations).toHaveLength(before);
+    paintCannon.stop();
+  });
+});
+
 function createPaintTree(options: { captureMouse?: boolean } = {}): {
   paintCannon: PaintCannon;
   mockNative: MockNativePaintCannon;

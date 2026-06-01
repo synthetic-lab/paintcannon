@@ -34,6 +34,7 @@ pub(crate) struct DivStyle {
     pub(crate) width: CssDimension,
     pub(crate) height: CssDimension,
     pub(crate) min_height: CssDimension,
+    pub(crate) max_height: CssDimension,
     pub(crate) grid_template_columns: Vec<CssGridTemplateTrack>,
     pub(crate) grid_template_rows: Vec<CssGridTemplateTrack>,
     pub(crate) grid_auto_columns: Vec<CssTrackSizing>,
@@ -85,6 +86,7 @@ impl Default for DivStyle {
             width: CssDimension::Auto,
             height: CssDimension::Auto,
             min_height: CssDimension::Length(0.0),
+            max_height: CssDimension::Auto,
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
             grid_auto_columns: Vec::new(),
@@ -599,6 +601,10 @@ impl DivStyle {
             min_size: Size {
                 width: Dimension::length(0.0),
                 height: self.min_height.to_taffy(),
+            },
+            max_size: Size {
+                width: Dimension::AUTO,
+                height: self.max_height.to_taffy(),
             },
             border: Rect {
                 left: border_size(self.border_left),

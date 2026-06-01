@@ -18,6 +18,12 @@ export interface NativeTextControlState {
   placeholder: string;
 }
 
+export interface NativeStyleMutation {
+  id: number;
+  property: string;
+  value: string;
+}
+
 export function createMockNativeBinding(instances: MockNativePaintCannon[] = []): NativeBinding {
   return {
     PaintCannon: class extends MockNativePaintCannon {
@@ -50,6 +56,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
   resizeEvents: TerminalResizeEvent[] = [];
   transitionEvents: NativeTransitionEvent[] = [];
   textControls = new Map<number, NativeTextControlState>();
+  styleMutations: NativeStyleMutation[] = [];
   private nextId = 1;
 
   constructor(
@@ -127,7 +134,9 @@ export class MockNativePaintCannon implements NativePaintCannon {
   insertChildBefore(_parent: number, _child: number, _before: number): void {}
   detachNode(_id: number): void {}
   destroyNode(_id: number): void {}
-  setStyleProperty(_id: number, _property: string, _value: string): void {}
+  setStyleProperty(id: number, property: string, value: string): void {
+    this.styleMutations.push({ id, property, value });
+  }
 
   applyBatch(commands: NativeBatchCommand[]): NativeBatchIdMapping[] {
     const mappings: NativeBatchIdMapping[] = [];

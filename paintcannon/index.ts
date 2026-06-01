@@ -59,6 +59,7 @@ type ElementEventListener = KeyboardEventListener | MouseEventListener | FocusEv
 export type ClickEventListener = MouseEventListener;
 export type ImageRendering = 'ascii' | 'half-block';
 export type CSSWhiteSpace = 'normal' | 'nowrap' | 'pre' | 'pre-wrap' | 'pre-line';
+export type CSSStyleValue = string | number;
 export type CSSCursor =
   | 'auto'
   | 'alias'
@@ -2799,14 +2800,18 @@ export class CSSStyleDeclaration {
     private readonly setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {}
 
-  setProperty(property: string, value: string | number): void {
+  setProperty(property: CSSStylePropertyName, value: CSSStyleValue): void {
     const name = normalizeStyleName(property);
+    if (!SUPPORTED_STYLE_PROPERTIES.has(name)) {
+      throw new Error(`unsupported style property: ${property}`);
+    }
+
     const stringValue = String(value);
     this.values[name] = stringValue;
     this.setNativeStyleProperty(this.getElementId(), name, stringValue);
   }
 
-  getPropertyValue(property: string): string {
+  getPropertyValue(property: CSSStylePropertyName): string {
     return this.values[normalizeStyleName(property)] || '';
   }
 
@@ -3072,6 +3077,14 @@ export class CSSStyleDeclaration {
 
   set minHeight(value: string | number) {
     this.setProperty('min-height', value);
+  }
+
+  get maxHeight(): string {
+    return this.getPropertyValue('max-height');
+  }
+
+  set maxHeight(value: string | number) {
+    this.setProperty('max-height', value);
   }
 
   get whiteSpace(): CSSWhiteSpace | string {
@@ -3366,9 +3379,79 @@ function emptyScrollMetrics(): NativeScrollMetrics {
   };
 }
 
-function normalizeStyleName(property: string): string {
-  return property.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
+function normalizeStyleName(property: string): CSSStyleProperty {
+  return property.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`) as CSSStyleProperty;
 }
+
+export const SUPPORTED_STYLE_PROPERTY_NAMES = [
+  'display',
+  'overflow',
+  'overflow-x',
+  'overflow-y',
+  'image-rendering',
+  'flex-direction',
+  'flex-wrap',
+  'flex-flow',
+  'flex-basis',
+  'flex-grow',
+  'flex-shrink',
+  'flex',
+  'justify-content',
+  'align-items',
+  'align-self',
+  'align-content',
+  'justify-items',
+  'justify-self',
+  'gap',
+  'row-gap',
+  'column-gap',
+  'padding',
+  'padding-top',
+  'padding-right',
+  'padding-bottom',
+  'padding-left',
+  'margin',
+  'margin-top',
+  'margin-right',
+  'margin-bottom',
+  'margin-left',
+  'width',
+  'height',
+  'min-height',
+  'max-height',
+  'white-space',
+  'border',
+  'border-top',
+  'border-right',
+  'border-bottom',
+  'border-left',
+  'border-color',
+  'color',
+  'placeholder-color',
+  'transition',
+  'background',
+  'background-color',
+  'selection-background-color',
+  'cursor',
+  'grid-template-columns',
+  'grid-template-rows',
+  'grid-auto-columns',
+  'grid-auto-rows',
+  'grid-auto-flow',
+  'grid-column',
+  'grid-row',
+  'grid-column-start',
+  'grid-column-end',
+  'grid-row-start',
+  'grid-row-end',
+] as const;
+export type CSSStyleProperty = typeof SUPPORTED_STYLE_PROPERTY_NAMES[number];
+type CamelCase<S extends string> = S extends `${infer Head}-${infer Tail}`
+  ? `${Head}${Capitalize<CamelCase<Tail>>}`
+  : S;
+export type CSSStylePropertyName = CSSStyleProperty | CamelCase<CSSStyleProperty>;
+export type CSSStyleProperties = Partial<Record<CSSStylePropertyName, CSSStyleValue | null | undefined>>;
+const SUPPORTED_STYLE_PROPERTIES = new Set<string>(SUPPORTED_STYLE_PROPERTY_NAMES);
 
 function fpsToInterval(fps: number): number {
   if (!Number.isFinite(fps) || fps <= 0) {
