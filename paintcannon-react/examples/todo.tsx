@@ -94,7 +94,7 @@ function TodoApp(): React.ReactElement {
       return;
     }
 
-    setTodos(current => [...current, {id: nextId, text, completed: false}]);
+    setTodos(current => [{id: nextId, text, completed: false}, ...current]);
     setNextId(id => id + 1);
     setDraft('');
   };
