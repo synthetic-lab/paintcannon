@@ -1,6 +1,7 @@
 Very fast, Rust-based terminal rendering for JavaScript and TypeScript.
 PaintCannon exposes a DOM API subset via NAPI-RS bindings to JS and renders to
-terminal backends very quickly.
+terminal backends very quickly. Think of PaintCannon as a tiny browser that
+renders to a terminal backend instead of a GUI in your window manager.
 
 PaintCannon supports the following CSS:
 
@@ -10,8 +11,8 @@ PaintCannon supports the following CSS:
 * Inline
 * Margins and padding, including auto margins
 * Overflow hidden and scroll, with native mouse scrolling
-* RGB background, border, text, placeholder, and selection coloring with
-  limited-palette fallbacks
+* 24-bit RGB background, border, text, placeholder, and selection coloring with
+  256-color and 16-color fallbacks
 * CSS transitions for all color properties
 * Mouse pointer styling (in supported terminals using the kitty protocol)
 
