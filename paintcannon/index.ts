@@ -322,7 +322,6 @@ export class PaintCannon {
   private batchCommands: NativeBatchCommand[] = [];
   private batchNodes = new Map<number, PaintNode>();
   private renderDeferred = false;
-  private readonly captureCtrlC: boolean;
   private readonly captureCtrlZ: boolean;
   private readonly captureMouse: boolean;
   private readonly animationFrameCallbacks = new Map<number, AnimationFrameCallback>();
@@ -361,7 +360,6 @@ export class PaintCannon {
       options.captureCtrlC ?? false,
     );
     this.frameIntervalMs = fpsToInterval(options.fps ?? 60);
-    this.captureCtrlC = options.captureCtrlC ?? false;
     this.captureCtrlZ = options.captureCtrlZ ?? false;
     this.captureMouse = options.captureMouse ?? false;
     registerLivePaintCannon(this);
@@ -1709,26 +1707,6 @@ export class PaintCannon {
     }
 
     return true;
-  }
-
-  private dispatchClickEvent(nativeEvent: NativeClickEvent): void {
-    const target = this.elements.get(nativeEvent.targetId);
-    if (target === undefined) {
-      return;
-    }
-
-    this.dispatchMouseEvent('click', target, {
-      type: nativeEvent.type,
-      x: nativeEvent.clientX,
-      y: nativeEvent.clientY,
-      button: nativeEvent.button,
-      deltaX: 0,
-      deltaY: 0,
-      ctrlKey: nativeEvent.ctrlKey,
-      altKey: nativeEvent.altKey,
-      metaKey: nativeEvent.metaKey,
-      shiftKey: nativeEvent.shiftKey,
-    }, true);
   }
 
   private elementPath(element: PaintElement | undefined): PaintElement[] {

@@ -34,7 +34,6 @@ import { ELEMENT_EVENT_TYPES, PaintCannon } from 'paintcannon';
 type HostType = 'paintcannon.div' | 'paintcannon.span' | 'paintcannon.input' | 'paintcannon.textarea';
 type HostNode = HostElement | HostText;
 type HostParent = HostElement | RootContainer;
-type PublicInstance = PaintElement | TextNode;
 type StyleValue = string | number | boolean | null | undefined;
 type StyleProps = Partial<Record<keyof CSSStyleDeclaration, StyleValue>> & Record<string, StyleValue>;
 type EventPropName<T extends ElementEventType = ElementEventType> =
