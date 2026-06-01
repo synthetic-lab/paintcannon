@@ -735,25 +735,8 @@ function findPackageJsonPath(): string {
 }
 
 const eventProps = [
-  ...ELEMENT_EVENT_TYPES.map((eventType) => [eventPropName(eventType), eventType] as const),
+  ...ELEMENT_EVENT_TYPES.map((eventType) => [hostComponents.EVENT_PROP_NAMES[eventType], eventType] as const),
 ] satisfies ReadonlyArray<readonly [hostComponents.EventPropName, ElementEventType]>;
-
-function eventPropName<T extends ElementEventType>(eventType: T): hostComponents.EventPropName<T> {
-  if (eventType.startsWith('key')) {
-    return `onKey${capitalize(eventType.slice('key'.length))}` as hostComponents.EventPropName<T>;
-  }
-  if (eventType.startsWith('mouse')) {
-    return `onMouse${capitalize(eventType.slice('mouse'.length))}` as hostComponents.EventPropName<T>;
-  }
-  if (eventType.startsWith('transition')) {
-    return `onTransition${capitalize(eventType.slice('transition'.length))}` as hostComponents.EventPropName<T>;
-  }
-  return `on${capitalize(eventType)}` as hostComponents.EventPropName<T>;
-}
-
-function capitalize(value: string): string {
-  return `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
-}
 
 export type {
   PaintCannon,
