@@ -57,6 +57,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
   transitionEvents: NativeTransitionEvent[] = [];
   textControls = new Map<number, NativeTextControlState>();
   styleMutations: NativeStyleMutation[] = [];
+  scrollMetricsById = new Map<number, NativeScrollMetrics>();
   private nextId = 1;
 
   constructor(
@@ -199,19 +200,21 @@ export class MockNativePaintCannon implements NativePaintCannon {
     return this.targetIdAtPoint;
   }
 
-  setScrollOffset(_id: number, scrollLeft: number, scrollTop: number): NativeScrollMetrics {
-    return {
-      scrollLeft,
-      scrollTop,
-      scrollWidth: 0,
-      scrollHeight: 0,
-      clientWidth: 0,
-      clientHeight: 0,
+  setScrollOffset(id: number, scrollLeft: number, scrollTop: number): NativeScrollMetrics {
+    const current = this.scrollMetrics(id);
+    const maxLeft = Math.max(0, current.scrollWidth - current.clientWidth);
+    const maxTop = Math.max(0, current.scrollHeight - current.clientHeight);
+    const metrics = {
+      ...current,
+      scrollLeft: Math.min(maxLeft, Math.max(0, Math.floor(scrollLeft))),
+      scrollTop: Math.min(maxTop, Math.max(0, Math.floor(scrollTop))),
     };
+    this.scrollMetricsById.set(id, metrics);
+    return metrics;
   }
 
-  scrollMetrics(_id: number): NativeScrollMetrics {
-    return {
+  scrollMetrics(id: number): NativeScrollMetrics {
+    return this.scrollMetricsById.get(id) ?? {
       scrollLeft: 0,
       scrollTop: 0,
       scrollWidth: 0,

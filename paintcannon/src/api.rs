@@ -3,7 +3,7 @@ use std::io::{self, IsTerminal};
 use std::sync::mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
@@ -94,6 +94,7 @@ pub struct PaintCannon {
     input: Option<TerminalInput>,
     kitty_keyboard_enabled: bool,
     render_pending: Arc<AtomicBool>,
+    layout_size: Mutex<(usize, usize)>,
     next_dom_id: u32,
     color_profile: TermProfile,
 }
@@ -110,6 +111,7 @@ impl PaintCannon {
         let (tx, rx) = bounded(RENDER_QUEUE_CAPACITY);
         termprofile::set_color_cache_enabled(true);
         let color_profile = TermProfile::detect(&io::stdout(), DetectorSettings::default());
+        let size = query_terminal_size();
         let thread = thread::spawn(move || engine_loop(rx));
         let render_pending = Arc::new(AtomicBool::new(false));
         let input = TerminalInput::start(
@@ -134,6 +136,7 @@ impl PaintCannon {
             input,
             kitty_keyboard_enabled,
             render_pending,
+            layout_size: Mutex::new((size.cols as usize, size.rows as usize)),
             next_dom_id: 1,
             color_profile,
         }
@@ -258,9 +261,12 @@ impl PaintCannon {
     #[napi]
     pub fn move_text_area_cursor_vertically(&self, id: u32, direction: i32) -> Result<Option<u32>> {
         let (response_tx, response_rx) = bounded(1);
+        let (width, height) = self.layout_size();
         self.send(EngineCommand::MoveTextAreaCursorVertically {
             node: DomId(id),
             direction,
+            width,
+            height,
             response: response_tx,
         })?;
         response_rx
@@ -271,10 +277,13 @@ impl PaintCannon {
     #[napi]
     pub fn set_text_control_cursor_at_point(&self, id: u32, x: u32, y: u32) -> Result<Option<u32>> {
         let (response_tx, response_rx) = bounded(1);
+        let (width, height) = self.layout_size();
         self.send(EngineCommand::SetTextControlCursorAtPoint {
             node: DomId(id),
             x,
             y,
+            width,
+            height,
             response: response_tx,
         })?;
         response_rx
@@ -585,6 +594,14 @@ impl PaintCannon {
         query_terminal_size()
     }
 
+    fn layout_size(&self) -> (usize, usize) {
+        *self.layout_size.lock().expect("layout size mutex poisoned")
+    }
+
+    fn set_layout_size(&self, width: usize, height: usize) {
+        *self.layout_size.lock().expect("layout size mutex poisoned") = (width, height);
+    }
+
     #[napi(getter)]
     pub fn kitty_keyboard_enabled(&self) -> bool {
         self.kitty_keyboard_enabled
@@ -600,10 +617,10 @@ impl PaintCannon {
             return Ok(());
         }
 
-        let size = query_terminal_size();
+        let (width, height) = self.layout_size();
         match self.tx.try_send(EngineCommand::RenderPending {
-            width: size.cols as usize,
-            height: size.rows as usize,
+            width,
+            height,
             color_profile: self.color_profile,
             synchronized: io::stdout().is_terminal(),
             pending: Arc::clone(&self.render_pending),
@@ -623,10 +640,10 @@ impl PaintCannon {
     #[napi]
     pub fn render_sync(&self) -> Result<()> {
         let (response_tx, response_rx) = mpsc::channel();
-        let size = query_terminal_size();
+        let (width, height) = self.layout_size();
         self.send(EngineCommand::RenderStdout {
-            width: size.cols as usize,
-            height: size.rows as usize,
+            width,
+            height,
             color_profile: self.color_profile,
             synchronized: io::stdout().is_terminal(),
             response: response_tx,
@@ -660,10 +677,15 @@ impl PaintCannon {
 
     #[napi]
     pub fn drain_resize_events(&self) -> Vec<TerminalResizeEvent> {
-        self.input
+        let events = self
+            .input
             .as_ref()
             .map(TerminalInput::drain_resize_events)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if let Some(event) = events.last() {
+            self.set_layout_size(event.cols as usize, event.rows as usize);
+        }
+        events
     }
 
     #[napi]
@@ -736,10 +758,13 @@ impl PaintCannon {
         scroll_top: u32,
     ) -> Result<Option<ScrollMetrics>> {
         let (response_tx, response_rx) = bounded(1);
+        let (width, height) = self.layout_size();
         self.send(EngineCommand::SetScrollOffset {
             node: DomId(id),
             scroll_left,
             scroll_top,
+            width,
+            height,
             response: response_tx,
         })?;
         response_rx
@@ -751,8 +776,11 @@ impl PaintCannon {
     #[napi]
     pub fn scroll_metrics(&self, id: u32) -> Result<Option<ScrollMetrics>> {
         let (response_tx, response_rx) = bounded(1);
+        let (width, height) = self.layout_size();
         self.send(EngineCommand::GetScrollMetrics {
             node: DomId(id),
+            width,
+            height,
             response: response_tx,
         })?;
         response_rx

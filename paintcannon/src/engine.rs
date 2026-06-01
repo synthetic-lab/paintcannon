@@ -243,22 +243,30 @@ pub(crate) enum EngineCommand {
     MoveTextAreaCursorVertically {
         node: DomId,
         direction: i32,
+        width: usize,
+        height: usize,
         response: Sender<Option<u32>>,
     },
     SetTextControlCursorAtPoint {
         node: DomId,
         x: u32,
         y: u32,
+        width: usize,
+        height: usize,
         response: Sender<Option<u32>>,
     },
     SetScrollOffset {
         node: DomId,
         scroll_left: u32,
         scroll_top: u32,
+        width: usize,
+        height: usize,
         response: Sender<Option<ArenaScrollMetrics>>,
     },
     GetScrollMetrics {
         node: DomId,
+        width: usize,
+        height: usize,
         response: Sender<Option<ArenaScrollMetrics>>,
     },
     HitTestPoint {
@@ -1370,53 +1378,48 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         EngineCommand::MoveTextAreaCursorVertically {
             node,
             direction,
+            width,
+            height,
             response,
         } => {
-            let size = query_terminal_size();
-            let _ = response.send(engine.move_textarea_cursor_vertically_for_size(
-                node,
-                direction,
-                size.cols as usize,
-                size.rows as usize,
-            ));
+            let _ = response.send(
+                engine.move_textarea_cursor_vertically_for_size(node, direction, width, height),
+            );
         }
         EngineCommand::SetTextControlCursorAtPoint {
             node,
             x,
             y,
+            width,
+            height,
             response,
         } => {
-            let size = query_terminal_size();
-            let _ = response.send(engine.set_text_control_cursor_at_point_for_size(
-                node,
-                x,
-                y,
-                size.cols as usize,
-                size.rows as usize,
-            ));
+            let _ = response
+                .send(engine.set_text_control_cursor_at_point_for_size(node, x, y, width, height));
         }
         EngineCommand::SetScrollOffset {
             node,
             scroll_left,
             scroll_top,
+            width,
+            height,
             response,
         } => {
-            let size = query_terminal_size();
             let _ = response.send(engine.set_scroll_offset_for_size(
                 node,
                 scroll_left,
                 scroll_top,
-                size.cols as usize,
-                size.rows as usize,
+                width,
+                height,
             ));
         }
-        EngineCommand::GetScrollMetrics { node, response } => {
-            let size = query_terminal_size();
-            let _ = response.send(engine.scroll_metrics_for_size(
-                node,
-                size.cols as usize,
-                size.rows as usize,
-            ));
+        EngineCommand::GetScrollMetrics {
+            node,
+            width,
+            height,
+            response,
+        } => {
+            let _ = response.send(engine.scroll_metrics_for_size(node, width, height));
         }
         EngineCommand::HitTestPoint { x, y, response } => {
             let _ = response.send(engine.target_at(x, y));
@@ -2264,6 +2267,60 @@ mod tests {
 
         assert_eq!(frame.cell(0, 0).unwrap().character, 'o');
         assert_eq!(frame.cell(1, 0).unwrap().character, 'k');
+
+        tx.send(EngineCommand::Shutdown).unwrap();
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn command_loop_scroll_metrics_use_explicit_command_size() {
+        let (tx, rx) = bounded(32);
+        let thread = thread::spawn(move || engine_loop(rx));
+
+        let mut viewport_style =
+            block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        tx.send(EngineCommand::CreateElementWithId {
+            id: DomId(1),
+            style: viewport_style,
+        })
+        .unwrap();
+        tx.send(EngineCommand::CreateElementWithId {
+            id: DomId(2),
+            style: block_style(CssDimension::Length(10.0), CssDimension::Length(20.0)),
+        })
+        .unwrap();
+        tx.send(EngineCommand::AppendChild {
+            parent: DomId(1),
+            child: DomId(2),
+        })
+        .unwrap();
+        tx.send(EngineCommand::SetRoot { root: DomId(1) }).unwrap();
+
+        let (response_tx, response_rx) = bounded(1);
+        tx.send(EngineCommand::GetScrollMetrics {
+            node: DomId(1),
+            width: 10,
+            height: 5,
+            response: response_tx,
+        })
+        .unwrap();
+        let small = response_rx.recv().unwrap().unwrap();
+
+        let (response_tx, response_rx) = bounded(1);
+        tx.send(EngineCommand::GetScrollMetrics {
+            node: DomId(1),
+            width: 10,
+            height: 12,
+            response: response_tx,
+        })
+        .unwrap();
+        let large = response_rx.recv().unwrap().unwrap();
+
+        assert_eq!(small.client_height, 5);
+        assert_eq!(small.scroll_height, 20);
+        assert_eq!(large.client_height, 12);
+        assert_eq!(large.scroll_height, 20);
 
         tx.send(EngineCommand::Shutdown).unwrap();
         thread.join().unwrap();

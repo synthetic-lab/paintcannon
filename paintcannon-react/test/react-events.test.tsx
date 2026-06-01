@@ -11,7 +11,7 @@ import {
   type TextAreaElement,
 } from 'paintcannon';
 import { Div, Input, Textarea, render } from '../src/index.ts';
-import { createMockNativeBinding, type MockNativePaintCannon } from '../../paintcannon/test/mock-native.ts';
+import { createMockNativeBinding, mouseEvent, type MockNativePaintCannon } from '../../paintcannon/test/mock-native.ts';
 
 let restores: Array<() => void> = [];
 let mockNativeInstances: MockNativePaintCannon[] = [];
@@ -192,6 +192,53 @@ describe('resize events', () => {
     expect(sizes).toEqual([[100, 40]]);
     expect(mockNative.renderCalls).toBe(1);
     expect(mockNative.renderSyncCalls).toBe(0);
+  });
+});
+
+describe('scroll events', () => {
+  it('commits state updates from onScroll before the input pump returns', async () => {
+    let scroller: PaintElement | undefined;
+    let renderedTop = -1;
+
+    function App(): React.ReactElement {
+      const [scrollTop, setScrollTop] = React.useState(2);
+      renderedTop = scrollTop;
+      return (
+        <Div
+          ref={element => {
+            scroller = element;
+          }}
+          style={{overflowY: 'scroll'}}
+          onScroll={event => {
+            setScrollTop(event.scrollTop);
+          }}
+        />
+      );
+    }
+
+    const root = render(<App />, { captureMouse: true, fps: 120 });
+    const mockNative = mockNativeInstances[0];
+    if (mockNative === undefined) {
+      throw new Error('expected mock native instance');
+    }
+
+    await commit();
+    expect(scroller).toBeDefined();
+    mockNative.targetIdAtPoint = scroller?.id ?? null;
+    mockNative.scrollMetricsById.set(scroller?.id ?? 0, {
+      scrollLeft: 0,
+      scrollTop: 2,
+      scrollWidth: 10,
+      scrollHeight: 10,
+      clientWidth: 10,
+      clientHeight: 4,
+    });
+    mockNative.mouseEvents.push(mouseEvent('wheel', { deltaY: -1 }));
+
+    runKeyboardEventPump(root.paintCannon);
+    root.paintCannon.stop();
+
+    expect(renderedTop).toBe(0);
   });
 });
 

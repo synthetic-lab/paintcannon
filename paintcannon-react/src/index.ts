@@ -9,7 +9,8 @@ import {
 } from 'react-reconciler/constants.js';
 import * as Scheduler from 'scheduler';
 import type {
-  CSSStyleDeclaration,
+  CSSStyleProperties,
+  CSSStylePropertyName,
   ChangeElementEventType,
   ChangeEventListener,
   DivElement,
@@ -46,6 +47,8 @@ import {
   TextAreaElement,
 } from 'paintcannon';
 
+export type {CSSStyleProperties, CSSStylePropertyName, CSSStyleValue, DivElement} from 'paintcannon';
+
 type HostType =
   | 'paintcannon.div'
   | 'paintcannon.span'
@@ -55,8 +58,8 @@ type HostType =
   | 'paintcannon.textarea';
 type HostNode = HostElement | HostText;
 type HostParent = HostElement | RootContainer;
-type StyleValue = string | number | boolean | null | undefined;
-type StyleProps = Partial<Record<keyof CSSStyleDeclaration, StyleValue>> & Record<string, StyleValue>;
+type HostComponent<Props, Element extends PaintElement> =
+  React.ForwardRefExoticComponent<React.PropsWithoutRef<Props> & React.RefAttributes<Element>>;
 type ChildContainerElement = PaintElement & {
   appendChild(child: PaintNode): PaintNode;
   insertBefore(child: PaintNode, before: PaintNode): PaintNode;
@@ -85,7 +88,7 @@ type ElementEventProps = {
 
 export interface CommonProps extends ElementEventProps {
   children?: React.ReactNode;
-  style?: StyleProps;
+  style?: CSSStyleProperties;
 }
 
 export interface DivProps extends CommonProps {
@@ -123,12 +126,12 @@ export interface TextareaProps extends InputProps {
   scrollTop?: number;
 }
 
-export const Div = 'paintcannon.div' as unknown as React.ComponentType<DivProps>;
-export const Span = 'paintcannon.span' as unknown as React.ComponentType<SpanProps>;
-export const Form = 'paintcannon.form' as unknown as React.ComponentType<FormProps>;
-export const Button = 'paintcannon.button' as unknown as React.ComponentType<ButtonProps>;
-export const Input = 'paintcannon.input' as unknown as React.ComponentType<InputProps>;
-export const Textarea = 'paintcannon.textarea' as unknown as React.ComponentType<TextareaProps>;
+export const Div = 'paintcannon.div' as unknown as HostComponent<DivProps, DivElement>;
+export const Span = 'paintcannon.span' as unknown as HostComponent<SpanProps, SpanElement>;
+export const Form = 'paintcannon.form' as unknown as HostComponent<FormProps, FormElement>;
+export const Button = 'paintcannon.button' as unknown as HostComponent<ButtonProps, ButtonElement>;
+export const Input = 'paintcannon.input' as unknown as HostComponent<InputProps, InputElement>;
+export const Textarea = 'paintcannon.textarea' as unknown as HostComponent<TextareaProps, TextAreaElement>;
 
 export interface CreateRootOptions extends PaintCannonOptions {
   paintCannon?: PaintCannon;
@@ -145,6 +148,7 @@ export interface PaintCannonReactRoot {
 }
 
 export interface PaintCannonReactApp {
+  readonly paintCannon: PaintCannon;
   exit(errorOrResult?: unknown): void;
   waitUntilExit(): Promise<unknown>;
 }
@@ -202,6 +206,7 @@ const AppContext = React.createContext<PaintCannonReactApp | undefined>(undefine
 const AnimationContext = React.createContext<AnimationContextValue | undefined>(undefined);
 const maximumTimerInterval = 2_147_483_647;
 const zeroAnimationState: Omit<AnimationResult, 'reset'> = { frame: 0, time: 0, delta: 0 };
+const eventListenerWrappers = new WeakMap<(event: unknown) => void, (event: unknown) => void>();
 
 const reconciler = createReconciler({
   getRootHostContext: () => ({}),
@@ -379,6 +384,7 @@ export function createRoot(options: CreateRootOptions = {}): PaintCannonReactRoo
     resolveExit(errorOrResult);
   };
   const app: PaintCannonReactApp = {
+    paintCannon,
     exit(errorOrResult?: unknown): void {
       if (exited) {
         return;
@@ -642,7 +648,7 @@ function destroyHostNode(host: HostNode): void {
 }
 
 function applyProps(node: PaintElement, type: HostType, oldProps: Props, newProps: Props): void {
-  applyStyle(node, oldProps.style as StyleProps | undefined, newProps.style as StyleProps | undefined);
+  applyStyle(node, oldProps.style as CSSStyleProperties | undefined, newProps.style as CSSStyleProperties | undefined);
   applyEvents(node, oldProps, newProps);
 
   if (type === 'paintcannon.button' && node instanceof ButtonElement && typeof newProps.type === 'string') {
@@ -675,14 +681,15 @@ function applyProps(node: PaintElement, type: HostType, oldProps: Props, newProp
   }
 }
 
-function applyStyle(node: PaintElement, oldStyle: StyleProps | undefined, newStyle: StyleProps | undefined): void {
+function applyStyle(node: PaintElement, oldStyle: CSSStyleProperties | undefined, newStyle: CSSStyleProperties | undefined): void {
   if (oldStyle === newStyle || newStyle === undefined) {
     return;
   }
 
   for (const [key, value] of Object.entries(newStyle)) {
-    if (value !== undefined && value !== null && value !== oldStyle?.[key]) {
-      node.style.setProperty(key, String(value));
+    const styleKey = key as CSSStylePropertyName;
+    if (value !== undefined && value !== null && value !== oldStyle?.[styleKey]) {
+      node.style.setProperty(styleKey, value);
     }
   }
 }
@@ -717,12 +724,25 @@ function isTextControlElement(node: PaintElement): node is InputElement | TextAr
 
 function addElementListener(node: PaintElement, eventType: ElementEventType, listener: (event: unknown) => void): void {
   (node as {addEventListener(type: ElementEventType, listener: (event: unknown) => void): void})
-    .addEventListener(eventType, listener);
+    .addEventListener(eventType, reactEventListener(listener));
 }
 
 function removeElementListener(node: PaintElement, eventType: ElementEventType, listener: (event: unknown) => void): void {
   (node as {removeEventListener(type: ElementEventType, listener: (event: unknown) => void): void})
-    .removeEventListener(eventType, listener);
+    .removeEventListener(eventType, reactEventListener(listener));
+}
+
+function reactEventListener(listener: (event: unknown) => void): (event: unknown) => void {
+  let wrapped = eventListenerWrappers.get(listener);
+  if (wrapped === undefined) {
+    wrapped = (event: unknown): void => {
+      reconciler.flushSyncFromReconciler(() => {
+        listener(event);
+      });
+    };
+    eventListenerWrappers.set(listener, wrapped);
+  }
+  return wrapped;
 }
 
 function defaultDisplay(type: HostType): string {

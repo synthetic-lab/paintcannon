@@ -269,6 +269,7 @@ describe('core resize events', () => {
     expect(mockNative.renderCalls).toBe(1);
     expect(mockNative.renderSyncCalls).toBe(0);
   });
+
 });
 
 describe('core style validation', () => {
