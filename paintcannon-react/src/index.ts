@@ -11,10 +11,14 @@ import type {
   CSSStyleDeclaration,
   DivElement,
   ElementEventType,
+  FocusElementEventType,
+  FocusEventListener,
   InputElement,
+  MouseElementEventType,
   MouseEventListener,
   PaintCannonOptions,
   PaintElement,
+  PaintFocusEvent,
   PaintMouseEvent,
   PaintNode,
   PaintScrollEvent,
@@ -22,9 +26,10 @@ import type {
   SpanElement,
   TextAreaElement,
   TextNode,
+  TransitionElementEventType,
   TransitionEventListener,
 } from 'paintcannon';
-import { PaintCannon } from 'paintcannon';
+import { ELEMENT_EVENT_TYPES, PaintCannon } from 'paintcannon';
 
 type HostType = 'paintcannon.div' | 'paintcannon.span' | 'paintcannon.input' | 'paintcannon.textarea';
 type HostNode = HostElement | HostText;
@@ -32,17 +37,23 @@ type HostParent = HostElement | RootContainer;
 type PublicInstance = PaintElement | TextNode;
 type StyleValue = string | number | boolean | null | undefined;
 type StyleProps = Partial<Record<keyof CSSStyleDeclaration, StyleValue>> & Record<string, StyleValue>;
+type EventPropName<T extends ElementEventType = ElementEventType> =
+  T extends `mouse${infer Rest}` ? `onMouse${Capitalize<Rest>}` :
+  T extends `transition${infer Rest}` ? `onTransition${Capitalize<Rest>}` :
+  `on${Capitalize<T>}`;
+type ElementEventListenerFor<T extends ElementEventType> =
+  T extends MouseElementEventType ? MouseEventListener :
+  T extends FocusElementEventType ? FocusEventListener :
+  T extends TransitionElementEventType ? TransitionEventListener :
+  T extends 'scroll' ? ScrollEventListener :
+  never;
+type ElementEventProps = {
+  [T in ElementEventType as EventPropName<T>]?: ElementEventListenerFor<T>;
+};
 
-export interface CommonProps {
+export interface CommonProps extends ElementEventProps {
   children?: React.ReactNode;
   style?: StyleProps;
-  onClick?: MouseEventListener;
-  onMouseEnter?: MouseEventListener;
-  onMouseLeave?: MouseEventListener;
-  onMouseMove?: MouseEventListener;
-  onScroll?: ScrollEventListener;
-  onTransitionStart?: TransitionEventListener;
-  onTransitionEnd?: TransitionEventListener;
 }
 
 export interface DivProps extends CommonProps {
@@ -442,19 +453,28 @@ function loadPackageInfo(): PackageInfo {
 }
 
 const eventProps = [
-  ['onClick', 'click'],
-  ['onMouseEnter', 'mouseenter'],
-  ['onMouseLeave', 'mouseleave'],
-  ['onMouseMove', 'mousemove'],
-  ['onScroll', 'scroll'],
-  ['onTransitionStart', 'transitionstart'],
-  ['onTransitionEnd', 'transitionend'],
-] satisfies Array<[string, ElementEventType]>;
+  ...ELEMENT_EVENT_TYPES.map((eventType) => [eventPropName(eventType), eventType] as const),
+] satisfies ReadonlyArray<readonly [EventPropName, ElementEventType]>;
+
+function eventPropName<T extends ElementEventType>(eventType: T): EventPropName<T> {
+  if (eventType.startsWith('mouse')) {
+    return `onMouse${capitalize(eventType.slice('mouse'.length))}` as EventPropName<T>;
+  }
+  if (eventType.startsWith('transition')) {
+    return `onTransition${capitalize(eventType.slice('transition'.length))}` as EventPropName<T>;
+  }
+  return `on${capitalize(eventType)}` as EventPropName<T>;
+}
+
+function capitalize(value: string): string {
+  return `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
+}
 
 export type {
   PaintCannon,
   PaintCannonOptions,
   PaintElement,
+  PaintFocusEvent,
   PaintMouseEvent,
   PaintScrollEvent,
 };

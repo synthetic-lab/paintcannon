@@ -24,13 +24,24 @@ export type KeyboardEventType = 'keydown' | 'keyup';
 export type PaintCannonEventType = KeyboardEventType | 'resize';
 export type KeyboardEventListener = (event: PaintKeyboardEvent) => void;
 export type ResizeEventListener = (event: PaintResizeEvent) => void;
-export type MouseElementEventType = 'click' | 'mouseenter' | 'mouseleave' | 'mousemove';
-export type TransitionElementEventType = 'transitionstart' | 'transitionend';
-export type ElementEventType = MouseElementEventType | TransitionElementEventType | 'scroll';
+export const MOUSE_ELEMENT_EVENT_TYPES = ['click', 'mouseenter', 'mouseleave', 'mousemove'] as const;
+export const FOCUS_ELEMENT_EVENT_TYPES = ['focus', 'blur'] as const;
+export const TRANSITION_ELEMENT_EVENT_TYPES = ['transitionstart', 'transitionend'] as const;
+export const ELEMENT_EVENT_TYPES = [
+  ...MOUSE_ELEMENT_EVENT_TYPES,
+  ...FOCUS_ELEMENT_EVENT_TYPES,
+  ...TRANSITION_ELEMENT_EVENT_TYPES,
+  'scroll',
+] as const;
+export type MouseElementEventType = typeof MOUSE_ELEMENT_EVENT_TYPES[number];
+export type FocusElementEventType = typeof FOCUS_ELEMENT_EVENT_TYPES[number];
+export type TransitionElementEventType = typeof TRANSITION_ELEMENT_EVENT_TYPES[number];
+export type ElementEventType = typeof ELEMENT_EVENT_TYPES[number];
 export type MouseEventListener = (event: PaintMouseEvent) => void;
+export type FocusEventListener = (event: PaintFocusEvent) => void;
 export type ScrollEventListener = (event: PaintScrollEvent) => void;
 export type TransitionEventListener = (event: PaintTransitionEvent) => void;
-type ElementEventListener = MouseEventListener | ScrollEventListener | TransitionEventListener;
+type ElementEventListener = MouseEventListener | FocusEventListener | ScrollEventListener | TransitionEventListener;
 export type ClickEventListener = MouseEventListener;
 export type ImageRendering = 'ascii' | 'half-block';
 export type CSSWhiteSpace = 'normal' | 'nowrap' | 'pre' | 'pre-wrap' | 'pre-line';
@@ -914,8 +925,8 @@ export class PaintCannon {
 
   destroyNode(node: PaintNode): void {
     assertPaintNode(node);
-    this.destroyNativeNode(node.id);
     this.cleanupDestroyedNode(node);
+    this.destroyNativeNode(node.id);
   }
 
   private detachNativeNode(id: number): void {
@@ -952,7 +963,7 @@ export class PaintCannon {
     collect(node.id);
 
     if (this.focusedTextControl !== undefined && ids.has(this.focusedTextControl.id)) {
-      this.focusedTextControl.setFocused(false);
+      this.blurFocusedInput(this.focusedTextControl, true);
       this.focusedTextControl = undefined;
     }
     if (this.hoveredElement !== undefined && ids.has(this.hoveredElement.id)) {
@@ -984,6 +995,7 @@ export class PaintCannon {
     }
 
     if (this.focusedTextControl !== undefined && ids.has(this.focusedTextControl.id)) {
+      this.blurFocusedInput(this.focusedTextControl, true);
       this.focusedTextControl = undefined;
     }
     if (this.hoveredElement !== undefined && ids.has(this.hoveredElement.id)) {
@@ -1374,9 +1386,12 @@ export class PaintCannon {
       return;
     }
 
-    this.focusedTextControl?.setFocused(false);
+    if (this.focusedTextControl !== undefined) {
+      this.blurFocusedInput(this.focusedTextControl, true);
+    }
     this.focusedTextControl = element;
     element.setFocused(true);
+    this.dispatchFocusEvent('focus', element);
     this.render();
   }
 
@@ -1385,9 +1400,16 @@ export class PaintCannon {
       return;
     }
 
-    element.setFocused(false);
+    this.blurFocusedInput(element, true);
     this.focusedTextControl = undefined;
     this.render();
+  }
+
+  private blurFocusedInput(element: TextControlElement, syncNative: boolean): void {
+    if (syncNative) {
+      element.setFocused(false);
+    }
+    this.dispatchFocusEvent('blur', element);
   }
 
   private focusNextInput(direction: 1 | -1): boolean {
@@ -1610,6 +1632,18 @@ export class PaintCannon {
     }
   }
 
+  private dispatchFocusEvent(type: FocusElementEventType, target: TextControlElement): void {
+    const event = new PaintFocusEvent({ type, target });
+    event.setCurrentTarget(target);
+    const listeners = Array.from(this.elementEventListeners.get(target.id)?.[type] ?? []);
+    for (const listener of listeners) {
+      (listener as FocusEventListener)(event);
+      if (event.propagationStopped) {
+        return;
+      }
+    }
+  }
+
   private dispatchScrollEvent(
     target: PaintElement,
     input: TerminalMouseEvent,
@@ -1720,6 +1754,11 @@ interface PaintMouseEventInit {
   shiftKey: boolean;
 }
 
+interface PaintFocusEventInit {
+  type: FocusElementEventType;
+  target: TextControlElement;
+}
+
 interface PaintScrollEventInit {
   target: PaintElement;
   scrollLeft: number;
@@ -1772,6 +1811,32 @@ export class PaintMouseEvent {
   }
 
   setCurrentTarget(element: PaintElement): void {
+    this.currentTarget = element;
+  }
+}
+
+export class PaintFocusEvent {
+  readonly type: FocusElementEventType;
+  readonly target: TextControlElement;
+  currentTarget: TextControlElement;
+  defaultPrevented = false;
+  propagationStopped = false;
+
+  constructor(event: PaintFocusEventInit) {
+    this.type = event.type;
+    this.target = event.target;
+    this.currentTarget = event.target;
+  }
+
+  preventDefault(): void {
+    this.defaultPrevented = true;
+  }
+
+  stopPropagation(): void {
+    this.propagationStopped = true;
+  }
+
+  setCurrentTarget(element: TextControlElement): void {
     this.currentTarget = element;
   }
 }
@@ -1931,6 +1996,7 @@ export class DivElement {
   }
 
   addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   addEventListener(type: 'scroll', listener: ScrollEventListener): void;
   addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   addEventListener(type: ElementEventType, listener: ElementEventListener): void {
@@ -1938,6 +2004,7 @@ export class DivElement {
   }
 
   removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
   removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
@@ -2024,6 +2091,7 @@ export class SpanElement {
   }
 
   addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   addEventListener(type: 'scroll', listener: ScrollEventListener): void;
   addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   addEventListener(type: ElementEventType, listener: ElementEventListener): void {
@@ -2031,6 +2099,7 @@ export class SpanElement {
   }
 
   removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
   removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
@@ -2076,12 +2145,14 @@ export class ImageElement {
   }
 
   addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   addEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
   removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
@@ -2299,12 +2370,14 @@ export class InputElement {
   }
 
   addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   addEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
   removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
@@ -2380,6 +2453,7 @@ export class TextAreaElement extends InputElement {
   }
 
   override addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  override addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   override addEventListener(type: 'scroll', listener: ScrollEventListener): void;
   override addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   override addEventListener(type: ElementEventType, listener: ElementEventListener): void {
@@ -2387,6 +2461,7 @@ export class TextAreaElement extends InputElement {
   }
 
   override removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
+  override removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   override removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
   override removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   override removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
@@ -2962,15 +3037,7 @@ function lineEnd(chars: string[], cursor: number): number {
 }
 
 function isElementEventType(type: string): type is ElementEventType {
-  return (
-    type === 'click' ||
-      type === 'mouseenter' ||
-      type === 'mouseleave' ||
-      type === 'mousemove' ||
-      type === 'transitionstart' ||
-      type === 'transitionend' ||
-      type === 'scroll'
-    );
+  return (ELEMENT_EVENT_TYPES as readonly string[]).includes(type);
 }
 
 function isAxisScrollable(value: string): boolean {
