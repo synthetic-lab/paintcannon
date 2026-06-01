@@ -1,5 +1,5 @@
 import React, {useState} from 'react';
-import {Div, Span, render} from '../src';
+import {Div, Span, render} from '../src/index.ts';
 
 let root: ReturnType<typeof render> | undefined;
 

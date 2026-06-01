@@ -1,6 +1,6 @@
 import React from 'react';
 import {PaintCannon} from 'paintcannon';
-import {Div, Span, render, useApp} from '../src';
+import {Div, Span, render, useApp} from '../src/index.ts';
 
 function LifecycleDemo(): React.ReactElement {
   const {exit} = useApp();

@@ -1,6 +1,10 @@
-import fs = require('node:fs');
-import path = require('node:path');
+import fs from 'node:fs';
+import path from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { fileURLToPath } from 'node:url';
+import { registry } from 'antipattern';
+
+const packageDirectory = path.dirname(fileURLToPath(import.meta.url));
 
 export interface PaintCannonOptions {
   fps?: number;
@@ -27,22 +31,27 @@ export type KeyboardEventListener = (event: PaintKeyboardEvent) => void;
 export type ResizeEventListener = (event: PaintResizeEvent) => void;
 export const MOUSE_ELEMENT_EVENT_TYPES = ['click', 'mouseenter', 'mouseleave', 'mousemove'] as const;
 export const FOCUS_ELEMENT_EVENT_TYPES = ['focus', 'blur'] as const;
+export const FORM_ELEMENT_EVENT_TYPES = ['submit'] as const;
 export const TRANSITION_ELEMENT_EVENT_TYPES = ['transitionstart', 'transitionend'] as const;
 export const ELEMENT_EVENT_TYPES = [
+  ...KEYBOARD_EVENT_TYPES,
   ...MOUSE_ELEMENT_EVENT_TYPES,
   ...FOCUS_ELEMENT_EVENT_TYPES,
+  ...FORM_ELEMENT_EVENT_TYPES,
   ...TRANSITION_ELEMENT_EVENT_TYPES,
   'scroll',
 ] as const;
 export type MouseElementEventType = typeof MOUSE_ELEMENT_EVENT_TYPES[number];
 export type FocusElementEventType = typeof FOCUS_ELEMENT_EVENT_TYPES[number];
+export type FormElementEventType = typeof FORM_ELEMENT_EVENT_TYPES[number];
 export type TransitionElementEventType = typeof TRANSITION_ELEMENT_EVENT_TYPES[number];
 export type ElementEventType = typeof ELEMENT_EVENT_TYPES[number];
 export type MouseEventListener = (event: PaintMouseEvent) => void;
 export type FocusEventListener = (event: PaintFocusEvent) => void;
+export type SubmitEventListener = (event: PaintSubmitEvent) => void;
 export type ScrollEventListener = (event: PaintScrollEvent) => void;
 export type TransitionEventListener = (event: PaintTransitionEvent) => void;
-type ElementEventListener = MouseEventListener | FocusEventListener | ScrollEventListener | TransitionEventListener;
+type ElementEventListener = KeyboardEventListener | MouseEventListener | FocusEventListener | SubmitEventListener | ScrollEventListener | TransitionEventListener;
 export type ClickEventListener = MouseEventListener;
 export type ImageRendering = 'ascii' | 'half-block';
 export type CSSWhiteSpace = 'normal' | 'nowrap' | 'pre' | 'pre-wrap' | 'pre-line';
@@ -92,6 +101,8 @@ export interface NativeKeyboardEvent {
 
 export class PaintKeyboardEvent {
   readonly type: KeyboardEventType;
+  readonly target: PaintElement | undefined;
+  currentTarget: PaintElement | undefined;
   readonly key: string;
   readonly code: string;
   readonly ctrlKey: boolean;
@@ -100,9 +111,12 @@ export class PaintKeyboardEvent {
   readonly shiftKey: boolean;
   readonly repeat: boolean;
   defaultPrevented = false;
+  propagationStopped = false;
 
-  constructor(event: NativeKeyboardEvent) {
+  constructor(event: NativeKeyboardEvent, target?: PaintElement) {
     this.type = event.type;
+    this.target = target;
+    this.currentTarget = target;
     this.key = event.key;
     this.code = event.code;
     this.ctrlKey = event.ctrlKey;
@@ -114,6 +128,14 @@ export class PaintKeyboardEvent {
 
   preventDefault(): void {
     this.defaultPrevented = true;
+  }
+
+  stopPropagation(): void {
+    this.propagationStopped = true;
+  }
+
+  setCurrentTarget(element: PaintElement): void {
+    this.currentTarget = element;
   }
 }
 
@@ -247,10 +269,23 @@ export interface NativeBinding {
 }
 
 type TextControlElement = InputElement | TextAreaElement;
-export type PaintElement = DivElement | SpanElement | ImageElement | InputElement | TextAreaElement;
+export const PAINT_ELEMENT_TAG_NAMES = ['div', 'span', 'form', 'button', 'img', 'input', 'textarea'] as const;
+export type PaintElementTagName = typeof PAINT_ELEMENT_TAG_NAMES[number];
+export type PaintElementForTagName<T extends PaintElementTagName> =
+  T extends 'div' ? DivElement :
+  T extends 'span' ? SpanElement :
+  T extends 'form' ? FormElement :
+  T extends 'button' ? ButtonElement :
+  T extends 'img' ? ImageElement :
+  T extends 'input' ? InputElement :
+  T extends 'textarea' ? TextAreaElement :
+  never;
+export type PaintElement = DivElement | SpanElement | FormElement | ButtonElement | ImageElement | InputElement | TextAreaElement;
 export type PaintNode = PaintElement | TextNode;
 
-export const native: NativeBinding = loadNativeBinding();
+export const paintCannonDeps = registry({
+  loadNativeBinding,
+});
 
 const livePaintCannons = new Set<PaintCannon>();
 let processCleanupInstalled = false;
@@ -341,6 +376,7 @@ export class PaintCannon {
   >();
   private readonly scrollMetrics = new Map<number, NativeScrollMetrics>();
   private hoveredElement: PaintElement | undefined;
+  private rootElement: PaintElement | undefined;
   private readonly handleSigcont = () => {
     if (!this.suspendedByPaintCannon || this.stopped) {
       return;
@@ -354,7 +390,8 @@ export class PaintCannon {
   };
 
   constructor(options: PaintCannonOptions = {}) {
-    this.binding = new native.PaintCannon(
+    const binding = paintCannonDeps.loadNativeBinding();
+    this.binding = new binding.PaintCannon(
       options.forceCompatMode ?? false,
       options.alternateScreen ?? false,
       options.captureMouse ?? false,
@@ -371,11 +408,7 @@ export class PaintCannon {
     this.scheduleKeyboardEventPump();
   }
 
-  createElement(tagName: 'div'): DivElement;
-  createElement(tagName: 'span'): SpanElement;
-  createElement(tagName: 'img'): ImageElement;
-  createElement(tagName: 'input'): InputElement;
-  createElement(tagName: 'textarea'): TextAreaElement;
+  createElement<T extends PaintElementTagName>(tagName: T): PaintElementForTagName<T>;
   createElement(tagName: string): PaintElement {
     if (tagName === 'div') {
       const element = new DivElement(
@@ -392,6 +425,28 @@ export class PaintCannon {
       const element = new SpanElement(
         this,
         this.createNativeSpan(),
+        (parent, child) => this.appendNativeChild(parent, child),
+        (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
+        (id, property, value) => this.setNativeStyleProperty(id, property, value),
+      );
+      this.registerElement(element);
+      return element;
+    }
+    if (tagName === 'form') {
+      const element = new FormElement(
+        this,
+        this.createNativeDiv(),
+        (parent, child) => this.appendNativeChild(parent, child),
+        (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
+        (id, property, value) => this.setNativeStyleProperty(id, property, value),
+      );
+      this.registerElement(element);
+      return element;
+    }
+    if (tagName === 'button') {
+      const element = new ButtonElement(
+        this,
+        this.createNativeDiv(),
         (parent, child) => this.appendNativeChild(parent, child),
         (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
         (id, property, value) => this.setNativeStyleProperty(id, property, value),
@@ -439,7 +494,8 @@ export class PaintCannon {
       return element;
     }
 
-    throw new Error(`paintcannon only supports <div>, <span>, <img>, <input>, and <textarea> right now, got <${tagName}>`);
+    const supported = PAINT_ELEMENT_TAG_NAMES.map((tag) => `<${tag}>`).join(', ');
+    throw new Error(`paintcannon only supports ${supported} right now, got <${tagName}>`);
   }
 
   createTextNode(data: string): TextNode {
@@ -456,6 +512,7 @@ export class PaintCannon {
 
   setRoot(element: PaintElement): void {
     assertElement(element);
+    this.rootElement = element;
     this.setNativeRoot(element.id);
   }
 
@@ -667,6 +724,7 @@ export class PaintCannon {
     this.parents.clear();
     this.scrollMetrics.clear();
     this.hoveredElement = undefined;
+    this.rootElement = undefined;
     livePaintCannons.delete(this);
     process.off('SIGCONT', this.handleSigcont);
     this.binding.stop();
@@ -913,7 +971,7 @@ export class PaintCannon {
 
   detachNode(node: PaintNode): void {
     assertPaintNode(node);
-    if (!this.parents.has(node.id) && !(node instanceof DivElement || node instanceof SpanElement || node instanceof ImageElement || node instanceof InputElement || node instanceof TextAreaElement)) {
+    if (!this.parents.has(node.id) && !isPaintElement(node)) {
       return;
     }
 
@@ -966,8 +1024,11 @@ export class PaintCannon {
       this.focusedTextControl = undefined;
     }
     if (this.hoveredElement !== undefined && ids.has(this.hoveredElement.id)) {
-      this.hoveredElement = undefined;
-    }
+        this.hoveredElement = undefined;
+      }
+      if (this.rootElement !== undefined && ids.has(this.rootElement.id)) {
+        this.rootElement = undefined;
+      }
   }
 
   private cleanupDestroyedNode(node: PaintNode): void {
@@ -999,6 +1060,9 @@ export class PaintCannon {
     }
     if (this.hoveredElement !== undefined && ids.has(this.hoveredElement.id)) {
       this.hoveredElement = undefined;
+    }
+    if (this.rootElement !== undefined && ids.has(this.rootElement.id)) {
+      this.rootElement = undefined;
     }
   }
 
@@ -1097,7 +1161,7 @@ export class PaintCannon {
       this.elements.set(element.id, element);
     }
     for (const node of this.batchNodes.values()) {
-      if (node instanceof DivElement || node instanceof SpanElement || node instanceof ImageElement || node instanceof InputElement || node instanceof TextAreaElement) {
+      if (isPaintElement(node)) {
         this.elements.set(node.id, node);
       }
     }
@@ -1189,14 +1253,20 @@ export class PaintCannon {
     let handledAnyEvent = false;
     if (events.length > 0) {
       for (const nativeEvent of events) {
-        const event = new PaintKeyboardEvent(nativeEvent);
+        const event = new PaintKeyboardEvent(nativeEvent, this.keyboardEventTarget());
         if (this.handleDefaultControlEvent(event)) {
           return;
         }
 
+        if (event.target !== undefined) {
+          this.dispatchKeyboardEvent(event.target, event);
+        }
+
         const listeners = Array.from(this.keyboardEventListeners[event.type] ?? []);
-        for (const listener of listeners) {
-          listener(event);
+        if (!event.propagationStopped) {
+          for (const listener of listeners) {
+            listener(event);
+          }
         }
 
         if (!event.defaultPrevented && this.handleDefaultInputEvent(event)) {
@@ -1209,10 +1279,8 @@ export class PaintCannon {
     const resizeEvents = this.binding.drainResizeEvents();
     if (resizeEvents.length > 0) {
       const latestResize = resizeEvents[resizeEvents.length - 1];
-      this.binding.renderSync();
-      if (this.dispatchResizeEvent(latestResize)) {
-        handledAnyEvent = true;
-      }
+      this.dispatchResizeEvent(latestResize);
+      handledAnyEvent = true;
     }
 
     const transitionEvents = this.binding.drainTransitionEvents();
@@ -1248,6 +1316,8 @@ export class PaintCannon {
       this.resizeEventListeners.size > 0 ||
       this.hasElementEventListeners('transitionstart') ||
       this.hasElementEventListeners('transitionend') ||
+      this.hasElementEventListeners('keydown') ||
+      this.hasElementEventListeners('keyup') ||
       this.textControls.length > 0 ||
       !this.captureCtrlZ ||
       this.captureMouse
@@ -1333,7 +1403,7 @@ export class PaintCannon {
           input.insertText('\n');
           return true;
         }
-        return false;
+        return this.submitInputForm(input);
       default:
         if (event.key.length === 1) {
           input.insertText(event.key);
@@ -1487,7 +1557,7 @@ export class PaintCannon {
     const targetId = this.binding.targetIdForPoint(input.x, input.y);
     const target = targetId === null ? undefined : this.elements.get(targetId);
 
-    if (input.type === 'click' && !hasClick && !isTextControl(target)) {
+    if (input.type === 'click' && !hasClick && !isTextControl(target) && !(target instanceof ButtonElement)) {
       return false;
     }
 
@@ -1509,8 +1579,13 @@ export class PaintCannon {
         handled = true;
       }
       if (hasClick) {
-        this.dispatchMouseEvent('click', target, input, true);
+        const event = this.dispatchMouseEvent('click', target, input, true);
+        if (target instanceof ButtonElement && !event.defaultPrevented) {
+          handled = this.submitButtonForm(target) || handled;
+        }
         handled = true;
+      } else if (target instanceof ButtonElement) {
+        handled = this.submitButtonForm(target);
       }
       return handled;
     }
@@ -1594,12 +1669,83 @@ export class PaintCannon {
     return false;
   }
 
+  private keyboardEventTarget(): PaintElement | undefined {
+    if (this.focusedTextControl !== undefined) {
+      return this.focusedTextControl;
+    }
+    if (this.rootElement === undefined) {
+      return undefined;
+    }
+    return this.firstElementChild(this.rootElement) ?? this.rootElement;
+  }
+
+  private firstElementChild(parent: PaintElement): PaintElement | undefined {
+    for (const [childId, childParent] of this.parents) {
+      if (childParent.id === parent.id) {
+        return this.elements.get(childId);
+      }
+    }
+    return undefined;
+  }
+
+  private dispatchKeyboardEvent(target: PaintElement, event: PaintKeyboardEvent): void {
+    let currentTarget: PaintElement | undefined = target;
+    while (currentTarget !== undefined) {
+      event.setCurrentTarget(currentTarget);
+      const listeners = Array.from(
+        this.elementEventListeners.get(currentTarget.id)?.[event.type] ?? [],
+      );
+      for (const listener of listeners) {
+        (listener as KeyboardEventListener)(event);
+        if (event.propagationStopped) {
+          return;
+        }
+      }
+      currentTarget = this.parents.get(currentTarget.id);
+    }
+  }
+
+  private submitInputForm(input: InputElement): boolean {
+    const form = this.findFormAncestor(input);
+    if (form === undefined) {
+      return false;
+    }
+
+    this.dispatchSubmitEvent(form, input);
+    return true;
+  }
+
+  private submitButtonForm(button: ButtonElement): boolean {
+    if (button.type !== 'submit') {
+      return false;
+    }
+
+    const form = this.findFormAncestor(button);
+    if (form === undefined) {
+      return false;
+    }
+
+    this.dispatchSubmitEvent(form, button);
+    return true;
+  }
+
+  private findFormAncestor(element: PaintElement): FormElement | undefined {
+    let current: PaintElement | undefined = element;
+    while (current !== undefined) {
+      if (current instanceof FormElement) {
+        return current;
+      }
+      current = this.parents.get(current.id);
+    }
+    return undefined;
+  }
+
   private dispatchMouseEvent(
     type: ElementEventType,
     target: PaintElement,
     input: TerminalMouseEvent,
     bubbles: boolean,
-  ): void {
+  ): PaintMouseEvent {
     const event = new PaintMouseEvent({
       type,
       target,
@@ -1621,14 +1767,15 @@ export class PaintCannon {
       for (const listener of listeners) {
         (listener as MouseEventListener)(event);
         if (event.propagationStopped) {
-          return;
+          return event;
         }
       }
       if (!bubbles) {
-        return;
+        return event;
       }
       currentTarget = this.parents.get(currentTarget.id);
     }
+    return event;
   }
 
   private dispatchFocusEvent(type: FocusElementEventType, target: TextControlElement): void {
@@ -1640,6 +1787,22 @@ export class PaintCannon {
       if (event.propagationStopped) {
         return;
       }
+    }
+  }
+
+  private dispatchSubmitEvent(target: FormElement, submitter: InputElement | ButtonElement): void {
+    const event = new PaintSubmitEvent({ target, submitter });
+    let currentTarget: PaintElement | undefined = target;
+    while (currentTarget !== undefined) {
+      event.setCurrentTarget(currentTarget);
+      const listeners = Array.from(this.elementEventListeners.get(currentTarget.id)?.submit ?? []);
+      for (const listener of listeners) {
+        (listener as SubmitEventListener)(event);
+        if (event.propagationStopped) {
+          return;
+        }
+      }
+      currentTarget = this.parents.get(currentTarget.id);
     }
   }
 
@@ -1738,6 +1901,11 @@ interface PaintFocusEventInit {
   target: TextControlElement;
 }
 
+interface PaintSubmitEventInit {
+  target: FormElement;
+  submitter: InputElement | ButtonElement;
+}
+
 interface PaintScrollEventInit {
   target: PaintElement;
   scrollLeft: number;
@@ -1816,6 +1984,33 @@ export class PaintFocusEvent {
   }
 
   setCurrentTarget(element: TextControlElement): void {
+    this.currentTarget = element;
+  }
+}
+
+export class PaintSubmitEvent {
+  readonly type: FormElementEventType = 'submit';
+  readonly target: FormElement;
+  currentTarget: PaintElement;
+  readonly submitter: InputElement | ButtonElement;
+  defaultPrevented = false;
+  propagationStopped = false;
+
+  constructor(event: PaintSubmitEventInit) {
+    this.target = event.target;
+    this.currentTarget = event.target;
+    this.submitter = event.submitter;
+  }
+
+  preventDefault(): void {
+    this.defaultPrevented = true;
+  }
+
+  stopPropagation(): void {
+    this.propagationStopped = true;
+  }
+
+  setCurrentTarget(element: PaintElement): void {
     this.currentTarget = element;
   }
 }
@@ -1974,20 +2169,42 @@ export class DivElement {
     return this.ownerDocument.getClientHeight(this);
   }
 
+  addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
+  addEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
   addEventListener(type: 'scroll', listener: ScrollEventListener): void;
   addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   addEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
+  removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
+  removeEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
   removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
   removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
+  }
+}
+
+export class FormElement extends DivElement {}
+
+export class ButtonElement extends DivElement {
+  private buttonType: 'submit' | 'button' = 'submit';
+
+  get type(): 'submit' | 'button' {
+    return this.buttonType;
+  }
+
+  set type(value: string) {
+    const next = String(value);
+    if (next !== 'submit' && next !== 'button') {
+      throw new Error(`paintcannon only supports <button type="submit"> and <button type="button"> right now, got "${next}"`);
+    }
+    this.buttonType = next;
   }
 }
 
@@ -2069,16 +2286,20 @@ export class SpanElement {
     return this.ownerDocument.getClientHeight(this);
   }
 
+  addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
+  addEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
   addEventListener(type: 'scroll', listener: ScrollEventListener): void;
   addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   addEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
+  removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
+  removeEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
   removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
   removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
@@ -2123,6 +2344,7 @@ export class ImageElement {
     this.ownerDocument.destroyNode(this);
   }
 
+  addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
@@ -2130,6 +2352,7 @@ export class ImageElement {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
+  removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
@@ -2348,6 +2571,7 @@ export class InputElement {
     this.setNativeInputFocused(this.id, focused);
   }
 
+  addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
@@ -2355,6 +2579,7 @@ export class InputElement {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
+  removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
@@ -2431,6 +2656,7 @@ export class TextAreaElement extends InputElement {
     return this.ownerDocument.getClientHeight(this);
   }
 
+  override addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   override addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   override addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   override addEventListener(type: 'scroll', listener: ScrollEventListener): void;
@@ -2439,6 +2665,7 @@ export class TextAreaElement extends InputElement {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
 
+  override removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   override removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   override removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   override removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
@@ -2974,15 +3201,27 @@ export class CSSStyleDeclaration {
 }
 
 function assertElement(value: unknown): asserts value is PaintElement {
-  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement) && !(value instanceof InputElement) && !(value instanceof TextAreaElement)) {
+  if (!isPaintElement(value)) {
     throw new TypeError('expected a paintcannon element');
   }
 }
 
 function assertPaintNode(value: unknown): asserts value is PaintNode {
-  if (!(value instanceof DivElement) && !(value instanceof SpanElement) && !(value instanceof ImageElement) && !(value instanceof InputElement) && !(value instanceof TextAreaElement) && !(value instanceof TextNode)) {
+  if (!isPaintElement(value) && !(value instanceof TextNode)) {
     throw new TypeError('expected a paintcannon node');
   }
+}
+
+function isPaintElement(value: unknown): value is PaintElement {
+  return (
+    value instanceof DivElement ||
+      value instanceof SpanElement ||
+      value instanceof FormElement ||
+      value instanceof ButtonElement ||
+      value instanceof ImageElement ||
+      value instanceof InputElement ||
+      value instanceof TextAreaElement
+  );
 }
 
 function isTextControl(value: unknown): value is TextControlElement {
@@ -3074,9 +3313,11 @@ function loadNativeBinding(): NativeBinding {
   ];
 
   for (const candidate of candidates) {
-    const filename = path.join(__dirname, candidate);
+    const filename = path.join(packageDirectory, candidate);
     if (fs.existsSync(filename)) {
-      return require(filename) as NativeBinding;
+      const nativeModule = { exports: {} } as NodeJS.Module;
+      process.dlopen(nativeModule, filename);
+      return nativeModule.exports as NativeBinding;
     }
   }
 

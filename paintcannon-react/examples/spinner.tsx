@@ -1,5 +1,5 @@
 import React from 'react';
-import {Div, Span, render, useAnimation, useApp} from '../src';
+import {Div, Span, render, useAnimation, useApp} from '../src/index.ts';
 
 const spinnerFrames = ['|', '/', '-', '\\'];
 const dots = ['', '.', '..', '...'];

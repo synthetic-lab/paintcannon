@@ -1,4 +1,4 @@
-import { PaintCannon, type InputElement, type PaintFocusEvent, type TextAreaElement } from '../index';
+import { PaintCannon, type InputElement, type PaintFocusEvent, type TextAreaElement } from '../index.ts';
 
 const pc = new PaintCannon({
   alternateScreen: true,

@@ -1,4 +1,4 @@
-import { PaintCannon, type KeyboardEvent } from '../index';
+import { PaintCannon, type KeyboardEvent } from '../index.ts';
 
 const first = new PaintCannon({
   alternateScreen: true,

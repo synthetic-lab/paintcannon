@@ -1,5 +1,5 @@
 import React, {useState} from 'react';
-import {Div, Span, render} from '../src';
+import {Div, Span, render} from '../src/index.ts';
 
 function Counter(): React.ReactElement {
   const [count, setCount] = useState(0);

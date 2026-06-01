@@ -1,4 +1,4 @@
-import { PaintCannon } from '../index';
+import { PaintCannon } from '../index.ts';
 
 const pc = new PaintCannon({
   alternateScreen: true,

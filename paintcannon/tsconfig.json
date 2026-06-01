@@ -2,8 +2,8 @@
   "compilerOptions": {
     "declaration": true,
     "lib": ["ES2022"],
-    "module": "Node16",
-    "moduleResolution": "Node16",
+    "allowImportingTsExtensions": true,
+    "module": "NodeNext",
     "newLine": "lf",
     "noImplicitOverride": true,
     "noUnusedLocals": true,
@@ -11,6 +11,7 @@
     "outDir": "dist",
     "strict": true,
     "target": "ES2022",
+    "rewriteRelativeImportExtensions": true,
     "types": ["node"]
   },
   "include": ["index.ts", "examples/**/*.ts"]

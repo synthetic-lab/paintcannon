@@ -4,13 +4,15 @@
   "private": true,
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
-  "type": "commonjs",
+  "type": "module",
   "scripts": {
     "build": "tsc",
     "demo": "npm run build && node dist/examples/counter.js",
+    "demo:form": "npm run build && node dist/examples/form.js",
     "demo:keyboard": "npm run build && node dist/examples/keyboard.js",
     "demo:lifecycle": "npm run build && node dist/examples/lifecycle.js",
-    "demo:spinner": "npm run build && node dist/examples/spinner.js"
+    "demo:spinner": "npm run build && node dist/examples/spinner.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "paintcannon": "0.0.0",
@@ -23,6 +25,7 @@
     "@types/react": "^19.0.0",
     "@types/react-reconciler": "^0.33.0",
     "@types/scheduler": "^0.26.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
   }
 }

@@ -1,4 +1,4 @@
-import { PaintCannon, type DivElement } from '../index';
+import { PaintCannon, type DivElement } from '../index.ts';
 
 const pc = new PaintCannon({ fps: 12 });
 

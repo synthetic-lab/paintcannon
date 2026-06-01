@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import React from 'react';
 import createReconciler, {type ReactContext} from 'react-reconciler';
 import {
   DefaultEventPriority,
   NoEventPriority,
-} from 'react-reconciler/constants';
+} from 'react-reconciler/constants.js';
 import * as Scheduler from 'scheduler';
 import type {
   CSSStyleDeclaration,
@@ -13,7 +14,8 @@ import type {
   ElementEventType,
   FocusElementEventType,
   FocusEventListener,
-  InputElement,
+  FormElement,
+  FormElementEventType,
   KeyboardEventListener,
   KeyboardEventType,
   MouseElementEventType,
@@ -25,42 +27,59 @@ import type {
   PaintMouseEvent,
   PaintNode,
   PaintScrollEvent,
+  PaintSubmitEvent,
   ScrollEventListener,
   SpanElement,
-  TextAreaElement,
+  SubmitEventListener,
   TextNode,
   TransitionElementEventType,
   TransitionEventListener,
 } from 'paintcannon';
-import { ELEMENT_EVENT_TYPES, KEYBOARD_EVENT_TYPES, PaintCannon } from 'paintcannon';
+import {
+  ButtonElement,
+  ELEMENT_EVENT_TYPES,
+  InputElement,
+  PaintCannon,
+  TextAreaElement,
+} from 'paintcannon';
 
-type HostType = 'paintcannon.div' | 'paintcannon.span' | 'paintcannon.input' | 'paintcannon.textarea';
+type HostType =
+  | 'paintcannon.div'
+  | 'paintcannon.span'
+  | 'paintcannon.form'
+  | 'paintcannon.button'
+  | 'paintcannon.input'
+  | 'paintcannon.textarea';
 type HostNode = HostElement | HostText;
 type HostParent = HostElement | RootContainer;
 type StyleValue = string | number | boolean | null | undefined;
 type StyleProps = Partial<Record<keyof CSSStyleDeclaration, StyleValue>> & Record<string, StyleValue>;
+type ChildContainerElement = PaintElement & {
+  appendChild(child: PaintNode): PaintNode;
+  insertBefore(child: PaintNode, before: PaintNode): PaintNode;
+};
+type ScrollOffsetElement = PaintElement & {
+  scrollLeft: number;
+  scrollTop: number;
+};
 type EventPropName<T extends ElementEventType = ElementEventType> =
+  T extends `key${infer Rest}` ? `onKey${Capitalize<Rest>}` :
   T extends `mouse${infer Rest}` ? `onMouse${Capitalize<Rest>}` :
   T extends `transition${infer Rest}` ? `onTransition${Capitalize<Rest>}` :
   `on${Capitalize<T>}`;
 type ElementEventListenerFor<T extends ElementEventType> =
+  T extends KeyboardEventType ? KeyboardEventListener :
   T extends MouseElementEventType ? MouseEventListener :
   T extends FocusElementEventType ? FocusEventListener :
+  T extends FormElementEventType ? SubmitEventListener :
   T extends TransitionElementEventType ? TransitionEventListener :
   T extends 'scroll' ? ScrollEventListener :
   never;
 type ElementEventProps = {
   [T in ElementEventType as EventPropName<T>]?: ElementEventListenerFor<T>;
 };
-type KeyboardEventPropName<T extends KeyboardEventType = KeyboardEventType> =
-  T extends 'keydown' ? 'onKeyDown' :
-  T extends 'keyup' ? 'onKeyUp' :
-  never;
-type KeyboardEventProps = {
-  [T in KeyboardEventType as KeyboardEventPropName<T>]?: KeyboardEventListener;
-};
 
-export interface CommonProps extends ElementEventProps, KeyboardEventProps {
+export interface CommonProps extends ElementEventProps {
   children?: React.ReactNode;
   style?: StyleProps;
 }
@@ -71,6 +90,17 @@ export interface DivProps extends CommonProps {
 }
 
 export interface SpanProps extends CommonProps {
+  scrollLeft?: number;
+  scrollTop?: number;
+}
+
+export interface FormProps extends CommonProps {
+  scrollLeft?: number;
+  scrollTop?: number;
+}
+
+export interface ButtonProps extends CommonProps {
+  type?: 'submit' | 'button';
   scrollLeft?: number;
   scrollTop?: number;
 }
@@ -91,17 +121,19 @@ export interface TextareaProps extends InputProps {
 
 export const Div = 'paintcannon.div' as unknown as React.ComponentType<DivProps>;
 export const Span = 'paintcannon.span' as unknown as React.ComponentType<SpanProps>;
+export const Form = 'paintcannon.form' as unknown as React.ComponentType<FormProps>;
+export const Button = 'paintcannon.button' as unknown as React.ComponentType<ButtonProps>;
 export const Input = 'paintcannon.input' as unknown as React.ComponentType<InputProps>;
 export const Textarea = 'paintcannon.textarea' as unknown as React.ComponentType<TextareaProps>;
 
 export interface CreateRootOptions extends PaintCannonOptions {
   paintCannon?: PaintCannon;
-  container?: DivElement | SpanElement;
+  container?: DivElement | SpanElement | FormElement;
 }
 
 export interface PaintCannonReactRoot {
   readonly paintCannon: PaintCannon;
-  readonly container: DivElement | SpanElement;
+  readonly container: DivElement | SpanElement | FormElement;
   render(element: React.ReactNode): void;
   unmount(): void;
   exit(errorOrResult?: unknown): void;
@@ -129,7 +161,7 @@ interface HostText {
 
 interface RootContainer {
   paintCannon: PaintCannon;
-  root: DivElement | SpanElement;
+  root: DivElement | SpanElement | FormElement;
   children: HostNode[];
 }
 
@@ -160,6 +192,7 @@ export interface AnimationResult {
 }
 
 let currentUpdatePriority = NoEventPriority;
+const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const packageInfo = loadPackageInfo();
 const AppContext = React.createContext<PaintCannonReactApp | undefined>(undefined);
 const AnimationContext = React.createContext<AnimationContextValue | undefined>(undefined);
@@ -575,6 +608,10 @@ function createPaintElement(paintCannon: PaintCannon, type: HostType): PaintElem
       return paintCannon.createElement('div');
     case 'paintcannon.span':
       return paintCannon.createElement('span');
+    case 'paintcannon.form':
+      return paintCannon.createElement('form');
+    case 'paintcannon.button':
+      return paintCannon.createElement('button');
     case 'paintcannon.input':
       return paintCannon.createElement('input');
     case 'paintcannon.textarea':
@@ -583,23 +620,20 @@ function createPaintElement(paintCannon: PaintCannon, type: HostType): PaintElem
 }
 
 function appendPaintChild(parent: PaintElement, child: PaintNode): void {
-  if (!('appendChild' in parent)) {
+  if (!canHaveChildren(parent)) {
     throw new Error('Input and Textarea cannot have children');
   }
   parent.appendChild(child);
 }
 
 function insertPaintChild(parent: PaintElement, child: PaintNode, before: PaintNode): void {
-  if (!('insertBefore' in parent)) {
+  if (!canHaveChildren(parent)) {
     throw new Error('Input and Textarea cannot have children');
   }
   parent.insertBefore(child, before);
 }
 
 function destroyHostNode(host: HostNode): void {
-  if (host.kind === 'element') {
-    removeKeyboardEvents(host.node.ownerDocument, host.props);
-  }
   host.node.destroy();
 }
 
@@ -607,30 +641,33 @@ function applyProps(node: PaintElement, type: HostType, oldProps: Props, newProp
   applyStyle(node, oldProps.style as StyleProps | undefined, newProps.style as StyleProps | undefined);
   applyEvents(node, oldProps, newProps);
 
-  if (type === 'paintcannon.input' || type === 'paintcannon.textarea') {
-    const input = node as InputElement | TextAreaElement;
-    if (typeof newProps.type === 'string' && type === 'paintcannon.input') {
-      input.type = newProps.type;
+  if (type === 'paintcannon.button' && node instanceof ButtonElement && typeof newProps.type === 'string') {
+    node.type = newProps.type;
+  }
+
+  if (isTextControlElement(node)) {
+    if (typeof newProps.type === 'string' && node instanceof InputElement && !(node instanceof TextAreaElement)) {
+      node.type = newProps.type;
     }
     if (newProps.value !== undefined) {
-      input.value = String(newProps.value);
+      node.value = String(newProps.value);
     }
     if (newProps.placeholder !== undefined) {
-      input.placeholder = String(newProps.placeholder);
+      node.placeholder = String(newProps.placeholder);
     }
     if (typeof newProps.cursorPosition === 'number') {
-      input.cursorPosition = newProps.cursorPosition;
+      node.cursorPosition = newProps.cursorPosition;
     }
-    if (newProps.autoFocus === true) {
-      input.focus();
+    if (newProps.autoFocus === true && oldProps.autoFocus !== true) {
+      node.focus();
     }
   }
 
-  if ('scrollLeft' in newProps && typeof newProps.scrollLeft === 'number') {
-    (node as DivElement | SpanElement | TextAreaElement).scrollLeft = newProps.scrollLeft;
+  if ('scrollLeft' in newProps && typeof newProps.scrollLeft === 'number' && hasScrollOffset(node)) {
+    node.scrollLeft = newProps.scrollLeft;
   }
-  if ('scrollTop' in newProps && typeof newProps.scrollTop === 'number') {
-    (node as DivElement | SpanElement | TextAreaElement).scrollTop = newProps.scrollTop;
+  if ('scrollTop' in newProps && typeof newProps.scrollTop === 'number' && hasScrollOffset(node)) {
+    node.scrollTop = newProps.scrollTop;
   }
 }
 
@@ -647,8 +684,6 @@ function applyStyle(node: PaintElement, oldStyle: StyleProps | undefined, newSty
 }
 
 function applyEvents(node: PaintElement, oldProps: Props, newProps: Props): void {
-  applyKeyboardEvents(node.ownerDocument, oldProps, newProps);
-
   for (const [prop, eventType] of eventProps) {
     const previous = oldProps[prop] as ((event: unknown) => void) | undefined;
     const next = newProps[prop] as ((event: unknown) => void) | undefined;
@@ -664,29 +699,16 @@ function applyEvents(node: PaintElement, oldProps: Props, newProps: Props): void
   }
 }
 
-function applyKeyboardEvents(paintCannon: PaintCannon, oldProps: Props, newProps: Props): void {
-  for (const [prop, eventType] of keyboardEventProps) {
-    const previous = oldProps[prop] as KeyboardEventListener | undefined;
-    const next = newProps[prop] as KeyboardEventListener | undefined;
-    if (previous === next) {
-      continue;
-    }
-    if (previous !== undefined) {
-      paintCannon.removeEventListener(eventType, previous);
-    }
-    if (next !== undefined) {
-      paintCannon.addEventListener(eventType, next);
-    }
-  }
+function canHaveChildren(node: PaintElement): node is ChildContainerElement {
+  return 'appendChild' in node && 'insertBefore' in node;
 }
 
-function removeKeyboardEvents(paintCannon: PaintCannon, props: Props): void {
-  for (const [prop, eventType] of keyboardEventProps) {
-    const listener = props[prop] as KeyboardEventListener | undefined;
-    if (listener !== undefined) {
-      paintCannon.removeEventListener(eventType, listener);
-    }
-  }
+function hasScrollOffset(node: PaintElement): node is ScrollOffsetElement {
+  return 'scrollLeft' in node && 'scrollTop' in node;
+}
+
+function isTextControlElement(node: PaintElement): node is InputElement | TextAreaElement {
+  return node instanceof InputElement || node instanceof TextAreaElement;
 }
 
 function addElementListener(node: PaintElement, eventType: ElementEventType, listener: (event: unknown) => void): void {
@@ -710,11 +732,11 @@ function reportReactError(error: unknown): void {
 }
 
 function loadPackageInfo(): PackageInfo {
-  const packageJsonPath = path.join(__dirname, '..', '..', 'package.json');
+  const packageJsonPath = findPackageJsonPath();
   const packageJson = fs.readFileSync(packageJsonPath, 'utf8');
   const parsed = JSON.parse(packageJson) as Partial<PackageInfo> | undefined;
 
-  if (typeof parsed?.name !== 'string' || typeof parsed.version !== 'string') {
+  if (parsed?.name !== 'paintcannon-react' || typeof parsed.version !== 'string') {
     throw new Error(`Invalid package metadata in ${packageJsonPath}`);
   }
 
@@ -724,15 +746,33 @@ function loadPackageInfo(): PackageInfo {
   };
 }
 
+function findPackageJsonPath(): string {
+  let directory = sourceDirectory;
+  while (true) {
+    const packageJsonPath = path.join(directory, 'package.json');
+    if (fs.existsSync(packageJsonPath)) {
+      const parsed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as Partial<PackageInfo> | undefined;
+      if (parsed?.name === 'paintcannon-react') {
+        return packageJsonPath;
+      }
+    }
+
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      throw new Error('Could not find paintcannon-react package metadata');
+    }
+    directory = parent;
+  }
+}
+
 const eventProps = [
   ...ELEMENT_EVENT_TYPES.map((eventType) => [eventPropName(eventType), eventType] as const),
 ] satisfies ReadonlyArray<readonly [EventPropName, ElementEventType]>;
 
-const keyboardEventProps = [
-  ...KEYBOARD_EVENT_TYPES.map((eventType) => [keyboardEventPropName(eventType), eventType] as const),
-] satisfies ReadonlyArray<readonly [KeyboardEventPropName, KeyboardEventType]>;
-
 function eventPropName<T extends ElementEventType>(eventType: T): EventPropName<T> {
+  if (eventType.startsWith('key')) {
+    return `onKey${capitalize(eventType.slice('key'.length))}` as EventPropName<T>;
+  }
   if (eventType.startsWith('mouse')) {
     return `onMouse${capitalize(eventType.slice('mouse'.length))}` as EventPropName<T>;
   }
@@ -746,13 +786,6 @@ function capitalize(value: string): string {
   return `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
 }
 
-function keyboardEventPropName<T extends KeyboardEventType>(eventType: T): KeyboardEventPropName<T> {
-  if (eventType === 'keydown') {
-    return 'onKeyDown' as KeyboardEventPropName<T>;
-  }
-  return 'onKeyUp' as KeyboardEventPropName<T>;
-}
-
 export type {
   PaintCannon,
   PaintCannonOptions,
@@ -761,4 +794,5 @@ export type {
   PaintKeyboardEvent,
   PaintMouseEvent,
   PaintScrollEvent,
+  PaintSubmitEvent,
 };
