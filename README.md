@@ -13,7 +13,7 @@ PaintCannon supports the following CSS:
 * RGB background, border, text, placeholder, and selection coloring with
   limited-palette fallbacks
 * CSS transitions for all color properties
-* Mouse pointer styling
+* Mouse pointer styling (in supported terminals using the kitty protocol)
 
 It also exposes a non-standard set of border styles, since typical
 pixel-based borders can't be rendered in terminals:
