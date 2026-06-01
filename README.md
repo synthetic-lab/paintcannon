@@ -3,6 +3,8 @@ PaintCannon exposes a DOM API subset via NAPI-RS bindings to JS and renders to
 terminal backends very quickly. Think of PaintCannon as a tiny browser that
 renders to a terminal backend instead of a GUI in your window manager.
 
+![./paintcannon.png](A cannon shooting paint)
+
 PaintCannon supports the following CSS:
 
 * FlexBox
