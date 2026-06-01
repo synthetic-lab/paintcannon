@@ -85,7 +85,7 @@ impl Default for DivStyle {
             margin_left: CssLengthPercentageAuto::Length(0.0),
             width: CssDimension::Auto,
             height: CssDimension::Auto,
-            min_height: CssDimension::Length(0.0),
+            min_height: CssDimension::Auto,
             max_height: CssDimension::Auto,
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),

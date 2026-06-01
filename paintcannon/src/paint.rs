@@ -1507,6 +1507,233 @@ mod tests {
     }
 
     #[test]
+    fn long_scroll_list_below_form_does_not_overpaint_input_bottom_border() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(80.0), CssDimension::Length(24.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        root_style.align_items = Some(LayoutAlignItems::Center);
+        root_style.justify_content = Some(crate::style::LayoutJustifyContent::Center);
+        let root = arena.create_element(root_style);
+
+        let mut app_style = block_style(CssDimension::Length(74.0), CssDimension::Auto);
+        app_style.display = LayoutDisplay::Flex;
+        app_style.flex_direction = LayoutFlexDirection::Column;
+        app_style.row_gap = CssLengthPercentage::Length(1.0);
+        app_style.max_height = CssDimension::Percent(0.9);
+        let app = arena.create_element(app_style);
+        arena.append_child(root, app);
+
+        let title = arena.create_element(block_style(CssDimension::Auto, CssDimension::Auto));
+        let title_text = arena.create_text("paintcannon-react todos");
+        arena.append_child(title, title_text);
+        arena.append_child(app, title);
+
+        let mut form_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        form_style.display = LayoutDisplay::Flex;
+        form_style.flex_direction = LayoutFlexDirection::Row;
+        form_style.column_gap = CssLengthPercentage::Length(1.0);
+        let form = arena.create_element(form_style);
+        arena.append_child(app, form);
+
+        let mut input_style = block_style(CssDimension::Length(58.0), CssDimension::Length(3.0));
+        input_style.border_top = BorderStyle::Rounded;
+        input_style.border_right = BorderStyle::Rounded;
+        input_style.border_bottom = BorderStyle::Rounded;
+        input_style.border_left = BorderStyle::Rounded;
+        let input = arena.create_input(input_style, "");
+        arena.append_child(form, input);
+
+        let button = arena.create_element(block_style(
+            CssDimension::Length(14.0),
+            CssDimension::Length(3.0),
+        ));
+        let button_text = arena.create_text("Add");
+        arena.append_child(button, button_text);
+        arena.append_child(form, button);
+
+        let mut list_row_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        list_row_style.display = LayoutDisplay::Flex;
+        list_row_style.flex_direction = LayoutFlexDirection::Row;
+        list_row_style.column_gap = CssLengthPercentage::Length(1.0);
+        list_row_style.flex_shrink = 1.0;
+        list_row_style.min_height = CssDimension::Length(0.0);
+        let list_row = arena.create_element(list_row_style);
+        arena.append_child(app, list_row);
+
+        let mut list_style = block_style(CssDimension::Length(72.0), CssDimension::Auto);
+        list_style.display = LayoutDisplay::Flex;
+        list_style.flex_direction = LayoutFlexDirection::Column;
+        list_style.row_gap = CssLengthPercentage::Length(1.0);
+        list_style.flex_shrink = 1.0;
+        list_style.min_height = CssDimension::Length(0.0);
+        list_style.overflow_y = LayoutOverflow::Scroll;
+        list_style.padding_top = CssLengthPercentage::Length(1.0);
+        list_style.padding_right = CssLengthPercentage::Length(1.0);
+        list_style.padding_bottom = CssLengthPercentage::Length(1.0);
+        list_style.padding_left = CssLengthPercentage::Length(1.0);
+        list_style.border_top = BorderStyle::Rounded;
+        list_style.border_right = BorderStyle::Rounded;
+        list_style.border_bottom = BorderStyle::Rounded;
+        list_style.border_left = BorderStyle::Rounded;
+        let list = arena.create_element(list_style);
+        arena.append_child(list_row, list);
+
+        for index in 0..100 {
+            let mut row_style = block_style(CssDimension::Percent(1.0), CssDimension::Length(3.0));
+            row_style.display = LayoutDisplay::Flex;
+            row_style.flex_direction = LayoutFlexDirection::Row;
+            let row = arena.create_element(row_style);
+            let text = arena.create_text(format!("todo {index}"));
+            arena.append_child(row, text);
+            arena.append_child(list, row);
+        }
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(80.0),
+                height: AvailableSpace::Definite(24.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 80, 24, false);
+        let input_layout = arena.layout(input);
+        let app_layout = arena.layout(app);
+        let form_layout = arena.layout(form);
+        let input_left_x =
+            (app_layout.location.x + form_layout.location.x + input_layout.location.x).round()
+                as usize;
+        let input_bottom_y = (app_layout.location.y
+            + form_layout.location.y
+            + input_layout.location.y
+            + input_layout.size.height
+            - 1.0)
+            .round() as usize;
+        assert_eq!(
+            output
+                .frame
+                .cell(input_left_x, input_bottom_y)
+                .unwrap()
+                .character,
+            '╰'
+        );
+    }
+
+    #[test]
+    fn min_height_zero_form_above_long_scroll_list_can_overpaint_input_bottom_border() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(80.0), CssDimension::Length(24.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        root_style.align_items = Some(LayoutAlignItems::Center);
+        root_style.justify_content = Some(crate::style::LayoutJustifyContent::Center);
+        let root = arena.create_element(root_style);
+
+        let mut app_style = block_style(CssDimension::Length(74.0), CssDimension::Auto);
+        app_style.display = LayoutDisplay::Flex;
+        app_style.flex_direction = LayoutFlexDirection::Column;
+        app_style.row_gap = CssLengthPercentage::Length(1.0);
+        app_style.max_height = CssDimension::Percent(0.9);
+        let app = arena.create_element(app_style);
+        arena.append_child(root, app);
+
+        let title = arena.create_element(block_style(CssDimension::Auto, CssDimension::Auto));
+        let title_text = arena.create_text("paintcannon-react todos");
+        arena.append_child(title, title_text);
+        arena.append_child(app, title);
+
+        let mut form_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        form_style.display = LayoutDisplay::Flex;
+        form_style.flex_direction = LayoutFlexDirection::Row;
+        form_style.column_gap = CssLengthPercentage::Length(1.0);
+        form_style.min_height = CssDimension::Length(0.0);
+        let form = arena.create_element(form_style);
+        arena.append_child(app, form);
+
+        let mut input_style = block_style(CssDimension::Length(58.0), CssDimension::Length(3.0));
+        input_style.border_top = BorderStyle::Rounded;
+        input_style.border_right = BorderStyle::Rounded;
+        input_style.border_bottom = BorderStyle::Rounded;
+        input_style.border_left = BorderStyle::Rounded;
+        let input = arena.create_input(input_style, "");
+        arena.append_child(form, input);
+
+        let button = arena.create_element(block_style(
+            CssDimension::Length(14.0),
+            CssDimension::Length(3.0),
+        ));
+        let button_text = arena.create_text("Add");
+        arena.append_child(button, button_text);
+        arena.append_child(form, button);
+
+        let mut list_row_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        list_row_style.display = LayoutDisplay::Flex;
+        list_row_style.flex_direction = LayoutFlexDirection::Row;
+        list_row_style.column_gap = CssLengthPercentage::Length(1.0);
+        list_row_style.flex_shrink = 1.0;
+        list_row_style.min_height = CssDimension::Length(0.0);
+        let list_row = arena.create_element(list_row_style);
+        arena.append_child(app, list_row);
+
+        let mut list_style = block_style(CssDimension::Length(72.0), CssDimension::Auto);
+        list_style.display = LayoutDisplay::Flex;
+        list_style.flex_direction = LayoutFlexDirection::Column;
+        list_style.row_gap = CssLengthPercentage::Length(1.0);
+        list_style.flex_shrink = 1.0;
+        list_style.min_height = CssDimension::Length(0.0);
+        list_style.overflow_y = LayoutOverflow::Scroll;
+        list_style.padding_top = CssLengthPercentage::Length(1.0);
+        list_style.padding_right = CssLengthPercentage::Length(1.0);
+        list_style.padding_bottom = CssLengthPercentage::Length(1.0);
+        list_style.padding_left = CssLengthPercentage::Length(1.0);
+        list_style.border_top = BorderStyle::Rounded;
+        list_style.border_right = BorderStyle::Rounded;
+        list_style.border_bottom = BorderStyle::Rounded;
+        list_style.border_left = BorderStyle::Rounded;
+        let list = arena.create_element(list_style);
+        arena.append_child(list_row, list);
+
+        for index in 0..100 {
+            let mut row_style = block_style(CssDimension::Percent(1.0), CssDimension::Length(3.0));
+            row_style.display = LayoutDisplay::Flex;
+            row_style.flex_direction = LayoutFlexDirection::Row;
+            let row = arena.create_element(row_style);
+            let text = arena.create_text(format!("todo {index}"));
+            arena.append_child(row, text);
+            arena.append_child(list, row);
+        }
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(80.0),
+                height: AvailableSpace::Definite(24.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 80, 24, false);
+        let input_layout = arena.layout(input);
+        let app_layout = arena.layout(app);
+        let form_layout = arena.layout(form);
+        let input_left_x =
+            (app_layout.location.x + form_layout.location.x + input_layout.location.x).round()
+                as usize;
+        let input_bottom_y = (app_layout.location.y
+            + form_layout.location.y
+            + input_layout.location.y
+            + input_layout.size.height
+            - 1.0)
+            .round() as usize;
+        assert_eq!(
+            output
+                .frame
+                .cell(input_left_x, input_bottom_y)
+                .unwrap()
+                .character,
+            '│'
+        );
+    }
+
+    #[test]
     fn paints_half_block_image_pixels() {
         let mut arena = LayoutArena::new();
         let image = arena.create_image(

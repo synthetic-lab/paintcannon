@@ -2355,6 +2355,59 @@ mod tests {
     }
 
     #[test]
+    fn min_height_zero_visible_wrapper_around_scroll_container_can_shrink() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(20.0), CssDimension::Length(8.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = arena.create_element(root_style);
+
+        let mut header_style = block_style(CssDimension::Length(20.0), CssDimension::Length(3.0));
+        header_style.flex_shrink = 0.0;
+        let header = arena.create_element(header_style);
+        arena.append_child(root, header);
+
+        let mut wrapper_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        wrapper_style.display = LayoutDisplay::Flex;
+        wrapper_style.flex_direction = LayoutFlexDirection::Row;
+        wrapper_style.flex_shrink = 1.0;
+        wrapper_style.min_height = CssDimension::Length(0.0);
+        let wrapper = arena.create_element(wrapper_style);
+        arena.append_child(root, wrapper);
+
+        let mut viewport_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        viewport_style.display = LayoutDisplay::Flex;
+        viewport_style.flex_direction = LayoutFlexDirection::Column;
+        viewport_style.flex_shrink = 1.0;
+        viewport_style.min_height = CssDimension::Length(0.0);
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = arena.create_element(viewport_style);
+        arena.append_child(wrapper, viewport);
+
+        for _ in 0..20 {
+            let mut row_style = block_style(CssDimension::Length(20.0), CssDimension::Length(1.0));
+            row_style.flex_shrink = 0.0;
+            let row = arena.create_element(row_style);
+            arena.append_child(viewport, row);
+        }
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(20.0),
+                height: AvailableSpace::Definite(8.0),
+            },
+        );
+
+        assert_eq!(arena.layout(header).size.height, 3.0);
+        assert_eq!(arena.layout(wrapper).size.height, 5.0);
+        assert_eq!(arena.layout(viewport).size.height, 5.0);
+        let metrics = arena.scroll_metrics(viewport).unwrap();
+        assert_eq!(metrics.client_height, 5);
+        assert_eq!(metrics.scroll_height, 20);
+    }
+
+    #[test]
     fn border_contributes_to_inline_context_outer_size() {
         let mut arena = LayoutArena::new();
         let mut style = block_style(CssDimension::Auto, CssDimension::Auto);
