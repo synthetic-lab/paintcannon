@@ -146,6 +146,17 @@ export class MockNativePaintCannon implements NativePaintCannon {
         mappings.push({ temporaryId: command.id, id: this.allocateId() });
       }
     }
+    for (const command of commands) {
+      if (
+        command.type === 'setStyleProperty' &&
+        command.id !== undefined &&
+        command.property !== undefined &&
+        command.value !== undefined
+      ) {
+        const id = resolveBatchId(command.id, mappings);
+        this.setStyleProperty(id, command.property, command.value);
+      }
+    }
     return mappings;
   }
 
@@ -273,6 +284,14 @@ export class MockNativePaintCannon implements NativePaintCannon {
     }
     return state;
   }
+}
+
+function resolveBatchId(id: number, mappings: NativeBatchIdMapping[]): number {
+  if (id >= 0) {
+    return id;
+  }
+
+  return mappings.find(mapping => mapping.temporaryId === id)?.id ?? id;
 }
 
 export function keyDown(key: string, options: Partial<NativeKeyboardEvent> = {}): NativeKeyboardEvent {

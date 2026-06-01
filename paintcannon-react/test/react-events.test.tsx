@@ -291,6 +291,46 @@ describe('scroll events', () => {
   });
 });
 
+describe('style props', () => {
+  it('clears a style property when the next React style value is undefined', async () => {
+    let row: PaintElement | undefined;
+    const view = (backgroundColor: string | undefined): React.ReactElement => (
+      <Div
+        ref={element => {
+          row = element;
+        }}
+        style={{backgroundColor}}
+      >
+        row
+      </Div>
+    );
+    const root = render(view('#1e3a5f'), { fps: 120 });
+    const mockNative = mockNativeInstances[0];
+    if (mockNative === undefined) {
+      throw new Error('expected mock native instance');
+    }
+
+    await commit();
+    expect(row).toBeDefined();
+    expect(mockNative.styleMutations).toContainEqual({
+      id: row?.id,
+      property: 'background-color',
+      value: '#1e3a5f',
+    });
+
+    root.render(view(undefined));
+    await commit();
+    await commit();
+    root.paintCannon.stop();
+
+    expect(mockNative.styleMutations).toContainEqual({
+      id: row?.id,
+      property: 'background-color',
+      value: '',
+    });
+  });
+});
+
 function dispatchKey(paintCannon: PaintCannon, key: string): void {
   const anyPaintCannon = paintCannon as unknown as {
     keyboardEventTarget(): PaintElement | undefined;

@@ -48,6 +48,7 @@ function TodoApp(): React.ReactElement {
   const [nextId, setNextId] = useState(4);
   const [editingId, setEditingId] = useState<number | undefined>();
   const [editingText, setEditingText] = useState('');
+  const [selectedIndex, setSelectedIndex] = useState<number | undefined>();
   const [hovered, setHovered] = useState<HoverTarget | undefined>();
   const [scrollMetrics, setScrollMetrics] = useState<TodoScrollMetrics>({
     scrollTop: 0,
@@ -83,6 +84,45 @@ function TodoApp(): React.ReactElement {
   }, [todos, editingId, editingText, readListScrollMetrics]);
 
   useEffect(() => {
+    if (selectedIndex === undefined) {
+      return;
+    }
+
+    if (todos.length === 0) {
+      setSelectedIndex(undefined);
+      return;
+    }
+
+    if (selectedIndex >= todos.length) {
+      setSelectedIndex(todos.length - 1);
+    }
+  }, [selectedIndex, todos.length]);
+
+  useEffect(() => {
+    if (selectedIndex === undefined) {
+      return;
+    }
+
+    const list = listRef.current;
+    if (list === null) {
+      return;
+    }
+
+    const rowTop = selectedIndex * todoRowStride;
+    const rowBottom = rowTop + todoRowHeight;
+    const visibleTop = list.scrollTop;
+    const visibleBottom = visibleTop + list.clientHeight;
+
+    if (rowTop < visibleTop) {
+      list.scrollTop = rowTop;
+    } else if (rowBottom > visibleBottom) {
+      list.scrollTop = Math.max(0, rowBottom - list.clientHeight);
+    }
+
+    readListScrollMetrics();
+  }, [readListScrollMetrics, selectedIndex]);
+
+  useEffect(() => {
     const handleResize = (): void => readListScrollMetrics();
     paintCannon.addEventListener('resize', handleResize);
     return () => paintCannon.removeEventListener('resize', handleResize);
@@ -100,6 +140,7 @@ function TodoApp(): React.ReactElement {
   };
 
   const beginEdit = (todo: Todo): void => {
+    setSelectedIndex(undefined);
     setEditingId(todo.id);
     setEditingText(todo.text);
   };
@@ -134,6 +175,42 @@ function TodoApp(): React.ReactElement {
     focusMainInputAfterCommit();
   };
 
+  const enterSelectionMode = (): void => {
+    if (todos.length === 0) {
+      return;
+    }
+
+    mainInputRef.current?.blur();
+    setEditingId(undefined);
+    setSelectedIndex(0);
+  };
+
+  const moveSelectionDown = (): void => {
+    setSelectedIndex(index => (
+      index === undefined
+        ? (todos.length > 0 ? 0 : undefined)
+        : Math.min(todos.length - 1, index + 1)
+    ));
+  };
+
+  const moveSelectionUp = (): void => {
+    setSelectedIndex(index => {
+      if (index === undefined) {
+        return undefined;
+      }
+      if (index <= 0) {
+        focusMainInputAfterCommit();
+        return undefined;
+      }
+      return index - 1;
+    });
+  };
+
+  const selectionInstruction = selectedIndex === undefined
+    ? 'Press Down to select todos'
+    : 'Press Up or Down to select items';
+  const selectedTodoId = selectedIndex === undefined ? undefined : todos[selectedIndex]?.id;
+
   return (
     <Div
       style={{
@@ -148,6 +225,18 @@ function TodoApp(): React.ReactElement {
         color: '#e5e7eb',
       }}
       onKeyDown={event => {
+        if (editingId === undefined && selectedIndex !== undefined) {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            moveSelectionDown();
+            return;
+          }
+          if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            moveSelectionUp();
+            return;
+          }
+        }
         if (event.key === 'Escape' && editingId !== undefined) {
           event.preventDefault();
           cancelEdit();
@@ -189,6 +278,16 @@ function TodoApp(): React.ReactElement {
             }}
             onChange={(event: PaintChangeEvent) => {
               setDraft(event.target.value);
+            }}
+            onFocus={() => {
+              setSelectedIndex(undefined);
+            }}
+            onKeyDown={(event: PaintKeyboardEvent) => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                event.stopPropagation();
+                enterSelectionMode();
+              }
             }}
           />
           <Button
@@ -240,6 +339,7 @@ function TodoApp(): React.ReactElement {
               todos.map(todo => (
                 <TodoRow
                   key={todo.id}
+                  selected={selectedTodoId === todo.id}
                   todo={todo}
                   editing={todo.id === editingId}
                   editingText={editingText}
@@ -255,6 +355,9 @@ function TodoApp(): React.ReactElement {
                   }}
                   deleteTodo={() => {
                     setTodos(current => current.filter(item => item.id !== todo.id));
+                    if (selectedTodoId === todo.id) {
+                      setSelectedIndex(undefined);
+                    }
                     if (editingId === todo.id) {
                       cancelEdit();
                     }
@@ -264,6 +367,9 @@ function TodoApp(): React.ReactElement {
             )}
           </Div>
           <ScrollRail metrics={scrollMetrics} />
+        </Div>
+        <Div style={{color: selectedIndex === undefined ? '#64748b' : '#38bdf8'}}>
+          {selectionInstruction}
         </Div>
         <Div style={{color: '#64748b'}}>
           {todos.filter(todo => !todo.completed).length} open / {todos.length} total
@@ -314,9 +420,12 @@ function ScrollRail({metrics}: {metrics: TodoScrollMetrics}): React.ReactElement
 }
 
 const todoListVerticalChrome = 2;
+const todoRowHeight = 3;
+const todoRowStride = 4;
 
 function TodoRow({
   todo,
+  selected,
   editing,
   editingText,
   setEditingText,
@@ -328,6 +437,7 @@ function TodoRow({
   deleteTodo,
 }: {
   todo: Todo;
+  selected: boolean;
   editing: boolean;
   editingText: string;
   setEditingText: React.Dispatch<React.SetStateAction<string>>;
@@ -351,6 +461,7 @@ function TodoRow({
         gap: 1,
         width: '100%',
         flexShrink: 0,
+        backgroundColor: selected ? '#1e3a5f' : undefined,
       }}
     >
       <Button

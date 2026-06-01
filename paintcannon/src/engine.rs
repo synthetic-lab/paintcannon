@@ -60,6 +60,7 @@ pub(crate) struct ClickEvent {
 }
 
 pub(crate) enum StyleMutation {
+    Reset(StyleReset),
     Display(LayoutDisplay),
     Overflow(LayoutOverflow),
     OverflowX(LayoutOverflow),
@@ -138,6 +139,67 @@ pub(crate) enum StyleMutation {
     GridColumnEnd(CssGridPlacement),
     GridRowStart(CssGridPlacement),
     GridRowEnd(CssGridPlacement),
+}
+
+pub(crate) enum StyleReset {
+    Display,
+    Overflow,
+    OverflowX,
+    OverflowY,
+    ImageRendering,
+    WhiteSpace,
+    FlexDirection,
+    FlexWrap,
+    FlexFlow,
+    FlexBasis,
+    FlexGrow,
+    FlexShrink,
+    Flex,
+    JustifyContent,
+    AlignItems,
+    AlignSelf,
+    AlignContent,
+    JustifyItems,
+    JustifySelf,
+    Gap,
+    RowGap,
+    ColumnGap,
+    Padding,
+    PaddingTop,
+    PaddingRight,
+    PaddingBottom,
+    PaddingLeft,
+    Margin,
+    MarginTop,
+    MarginRight,
+    MarginBottom,
+    MarginLeft,
+    Width,
+    Height,
+    MinHeight,
+    MaxHeight,
+    Border,
+    BorderTop,
+    BorderRight,
+    BorderBottom,
+    BorderLeft,
+    BorderColor,
+    Color,
+    PlaceholderColor,
+    Background,
+    SelectionBackground,
+    Cursor,
+    GridTemplateColumns,
+    GridTemplateRows,
+    GridAutoColumns,
+    GridAutoRows,
+    GridAutoFlow,
+    GridColumn,
+    GridRow,
+    GridColumnStart,
+    GridColumnEnd,
+    GridRowStart,
+    GridRowEnd,
 }
 
 pub(crate) enum EngineCommand {
@@ -1130,6 +1192,7 @@ impl PaintEngine {
 
 pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation) {
     match mutation {
+        StyleMutation::Reset(reset) => reset_style_property(style, reset),
         StyleMutation::Display(display) => style.display = display,
         StyleMutation::Overflow(overflow) => {
             style.overflow_x = overflow;
@@ -1240,6 +1303,102 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
         StyleMutation::GridColumnEnd(placement) => style.grid_column.end = placement,
         StyleMutation::GridRowStart(placement) => style.grid_row.start = placement,
         StyleMutation::GridRowEnd(placement) => style.grid_row.end = placement,
+    }
+}
+
+fn reset_style_property(style: &mut DivStyle, reset: StyleReset) {
+    let default = DivStyle::default();
+    match reset {
+        StyleReset::Display => style.display = default.display,
+        StyleReset::Overflow => {
+            style.overflow_x = default.overflow_x;
+            style.overflow_y = default.overflow_y;
+        }
+        StyleReset::OverflowX => style.overflow_x = default.overflow_x,
+        StyleReset::OverflowY => style.overflow_y = default.overflow_y,
+        StyleReset::ImageRendering => style.image_rendering = default.image_rendering,
+        StyleReset::WhiteSpace => style.white_space = default.white_space,
+        StyleReset::FlexDirection => style.flex_direction = default.flex_direction,
+        StyleReset::FlexWrap => style.flex_wrap = default.flex_wrap,
+        StyleReset::FlexFlow => {
+            style.flex_direction = default.flex_direction;
+            style.flex_wrap = default.flex_wrap;
+        }
+        StyleReset::FlexBasis => style.flex_basis = default.flex_basis,
+        StyleReset::FlexGrow => style.flex_grow = default.flex_grow,
+        StyleReset::FlexShrink => style.flex_shrink = default.flex_shrink,
+        StyleReset::Flex => {
+            style.flex_grow = default.flex_grow;
+            style.flex_shrink = default.flex_shrink;
+            style.flex_basis = default.flex_basis;
+        }
+        StyleReset::JustifyContent => style.justify_content = default.justify_content,
+        StyleReset::AlignItems => style.align_items = default.align_items,
+        StyleReset::AlignSelf => style.align_self = default.align_self,
+        StyleReset::AlignContent => style.align_content = default.align_content,
+        StyleReset::JustifyItems => style.justify_items = default.justify_items,
+        StyleReset::JustifySelf => style.justify_self = default.justify_self,
+        StyleReset::Gap => {
+            style.row_gap = default.row_gap;
+            style.column_gap = default.column_gap;
+        }
+        StyleReset::RowGap => style.row_gap = default.row_gap,
+        StyleReset::ColumnGap => style.column_gap = default.column_gap,
+        StyleReset::Padding => {
+            style.padding_top = default.padding_top;
+            style.padding_right = default.padding_right;
+            style.padding_bottom = default.padding_bottom;
+            style.padding_left = default.padding_left;
+        }
+        StyleReset::PaddingTop => style.padding_top = default.padding_top,
+        StyleReset::PaddingRight => style.padding_right = default.padding_right,
+        StyleReset::PaddingBottom => style.padding_bottom = default.padding_bottom,
+        StyleReset::PaddingLeft => style.padding_left = default.padding_left,
+        StyleReset::Margin => {
+            style.margin_top = default.margin_top;
+            style.margin_right = default.margin_right;
+            style.margin_bottom = default.margin_bottom;
+            style.margin_left = default.margin_left;
+        }
+        StyleReset::MarginTop => style.margin_top = default.margin_top,
+        StyleReset::MarginRight => style.margin_right = default.margin_right,
+        StyleReset::MarginBottom => style.margin_bottom = default.margin_bottom,
+        StyleReset::MarginLeft => style.margin_left = default.margin_left,
+        StyleReset::Width => style.width = default.width,
+        StyleReset::Height => style.height = default.height,
+        StyleReset::MinHeight => style.min_height = default.min_height,
+        StyleReset::MaxHeight => style.max_height = default.max_height,
+        StyleReset::Border => {
+            style.border_top = default.border_top;
+            style.border_right = default.border_right;
+            style.border_bottom = default.border_bottom;
+            style.border_left = default.border_left;
+        }
+        StyleReset::BorderTop => style.border_top = default.border_top,
+        StyleReset::BorderRight => style.border_right = default.border_right,
+        StyleReset::BorderBottom => style.border_bottom = default.border_bottom,
+        StyleReset::BorderLeft => style.border_left = default.border_left,
+        StyleReset::BorderColor => style.border_color = default.border_color,
+        StyleReset::Color => style.color = default.color,
+        StyleReset::PlaceholderColor => style.placeholder_color = default.placeholder_color,
+        StyleReset::Background => style.background = default.background,
+        StyleReset::SelectionBackground => {
+            style.selection_background = default.selection_background
+        }
+        StyleReset::Cursor => style.cursor = default.cursor,
+        StyleReset::GridTemplateColumns => {
+            style.grid_template_columns = default.grid_template_columns
+        }
+        StyleReset::GridTemplateRows => style.grid_template_rows = default.grid_template_rows,
+        StyleReset::GridAutoColumns => style.grid_auto_columns = default.grid_auto_columns,
+        StyleReset::GridAutoRows => style.grid_auto_rows = default.grid_auto_rows,
+        StyleReset::GridAutoFlow => style.grid_auto_flow = default.grid_auto_flow,
+        StyleReset::GridColumn => style.grid_column = default.grid_column,
+        StyleReset::GridRow => style.grid_row = default.grid_row,
+        StyleReset::GridColumnStart => style.grid_column.start = default.grid_column.start,
+        StyleReset::GridColumnEnd => style.grid_column.end = default.grid_column.end,
+        StyleReset::GridRowStart => style.grid_row.start = default.grid_row.start,
+        StyleReset::GridRowEnd => style.grid_row.end = default.grid_row.end,
     }
 }
 

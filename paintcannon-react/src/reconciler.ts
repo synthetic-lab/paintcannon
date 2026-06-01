@@ -431,11 +431,19 @@ function applyCommonProps(
 }
 
 function applyStyle(node: PaintElement, oldStyle: CSSStyleProperties | undefined, newStyle: CSSStyleProperties | undefined): void {
-  if (oldStyle === newStyle || newStyle === undefined) {
+  if (oldStyle === newStyle) {
     return;
   }
 
-  for (const [key, value] of Object.entries(newStyle)) {
+  for (const [key, value] of Object.entries(oldStyle ?? {})) {
+    const styleKey = key as CSSStylePropertyName;
+    const nextValue = newStyle?.[styleKey];
+    if (value !== undefined && value !== null && (nextValue === undefined || nextValue === null)) {
+      node.style.removeProperty(styleKey);
+    }
+  }
+
+  for (const [key, value] of Object.entries(newStyle ?? {})) {
     const styleKey = key as CSSStylePropertyName;
     if (value !== undefined && value !== null && value !== oldStyle?.[styleKey]) {
       node.style.setProperty(styleKey, value);

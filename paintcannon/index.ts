@@ -2827,6 +2827,18 @@ export class CSSStyleDeclaration {
     this.setNativeStyleProperty(this.getElementId(), name, stringValue);
   }
 
+  removeProperty(property: CSSStylePropertyName): string {
+    const name = normalizeStyleName(property);
+    if (!SUPPORTED_STYLE_PROPERTIES.has(name)) {
+      throw new Error(`unsupported style property: ${property}`);
+    }
+
+    const previous = this.getPropertyValue(name);
+    delete this.values[name];
+    this.setNativeStyleProperty(this.getElementId(), name, '');
+    return previous;
+  }
+
   getPropertyValue(property: CSSStylePropertyName): string {
     return this.values[normalizeStyleName(property)] || '';
   }

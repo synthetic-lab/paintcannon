@@ -15,7 +15,7 @@ use termprofile::{DetectorSettings, TermProfile};
 
 use crate::engine::{
     apply_style_mutation, engine_loop, ClickEvent as EngineClickEvent, DomId, EngineCommand,
-    EngineTransitionEvent, MouseClick, StyleMutation,
+    EngineTransitionEvent, MouseClick, StyleMutation, StyleReset,
 };
 use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseEvent, TerminalResizeEvent};
 use crate::layout::ArenaScrollMetrics;
@@ -899,6 +899,13 @@ fn create_command_style_mut(command: &mut EngineCommand) -> Option<&mut crate::s
 
 fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> {
     let node = DomId(id);
+    if value.trim().is_empty() {
+        return Ok(EngineCommand::MutateStyle {
+            node,
+            mutation: StyleMutation::Reset(style_reset(property)?),
+        });
+    }
+
     let mutation = match property {
         "display" => StyleMutation::Display(parse_display(value)?),
         "overflow" => StyleMutation::Overflow(parse_overflow(value)?),
@@ -1073,6 +1080,77 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
     Ok(EngineCommand::MutateStyle { node, mutation })
 }
 
+fn style_reset(property: &str) -> Result<StyleReset> {
+    let reset = match property {
+        "display" => StyleReset::Display,
+        "overflow" => StyleReset::Overflow,
+        "overflow-x" | "overflowX" => StyleReset::OverflowX,
+        "overflow-y" | "overflowY" => StyleReset::OverflowY,
+        "image-rendering" | "imageRendering" => StyleReset::ImageRendering,
+        "white-space" | "whiteSpace" => StyleReset::WhiteSpace,
+        "flex-direction" | "flexDirection" => StyleReset::FlexDirection,
+        "flex-wrap" | "flexWrap" => StyleReset::FlexWrap,
+        "flex-flow" | "flexFlow" => StyleReset::FlexFlow,
+        "flex-basis" | "flexBasis" => StyleReset::FlexBasis,
+        "flex-grow" | "flexGrow" => StyleReset::FlexGrow,
+        "flex-shrink" | "flexShrink" => StyleReset::FlexShrink,
+        "flex" => StyleReset::Flex,
+        "justify-content" | "justifyContent" => StyleReset::JustifyContent,
+        "align-items" | "alignItems" => StyleReset::AlignItems,
+        "align-self" | "alignSelf" => StyleReset::AlignSelf,
+        "align-content" | "alignContent" => StyleReset::AlignContent,
+        "justify-items" | "justifyItems" => StyleReset::JustifyItems,
+        "justify-self" | "justifySelf" => StyleReset::JustifySelf,
+        "gap" => StyleReset::Gap,
+        "row-gap" | "rowGap" => StyleReset::RowGap,
+        "column-gap" | "columnGap" => StyleReset::ColumnGap,
+        "padding" => StyleReset::Padding,
+        "padding-top" | "paddingTop" => StyleReset::PaddingTop,
+        "padding-right" | "paddingRight" => StyleReset::PaddingRight,
+        "padding-bottom" | "paddingBottom" => StyleReset::PaddingBottom,
+        "padding-left" | "paddingLeft" => StyleReset::PaddingLeft,
+        "margin" => StyleReset::Margin,
+        "margin-top" | "marginTop" => StyleReset::MarginTop,
+        "margin-right" | "marginRight" => StyleReset::MarginRight,
+        "margin-bottom" | "marginBottom" => StyleReset::MarginBottom,
+        "margin-left" | "marginLeft" => StyleReset::MarginLeft,
+        "width" => StyleReset::Width,
+        "height" => StyleReset::Height,
+        "min-height" | "minHeight" => StyleReset::MinHeight,
+        "max-height" | "maxHeight" => StyleReset::MaxHeight,
+        "border" => StyleReset::Border,
+        "border-top" | "borderTop" => StyleReset::BorderTop,
+        "border-right" | "borderRight" => StyleReset::BorderRight,
+        "border-bottom" | "borderBottom" => StyleReset::BorderBottom,
+        "border-left" | "borderLeft" => StyleReset::BorderLeft,
+        "border-color" | "borderColor" => StyleReset::BorderColor,
+        "color" => StyleReset::Color,
+        "placeholder-color" | "placeholderColor" => StyleReset::PlaceholderColor,
+        "background" | "background-color" | "backgroundColor" => StyleReset::Background,
+        "selection-background-color" | "selectionBackgroundColor" => {
+            StyleReset::SelectionBackground
+        }
+        "cursor" => StyleReset::Cursor,
+        "grid-template-columns" | "gridTemplateColumns" => StyleReset::GridTemplateColumns,
+        "grid-template-rows" | "gridTemplateRows" => StyleReset::GridTemplateRows,
+        "grid-auto-columns" | "gridAutoColumns" => StyleReset::GridAutoColumns,
+        "grid-auto-rows" | "gridAutoRows" => StyleReset::GridAutoRows,
+        "grid-auto-flow" | "gridAutoFlow" => StyleReset::GridAutoFlow,
+        "grid-column" | "gridColumn" => StyleReset::GridColumn,
+        "grid-row" | "gridRow" => StyleReset::GridRow,
+        "grid-column-start" | "gridColumnStart" => StyleReset::GridColumnStart,
+        "grid-column-end" | "gridColumnEnd" => StyleReset::GridColumnEnd,
+        "grid-row-start" | "gridRowStart" => StyleReset::GridRowStart,
+        "grid-row-end" | "gridRowEnd" => StyleReset::GridRowEnd,
+        value => {
+            return Err(Error::from_reason(format!(
+                "unsupported style property: {value}"
+            )))
+        }
+    };
+    Ok(reset)
+}
+
 fn scroll_metrics_to_napi(metrics: ArenaScrollMetrics) -> ScrollMetrics {
     ScrollMetrics {
         scroll_left: metrics.scroll_left,
@@ -1207,6 +1285,18 @@ mod tests {
                 ..
             } => assert_eq!(value, 0.9),
             _ => panic!("expected max-height style mutation"),
+        }
+    }
+
+    #[test]
+    fn empty_style_value_resets_property() {
+        let command = style_command(1, "background-color", "").unwrap();
+        match command {
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Reset(StyleReset::Background),
+                ..
+            } => {}
+            _ => panic!("expected background reset style mutation"),
         }
     }
 }

@@ -291,6 +291,24 @@ describe('core style validation', () => {
     expect(mockNative.styleMutations).toHaveLength(before);
     paintCannon.stop();
   });
+
+  it('removes style properties by sending an empty native value', () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+
+    root.style.backgroundColor = '#1e3a5f';
+    expect(root.style.backgroundColor).toBe('#1e3a5f');
+
+    const previous = root.style.removeProperty('background-color');
+
+    expect(previous).toBe('#1e3a5f');
+    expect(root.style.backgroundColor).toBe('');
+    expect(mockNative.styleMutations).toContainEqual({
+      id: root.id,
+      property: 'background-color',
+      value: '',
+    });
+    paintCannon.stop();
+  });
 });
 
 function createPaintTree(options: { captureMouse?: boolean } = {}): {
