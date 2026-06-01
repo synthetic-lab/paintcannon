@@ -9,7 +9,8 @@
     "build": "tsc",
     "demo": "npm run build && node dist/examples/counter.js",
     "demo:keyboard": "npm run build && node dist/examples/keyboard.js",
-    "demo:lifecycle": "npm run build && node dist/examples/lifecycle.js"
+    "demo:lifecycle": "npm run build && node dist/examples/lifecycle.js",
+    "demo:spinner": "npm run build && node dist/examples/spinner.js"
   },
   "dependencies": {
     "paintcannon": "0.0.0",
