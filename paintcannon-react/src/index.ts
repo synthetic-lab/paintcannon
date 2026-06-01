@@ -11,18 +11,9 @@ import * as Scheduler from 'scheduler';
 import type {
   CSSStyleProperties,
   CSSStylePropertyName,
-  ChangeElementEventType,
-  ChangeEventListener,
-  DivElement,
   ElementEventType,
-  FocusElementEventType,
-  FocusEventListener,
-  FormElement,
-  FormElementEventType,
-  KeyboardEventListener,
-  KeyboardEventType,
-  MouseElementEventType,
-  MouseEventListener,
+  DivElement as PaintDivElement,
+  FormElement as PaintFormElement,
   PaintCannonOptions,
   PaintChangeEvent,
   PaintElement,
@@ -32,115 +23,54 @@ import type {
   PaintNode,
   PaintScrollEvent,
   PaintSubmitEvent,
-  ScrollEventListener,
-  SpanElement,
-  SubmitEventListener,
+  SpanElement as PaintSpanElement,
   TextNode,
-  TransitionElementEventType,
-  TransitionEventListener,
 } from 'paintcannon';
 import {
-  ButtonElement,
   ELEMENT_EVENT_TYPES,
-  InputElement,
   PaintCannon,
-  TextAreaElement,
 } from 'paintcannon';
+import * as hostComponents from './host-components/index.ts';
 
-export type {CSSStyleProperties, CSSStylePropertyName, CSSStyleValue, DivElement} from 'paintcannon';
+export type {CSSStyleProperties, CSSStylePropertyName, CSSStyleValue} from 'paintcannon';
 
-type HostType =
-  | 'paintcannon.div'
-  | 'paintcannon.span'
-  | 'paintcannon.form'
-  | 'paintcannon.button'
-  | 'paintcannon.input'
-  | 'paintcannon.textarea';
+type HostType = hostComponents.HostType;
+type HostProps =
+  | hostComponents.div.Props
+  | hostComponents.span.Props
+  | hostComponents.form.Props
+  | hostComponents.button.Props
+  | hostComponents.input.Props
+  | hostComponents.textarea.Props;
 type HostNode = HostElement | HostText;
 type HostParent = HostElement | RootContainer;
-type HostComponent<Props, Element extends PaintElement> =
-  React.ForwardRefExoticComponent<React.PropsWithoutRef<Props> & React.RefAttributes<Element>>;
 type ChildContainerElement = PaintElement & {
   appendChild(child: PaintNode): PaintNode;
   insertBefore(child: PaintNode, before: PaintNode): PaintNode;
 };
-type ScrollOffsetElement = PaintElement & {
-  scrollLeft: number;
-  scrollTop: number;
+type MountedHostElement<Type extends HostType, Props, Element extends PaintElement> = {
+  kind: 'element';
+  type: Type;
+  props: Props;
+  children: HostNode[];
+  node: Element;
 };
-type EventPropName<T extends ElementEventType = ElementEventType> =
-  T extends `key${infer Rest}` ? `onKey${Capitalize<Rest>}` :
-  T extends `mouse${infer Rest}` ? `onMouse${Capitalize<Rest>}` :
-  T extends `transition${infer Rest}` ? `onTransition${Capitalize<Rest>}` :
-  `on${Capitalize<T>}`;
-type ElementEventListenerFor<T extends ElementEventType> =
-  T extends KeyboardEventType ? KeyboardEventListener :
-  T extends MouseElementEventType ? MouseEventListener :
-  T extends FocusElementEventType ? FocusEventListener :
-  T extends FormElementEventType ? SubmitEventListener :
-  T extends ChangeElementEventType ? ChangeEventListener :
-  T extends TransitionElementEventType ? TransitionEventListener :
-  T extends 'scroll' ? ScrollEventListener :
-  never;
-type ElementEventProps = {
-  [T in ElementEventType as EventPropName<T>]?: ElementEventListenerFor<T>;
-};
-
-export interface CommonProps extends ElementEventProps {
-  children?: React.ReactNode;
-  style?: CSSStyleProperties;
-}
-
-export interface DivProps extends CommonProps {
-  scrollLeft?: number;
-  scrollTop?: number;
-}
-
-export interface SpanProps extends CommonProps {
-  scrollLeft?: number;
-  scrollTop?: number;
-}
-
-export interface FormProps extends CommonProps {
-  scrollLeft?: number;
-  scrollTop?: number;
-}
-
-export interface ButtonProps extends CommonProps {
-  type?: 'submit' | 'button';
-  scrollLeft?: number;
-  scrollTop?: number;
-}
-
-export interface InputProps extends CommonProps {
-  type?: 'text';
-  value?: string;
-  placeholder?: string;
-  cursorPosition?: number;
-  autoFocus?: boolean;
-}
-
-export interface TextareaProps extends InputProps {
-  type?: never;
-  scrollLeft?: number;
-  scrollTop?: number;
-}
-
-export const Div = 'paintcannon.div' as unknown as HostComponent<DivProps, DivElement>;
-export const Span = 'paintcannon.span' as unknown as HostComponent<SpanProps, SpanElement>;
-export const Form = 'paintcannon.form' as unknown as HostComponent<FormProps, FormElement>;
-export const Button = 'paintcannon.button' as unknown as HostComponent<ButtonProps, ButtonElement>;
-export const Input = 'paintcannon.input' as unknown as HostComponent<InputProps, InputElement>;
-export const Textarea = 'paintcannon.textarea' as unknown as HostComponent<TextareaProps, TextAreaElement>;
+type MountedComponent<Module> =
+  Module extends {
+    type: infer Type extends HostType;
+    Component: hostComponents.HostComponent<infer Props, infer Element extends PaintElement>;
+  }
+    ? MountedHostElement<Type, Props, Element>
+    : never;
 
 export interface CreateRootOptions extends PaintCannonOptions {
   paintCannon?: PaintCannon;
-  container?: DivElement | SpanElement | FormElement;
+  container?: PaintDivElement | PaintSpanElement | PaintFormElement;
 }
 
 export interface PaintCannonReactRoot {
   readonly paintCannon: PaintCannon;
-  readonly container: DivElement | SpanElement | FormElement;
+  readonly container: PaintDivElement | PaintSpanElement | PaintFormElement;
   render(element: React.ReactNode): void;
   unmount(): void;
   exit(errorOrResult?: unknown): void;
@@ -153,13 +83,42 @@ export interface PaintCannonReactApp {
   waitUntilExit(): Promise<unknown>;
 }
 
-interface HostElement {
-  kind: 'element';
-  type: HostType;
-  props: Props;
-  children: HostNode[];
-  node: PaintElement;
-}
+type HostElement =
+  | MountedComponent<typeof hostComponents.div>
+  | MountedComponent<typeof hostComponents.span>
+  | MountedComponent<typeof hostComponents.form>
+  | MountedComponent<typeof hostComponents.button>
+  | MountedComponent<typeof hostComponents.input>
+  | MountedComponent<typeof hostComponents.textarea>;
+
+const hostPropsForType = {
+  [hostComponents.div.type]: undefined as unknown as hostComponents.div.Props,
+  [hostComponents.span.type]: undefined as unknown as hostComponents.span.Props,
+  [hostComponents.form.type]: undefined as unknown as hostComponents.form.Props,
+  [hostComponents.button.type]: undefined as unknown as hostComponents.button.Props,
+  [hostComponents.input.type]: undefined as unknown as hostComponents.input.Props,
+  [hostComponents.textarea.type]: undefined as unknown as hostComponents.textarea.Props,
+} satisfies {[K in HostType]: HostProps};
+type HostPropsForType = typeof hostPropsForType;
+
+export type DivProps = hostComponents.div.Props;
+export type DivElement = hostComponents.div.Element;
+export const Div = hostComponents.div.Component;
+export type SpanProps = hostComponents.span.Props;
+export type SpanElement = hostComponents.span.Element;
+export const Span = hostComponents.span.Component;
+export type FormProps = hostComponents.form.Props;
+export type FormElement = hostComponents.form.Element;
+export const Form = hostComponents.form.Component;
+export type ButtonProps = hostComponents.button.Props;
+export type ButtonElement = hostComponents.button.Element;
+export const Button = hostComponents.button.Component;
+export type InputProps = hostComponents.input.Props;
+export type InputElement = hostComponents.input.Element;
+export const Input = hostComponents.input.Component;
+export type TextareaProps = hostComponents.textarea.Props;
+export type TextareaElement = hostComponents.textarea.Element;
+export const Textarea = hostComponents.textarea.Component;
 
 interface HostText {
   kind: 'text';
@@ -169,11 +128,10 @@ interface HostText {
 
 interface RootContainer {
   paintCannon: PaintCannon;
-  root: DivElement | SpanElement | FormElement;
+  root: PaintDivElement | PaintSpanElement | PaintFormElement;
   children: HostNode[];
 }
 
-type Props = Record<string, unknown>;
 type PackageInfo = {
   name: string;
   version: string;
@@ -228,16 +186,8 @@ const reconciler = createReconciler({
     return false;
   },
   shouldSetTextContent: () => false,
-  createInstance(type: HostType, props: Props, container: RootContainer) {
-    const node = createPaintElement(container.paintCannon, type);
-    applyProps(node, type, {}, props);
-    return {
-      kind: 'element',
-      type,
-      props,
-      children: [],
-      node,
-    } satisfies HostElement;
+  createInstance(type: HostType, props: HostProps, container: RootContainer) {
+    return createHostElement(container.paintCannon, type, props);
   },
   createTextInstance(text: string, container: RootContainer) {
     return {
@@ -279,9 +229,8 @@ const reconciler = createReconciler({
   getPublicInstance(instance: HostNode) {
     return instance.node;
   },
-  commitUpdate(instance: HostElement, _type: HostType, oldProps: Props, newProps: Props) {
-    instance.props = newProps;
-    applyProps(instance.node, instance.type, oldProps, newProps);
+  commitUpdate(instance: HostElement, _type: HostType, _oldProps: HostProps, newProps: HostProps) {
+    instance.props = applyHostElementProps(instance, newProps);
   },
   commitTextUpdate(instance: HostText, _oldText: string, newText: string) {
     instance.text = newText;
@@ -612,21 +561,88 @@ function removeVirtualChild(parent: HostParent, child: HostNode): void {
   }
 }
 
-function createPaintElement(paintCannon: PaintCannon, type: HostType): PaintElement {
-  switch (type) {
-    case 'paintcannon.div':
-      return paintCannon.createElement('div');
-    case 'paintcannon.span':
-      return paintCannon.createElement('span');
-    case 'paintcannon.form':
-      return paintCannon.createElement('form');
-    case 'paintcannon.button':
-      return paintCannon.createElement('button');
-    case 'paintcannon.input':
-      return paintCannon.createElement('input');
-    case 'paintcannon.textarea':
-      return paintCannon.createElement('textarea');
+function createHostElement(paintCannon: PaintCannon, type: HostType, props: HostProps): HostElement {
+  if (type === hostComponents.div.type) {
+    return createDivElement(paintCannon, castHostProps(type, props));
   }
+  if (type === hostComponents.span.type) {
+    return createSpanElement(paintCannon, castHostProps(type, props));
+  }
+  if (type === hostComponents.form.type) {
+    return createFormElement(paintCannon, castHostProps(type, props));
+  }
+  if (type === hostComponents.button.type) {
+    return createButtonElement(paintCannon, castHostProps(type, props));
+  }
+  if (type === hostComponents.input.type) {
+    return createInputElement(paintCannon, castHostProps(type, props));
+  }
+  if (type === hostComponents.textarea.type) {
+    return createTextareaElement(paintCannon, castHostProps(type, props));
+  }
+
+  const unknownType: never = type;
+  throw new Error(`Unknown host type: ${String(unknownType)}`);
+}
+
+function createDivElement(
+  paintCannon: PaintCannon,
+  props: hostComponents.div.Props,
+): MountedComponent<typeof hostComponents.div> {
+  const type = hostComponents.div.type;
+  const node = paintCannon.createElement('div');
+  applyDivProps(node, {}, props);
+  return { kind: 'element', type, props, children: [], node };
+}
+
+function createSpanElement(
+  paintCannon: PaintCannon,
+  props: hostComponents.span.Props,
+): MountedComponent<typeof hostComponents.span> {
+  const type = hostComponents.span.type;
+  const node = paintCannon.createElement('span');
+  applySpanProps(node, {}, props);
+  return { kind: 'element', type, props, children: [], node };
+}
+
+function createFormElement(
+  paintCannon: PaintCannon,
+  props: hostComponents.form.Props,
+): MountedComponent<typeof hostComponents.form> {
+  const type = hostComponents.form.type;
+  const node = paintCannon.createElement('form');
+  applyFormProps(node, {}, props);
+  return { kind: 'element', type, props, children: [], node };
+}
+
+function createButtonElement(
+  paintCannon: PaintCannon,
+  props: hostComponents.button.Props,
+): MountedComponent<typeof hostComponents.button> {
+  const type = hostComponents.button.type;
+  const node = paintCannon.createElement('button');
+  applyButtonProps(node, {}, props);
+  return { kind: 'element', type, props, children: [], node };
+}
+
+function createInputElement(
+  paintCannon: PaintCannon,
+  props: hostComponents.input.Props,
+): MountedComponent<typeof hostComponents.input> {
+  const type = hostComponents.input.type;
+  const node = paintCannon.createElement('input');
+  applyInputProps(node, {}, props);
+  return { kind: 'element', type, props, children: [], node };
+}
+
+function createTextareaElement(
+  paintCannon: PaintCannon,
+  props: hostComponents.textarea.Props,
+): MountedComponent<typeof hostComponents.textarea> {
+  const type = hostComponents.textarea.type;
+  const node = paintCannon.createElement('textarea');
+  applyTextareaProps(node, {}, props);
+  return { kind: 'element', type, props, children: [], node };
 }
 
 function appendPaintChild(parent: PaintElement, child: PaintNode): void {
@@ -647,37 +663,150 @@ function destroyHostNode(host: HostNode): void {
   host.node.destroy();
 }
 
-function applyProps(node: PaintElement, type: HostType, oldProps: Props, newProps: Props): void {
-  applyStyle(node, oldProps.style as CSSStyleProperties | undefined, newProps.style as CSSStyleProperties | undefined);
-  applyEvents(node, oldProps, newProps);
+function applyHostElementProps(host: HostElement, newProps: HostProps): HostProps {
+  if (host.type === hostComponents.div.type) {
+    const props = castHostProps(host.type, newProps);
+    applyDivProps(host.node, host.props, props);
+    return props;
+  }
+  if (host.type === hostComponents.span.type) {
+    const props = castHostProps(host.type, newProps);
+    applySpanProps(host.node, host.props, props);
+    return props;
+  }
+  if (host.type === hostComponents.form.type) {
+    const props = castHostProps(host.type, newProps);
+    applyFormProps(host.node, host.props, props);
+    return props;
+  }
+  if (host.type === hostComponents.button.type) {
+    const props = castHostProps(host.type, newProps);
+    applyButtonProps(host.node, host.props, props);
+    return props;
+  }
+  if (host.type === hostComponents.input.type) {
+    const props = castHostProps(host.type, newProps);
+    applyInputProps(host.node, host.props, props);
+    return props;
+  }
+  if (host.type === hostComponents.textarea.type) {
+    const props = castHostProps(host.type, newProps);
+    applyTextareaProps(host.node, host.props, props);
+    return props;
+  }
 
-  if (type === 'paintcannon.button' && node instanceof ButtonElement && typeof newProps.type === 'string') {
+  const unknownHost: never = host;
+  throw new Error(`Unknown host type: ${String(unknownHost)}`);
+}
+
+function castHostProps<Type extends HostType>(_type: Type, props: HostProps): HostPropsForType[Type] {
+  return props as HostPropsForType[Type];
+}
+
+function applyCommonProps(
+  node: PaintElement,
+  oldProps: Partial<hostComponents.CommonProps>,
+  newProps: hostComponents.CommonProps,
+): void {
+  applyStyle(node, oldProps.style, newProps.style);
+  applyEvents(node, oldProps, newProps);
+}
+
+function applyDivProps(
+  node: hostComponents.div.Element,
+  oldProps: Partial<hostComponents.div.Props>,
+  newProps: hostComponents.div.Props,
+): void {
+  applyScrollableElementProps(node, oldProps, newProps);
+}
+
+function applySpanProps(
+  node: hostComponents.span.Element,
+  oldProps: Partial<hostComponents.span.Props>,
+  newProps: hostComponents.span.Props,
+): void {
+  applyScrollableElementProps(node, oldProps, newProps);
+}
+
+function applyFormProps(
+  node: hostComponents.form.Element,
+  oldProps: Partial<hostComponents.form.Props>,
+  newProps: hostComponents.form.Props,
+): void {
+  applyScrollableElementProps(node, oldProps, newProps);
+}
+
+function applyScrollableElementProps<Props extends hostComponents.CommonProps & Partial<hostComponents.Scrollable>>(
+  node: PaintElement & hostComponents.Scrollable,
+  oldProps: Partial<Props>,
+  newProps: Props,
+): void {
+  applyCommonProps(node, oldProps, newProps);
+  applyScrollableProps(node, newProps);
+}
+
+function applyButtonProps(
+  node: hostComponents.button.Element,
+  oldProps: Partial<hostComponents.button.Props>,
+  newProps: hostComponents.button.Props,
+): void {
+  applyCommonProps(node, oldProps, newProps);
+  if (newProps.type !== undefined) {
     node.type = newProps.type;
   }
+  applyScrollableProps(node, newProps);
+}
 
-  if (isTextControlElement(node)) {
-    if (typeof newProps.type === 'string' && node instanceof InputElement && !(node instanceof TextAreaElement)) {
-      node.type = newProps.type;
-    }
-    if (newProps.value !== undefined) {
-      node.value = String(newProps.value);
-    }
-    if (newProps.placeholder !== undefined) {
-      node.placeholder = String(newProps.placeholder);
-    }
-    if (typeof newProps.cursorPosition === 'number') {
-      node.cursorPosition = newProps.cursorPosition;
-    }
-    if (newProps.autoFocus === true && oldProps.autoFocus !== true) {
-      node.focus();
-    }
+function applyInputProps(
+  node: hostComponents.input.Element,
+  oldProps: Partial<hostComponents.input.Props>,
+  newProps: hostComponents.input.Props,
+): void {
+  applyCommonProps(node, oldProps, newProps);
+  if (newProps.type !== undefined) {
+    node.type = newProps.type;
   }
+  applyTextControlProps(node, oldProps, newProps);
+}
 
-  if ('scrollLeft' in newProps && typeof newProps.scrollLeft === 'number' && hasScrollOffset(node)) {
-    node.scrollLeft = newProps.scrollLeft;
+function applyTextareaProps(
+  node: hostComponents.textarea.Element,
+  oldProps: Partial<hostComponents.textarea.Props>,
+  newProps: hostComponents.textarea.Props,
+): void {
+  applyCommonProps(node, oldProps, newProps);
+  applyTextControlProps(node, oldProps, newProps);
+  applyScrollableProps(node, newProps);
+}
+
+function applyTextControlProps<T extends hostComponents.input.Element | hostComponents.textarea.Element>(
+  node: T,
+  oldProps: Partial<hostComponents.input.Props | hostComponents.textarea.Props>,
+  newProps: hostComponents.input.Props | hostComponents.textarea.Props,
+): void {
+  if (newProps.value !== undefined) {
+    node.value = newProps.value;
   }
-  if ('scrollTop' in newProps && typeof newProps.scrollTop === 'number' && hasScrollOffset(node)) {
-    node.scrollTop = newProps.scrollTop;
+  if (newProps.placeholder !== undefined) {
+    node.placeholder = newProps.placeholder;
+  }
+  if (newProps.cursorPosition !== undefined) {
+    node.cursorPosition = newProps.cursorPosition;
+  }
+  if (newProps.autoFocus === true && oldProps.autoFocus !== true) {
+    node.focus();
+  }
+}
+
+function applyScrollableProps(
+  node: hostComponents.Scrollable,
+  props: Partial<hostComponents.Scrollable>,
+): void {
+  if (props.scrollLeft !== undefined) {
+    node.scrollLeft = props.scrollLeft;
+  }
+  if (props.scrollTop !== undefined) {
+    node.scrollTop = props.scrollTop;
   }
 }
 
@@ -694,10 +823,10 @@ function applyStyle(node: PaintElement, oldStyle: CSSStyleProperties | undefined
   }
 }
 
-function applyEvents(node: PaintElement, oldProps: Props, newProps: Props): void {
+function applyEvents(node: PaintElement, oldProps: Partial<HostProps>, newProps: HostProps): void {
   for (const [prop, eventType] of eventProps) {
-    const previous = oldProps[prop] as ((event: unknown) => void) | undefined;
-    const next = newProps[prop] as ((event: unknown) => void) | undefined;
+    const previous = listenerProp(oldProps, prop);
+    const next = listenerProp(newProps, prop);
     if (previous === next) {
       continue;
     }
@@ -710,16 +839,13 @@ function applyEvents(node: PaintElement, oldProps: Props, newProps: Props): void
   }
 }
 
+function listenerProp(props: Partial<HostProps>, prop: hostComponents.EventPropName): ((event: unknown) => void) | undefined {
+  const value = (props as Partial<Record<hostComponents.EventPropName, unknown>>)[prop];
+  return typeof value === 'function' ? value as (event: unknown) => void : undefined;
+}
+
 function canHaveChildren(node: PaintElement): node is ChildContainerElement {
   return 'appendChild' in node && 'insertBefore' in node;
-}
-
-function hasScrollOffset(node: PaintElement): node is ScrollOffsetElement {
-  return 'scrollLeft' in node && 'scrollTop' in node;
-}
-
-function isTextControlElement(node: PaintElement): node is InputElement | TextAreaElement {
-  return node instanceof InputElement || node instanceof TextAreaElement;
 }
 
 function addElementListener(node: PaintElement, eventType: ElementEventType, listener: (event: unknown) => void): void {
@@ -746,7 +872,7 @@ function reactEventListener(listener: (event: unknown) => void): (event: unknown
 }
 
 function defaultDisplay(type: HostType): string {
-  return type === 'paintcannon.span' ? 'inline' : 'block';
+  return type === hostComponents.span.type ? 'inline' : 'block';
 }
 
 function reportReactError(error: unknown): void {
@@ -791,19 +917,19 @@ function findPackageJsonPath(): string {
 
 const eventProps = [
   ...ELEMENT_EVENT_TYPES.map((eventType) => [eventPropName(eventType), eventType] as const),
-] satisfies ReadonlyArray<readonly [EventPropName, ElementEventType]>;
+] satisfies ReadonlyArray<readonly [hostComponents.EventPropName, ElementEventType]>;
 
-function eventPropName<T extends ElementEventType>(eventType: T): EventPropName<T> {
+function eventPropName<T extends ElementEventType>(eventType: T): hostComponents.EventPropName<T> {
   if (eventType.startsWith('key')) {
-    return `onKey${capitalize(eventType.slice('key'.length))}` as EventPropName<T>;
+    return `onKey${capitalize(eventType.slice('key'.length))}` as hostComponents.EventPropName<T>;
   }
   if (eventType.startsWith('mouse')) {
-    return `onMouse${capitalize(eventType.slice('mouse'.length))}` as EventPropName<T>;
+    return `onMouse${capitalize(eventType.slice('mouse'.length))}` as hostComponents.EventPropName<T>;
   }
   if (eventType.startsWith('transition')) {
-    return `onTransition${capitalize(eventType.slice('transition'.length))}` as EventPropName<T>;
+    return `onTransition${capitalize(eventType.slice('transition'.length))}` as hostComponents.EventPropName<T>;
   }
-  return `on${capitalize(eventType)}` as EventPropName<T>;
+  return `on${capitalize(eventType)}` as hostComponents.EventPropName<T>;
 }
 
 function capitalize(value: string): string {
