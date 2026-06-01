@@ -8,7 +8,7 @@
   "scripts": {
     "build": "npm run build --workspaces",
     "build:debug": "npm run build:debug --workspace paintcannon && npm run build --workspace paintcannon-react",
-    "test": "npm run test --workspace paintcannon-react",
+    "test": "npm run test --workspace paintcannon && npm run test --workspace paintcannon-react",
     "demo": "npm run demo --workspace paintcannon",
     "demo:alt-restart": "npm run demo:alt-restart --workspace paintcannon",
     "demo:borders": "npm run demo:borders --workspace paintcannon",

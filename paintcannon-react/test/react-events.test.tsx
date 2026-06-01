@@ -11,15 +11,15 @@ import {
   type TextAreaElement,
 } from 'paintcannon';
 import { Div, Input, Textarea, render } from '../src/index.ts';
-import { createFakeNativeBinding, type FakeNativePaintCannon } from './fake-native.ts';
+import { createMockNativeBinding, type MockNativePaintCannon } from '../../paintcannon/test/mock-native.ts';
 
 let restores: Array<() => void> = [];
-let fakeNativeInstances: FakeNativePaintCannon[] = [];
+let mockNativeInstances: MockNativePaintCannon[] = [];
 
 beforeEach(() => {
-  fakeNativeInstances = [];
+  mockNativeInstances = [];
   restores = [
-    mock(paintCannonDeps, 'loadNativeBinding', () => createFakeNativeBinding(fakeNativeInstances)),
+    mock(paintCannonDeps, 'loadNativeBinding', () => createMockNativeBinding(mockNativeInstances)),
   ];
 });
 
@@ -128,21 +128,21 @@ describe('resize events', () => {
   it('uses the normal render path instead of sync rendering inside the input pump', () => {
     const sizes: Array<[number, number]> = [];
     const paintCannon = new PaintCannon({ fps: 120 });
-    const fakeNative = fakeNativeInstances[0];
-    if (fakeNative === undefined) {
-      throw new Error('expected fake native instance');
+    const mockNative = mockNativeInstances[0];
+    if (mockNative === undefined) {
+      throw new Error('expected mock native instance');
     }
 
     paintCannon.addEventListener('resize', (event: PaintResizeEvent) => {
       sizes.push([event.cols, event.rows]);
     });
-    fakeNative.resizeEvents.push({ cols: 100, rows: 40 });
+    mockNative.resizeEvents.push({ cols: 100, rows: 40 });
     runKeyboardEventPump(paintCannon);
     paintCannon.stop();
 
     expect(sizes).toEqual([[100, 40]]);
-    expect(fakeNative.renderCalls).toBe(1);
-    expect(fakeNative.renderSyncCalls).toBe(0);
+    expect(mockNative.renderCalls).toBe(1);
+    expect(mockNative.renderSyncCalls).toBe(0);
   });
 });
 

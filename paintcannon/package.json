@@ -32,7 +32,8 @@
     "demo:span-flex": "npm run build:debug && node dist/examples/span-flex.js",
     "demo:spans": "npm run build:debug && node dist/examples/spans.js",
     "demo:textarea": "npm run build:debug && node dist/examples/textarea.js",
-    "demo:transitions": "npm run build:debug && node dist/examples/transitions.js"
+    "demo:transitions": "npm run build:debug && node dist/examples/transitions.js",
+    "test": "vitest run"
   },
   "napi": {
     "binaryName": "paintcannon",
@@ -41,7 +42,8 @@
   "devDependencies": {
     "@napi-rs/cli": "^3.6.2",
     "@types/node": "^25.9.1",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
   },
   "dependencies": {
     "antipattern": "^0.0.7"
