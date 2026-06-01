@@ -42,11 +42,14 @@ function TodoApp(): React.ReactElement {
   const editReturnSelectionIdRef = useRef<number | undefined>(undefined);
   const [draft, setDraft] = useState('');
   const [todos, setTodos] = useState<Todo[]>([
-    {id: 1, text: 'Write the first pass of the docs', completed: false},
-    {id: 2, text: 'Add screenshots to the README', completed: false},
-    {id: 3, text: 'Sketch the next paintcannon-react hook API', completed: false},
+    {id: 1, text: 'Ship the React reconciler', completed: true},
+    {id: 2, text: 'Write the first pass of the docs', completed: false},
+    {id: 3, text: 'Add screenshots to the README', completed: false},
+    {id: 4, text: 'Sketch the next paintcannon-react hook API', completed: false},
+    {id: 5, text: 'Support <a> tags with clickable terminal links', completed: false},
+    {id: 6, text: 'Support clickable labels for inputs', completed: false},
   ]);
-  const [nextId, setNextId] = useState(4);
+  const [nextId, setNextId] = useState(7);
   const [editingId, setEditingId] = useState<number | undefined>();
   const [editingText, setEditingText] = useState('');
   const [selectedIndex, setSelectedIndex] = useState<number | undefined>();
