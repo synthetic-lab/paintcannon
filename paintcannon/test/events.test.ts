@@ -143,6 +143,21 @@ describe('core keyboard events', () => {
     });
   });
 
+  it('moves the cursor to the end when setting a value from the previous end', () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const input = paintCannon.createElement('input');
+    root.appendChild(input);
+
+    input.value = 'prefilled';
+    paintCannon.stop();
+
+    expect(input.cursorPosition).toBe(9);
+    expect(mockNative.textControls.get(input.id)).toMatchObject({
+      value: 'prefilled',
+      cursor: 9,
+    });
+  });
+
   it('cycles text control focus with tab and shift-tab', () => {
     const { paintCannon, mockNative, root } = createPaintTree();
     const first = paintCannon.createElement('input');

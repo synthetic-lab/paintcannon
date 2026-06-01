@@ -2493,8 +2493,11 @@ export class InputElement {
       return;
     }
 
+    const oldLength = Array.from(this.inputValue).length;
+    const cursorWasAtEnd = this.cursor === oldLength;
     this.inputValue = next;
-    this.cursor = Math.min(this.cursor, Array.from(this.inputValue).length);
+    const nextLength = Array.from(this.inputValue).length;
+    this.cursor = cursorWasAtEnd ? nextLength : Math.min(this.cursor, nextLength);
     this.syncValue();
   }
 
