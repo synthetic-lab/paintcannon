@@ -2,33 +2,19 @@
 
 A React reconciler for `paintcannon`, built for fast terminal UIs.
 
-`paintcannon-react` lets you render React components into PaintCannon's Rust-backed terminal
-renderer. It is intended as a faster, no-flicker alternative for terminal React interfaces
-that would otherwise use Ink.
+`paintcannon-react` lets you render React components into PaintCannon's
+Rust-backed terminal renderer. It is intended as a faster, no-flicker
+alternative for terminal React interfaces that would otherwise use Ink.
 
 ![A cannon shooting paint](https://raw.githubusercontent.com/synthetic-lab/paintcannon/refs/heads/main/paintcannon-shot.png)
 
-## Host Components
-
-PaintCannon host components use capitalized names to make it clear that they are not browser DOM
-elements:
-
-- `Div`
-- `Span`
-- `Input`
-- `Textarea`
-- `Button`
-- `Form`
-
-These components map to PaintCannon's DOM-like core API and support typed style props, bubbling
-events, forms, focus handling, controlled inputs, and mouse interactions.
-
 ## Installation
 
-`paintcannon` and `react` are peer dependencies, so install them alongside the reconciler:
+`paintcannon` and `react` are peer dependencies, so install them alongside the
+reconciler:
 
 ```bash
-npm install paintcannon paintcannon-react react
+npm install --save paintcannon paintcannon-react react
 ```
 
 ## Usage
@@ -82,13 +68,146 @@ const app = render(<Counter />, {
 await app.waitUntilExit();
 ```
 
+## API differences from Ink
+
+PaintCannon-React isn't 100% drop-in compatible with Ink: the primary
+difference is that PaintCannon expects you to use PaintCannon's native
+`<input>` and `<textarea>` components for input, rather than relying on custom
+JS reimplementations of input handling on top of React. Although this is
+_different_ thank Ink, this comes with a significant performance win: typing in
+PaintCannon is much lower latency as a result.
+
+PaintCannon is also somewhat less restrictive thank Ink: you aren't required to
+wrap text content in `<Text>` nodes. Text content Just Works inside PaintCannon
+components, just like with a regular browser.
+
+## Host Components
+
+PaintCannon exposes the following host components that mirror a subset of the
+DOM API:
+
+- `Div`
+- `Span`
+- `Input`
+- `Textarea`
+- `Button`
+- `Form`
+
+These components map to PaintCannon's DOM-like core API and support typed style
+props, bubbling events, forms, focus handling, controlled inputs, and mouse
+interactions. The subset of the React-DOM props they support is as follows:
+
+### Common props:
+
+All host components accept:
+
+- `children?: React.ReactNode`
+- `style?: CSSStyleProperties`
+- `ref?: React.Ref<Element>`
+
+All host components accept these event props:
+
+- `onKeyDown`
+- `onKeyUp`
+- `onClick`
+- `onMouseEnter`
+- `onMouseLeave`
+- `onMouseMove`
+- `onFocus`
+- `onBlur`
+- `onSubmit`
+- `onChange`
+- `onTransitionStart`
+- `onTransitionEnd`
+- `onScroll`
+
+`style` accepts the following CSS property names. Kebab-case and camelCase are
+both supported:
+
+- `display`
+- `overflow`
+- `overflow-x` / `overflowX`
+- `overflow-y` / `overflowY`
+- `image-rendering` / `imageRendering`
+- `flex-direction` / `flexDirection`
+- `flex-wrap` / `flexWrap`
+- `flex-flow` / `flexFlow`
+- `flex-basis` / `flexBasis`
+- `flex-grow` / `flexGrow`
+- `flex-shrink` / `flexShrink`
+- `flex`
+- `justify-content` / `justifyContent`
+- `align-items` / `alignItems`
+- `align-self` / `alignSelf`
+- `align-content` / `alignContent`
+- `justify-items` / `justifyItems`
+- `justify-self` / `justifySelf`
+- `gap`
+- `row-gap` / `rowGap`
+- `column-gap` / `columnGap`
+- `padding`
+- `padding-top` / `paddingTop`
+- `padding-right` / `paddingRight`
+- `padding-bottom` / `paddingBottom`
+- `padding-left` / `paddingLeft`
+- `margin`
+- `margin-top` / `marginTop`
+- `margin-right` / `marginRight`
+- `margin-bottom` / `marginBottom`
+- `margin-left` / `marginLeft`
+- `width`
+- `height`
+- `min-height` / `minHeight`
+- `max-height` / `maxHeight`
+- `white-space` / `whiteSpace`
+- `border`
+- `border-top` / `borderTop`
+- `border-right` / `borderRight`
+- `border-bottom` / `borderBottom`
+- `border-left` / `borderLeft`
+- `border-color` / `borderColor`
+- `color`
+- `placeholder-color` / `placeholderColor`
+- `transition`
+- `background`
+- `background-color` / `backgroundColor`
+- `selection-background-color` / `selectionBackgroundColor`
+- `cursor`
+- `grid-template-columns` / `gridTemplateColumns`
+- `grid-template-rows` / `gridTemplateRows`
+- `grid-auto-columns` / `gridAutoColumns`
+- `grid-auto-rows` / `gridAutoRows`
+- `grid-auto-flow` / `gridAutoFlow`
+- `grid-column` / `gridColumn`
+- `grid-row` / `gridRow`
+- `grid-column-start` / `gridColumnStart`
+- `grid-column-end` / `gridColumnEnd`
+- `grid-row-start` / `gridRowStart`
+- `grid-row-end` / `gridRowEnd`
+
+### Per-component props:
+
+- `Div`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
+- `Span`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
+- `Form`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
+- `Button`: shared props, plus `type?: "submit" | "button"`,
+  `scrollLeft?: number`, and `scrollTop?: number`.
+- `Input`: shared props, plus `type?: "text"`, `value?: string`,
+  `placeholder?: string`, `cursorPosition?: number`, and
+  `autoFocus?: boolean`.
+- `Textarea`: shared props, plus `value?: string`, `placeholder?: string`,
+  `cursorPosition?: number`, `autoFocus?: boolean`, `scrollLeft?: number`, and
+  `scrollTop?: number`. `Textarea` does not accept a `type` prop.
+
 ## Hooks
 
 `paintcannon-react` includes:
 
 - `useApp()` for exiting the rendered app from inside React.
-- `useAnimation()` for requestAnimationFrame-driven animations that share a single render cycle.
+- `useAnimation()` for requestAnimationFrame-driven animations that share a
+  single render cycle.
 
 ## Core Runtime
 
-This package depends on `paintcannon`, which provides the NAPI-RS native renderer and DOM-like API.
+This package depends on `paintcannon`, which provides the NAPI-RS native
+renderer and DOM-like API.
