@@ -3,7 +3,7 @@
 A React reconciler for `paintcannon`, built for fast terminal UIs.
 
 `paintcannon-react` lets you render React components into PaintCannon's Rust-backed terminal
-renderer. It is intended as a faster, lower-flicker alternative for terminal React interfaces
+renderer. It is intended as a faster, no-flicker alternative for terminal React interfaces
 that would otherwise use Ink.
 
 ![A cannon shooting paint](https://raw.githubusercontent.com/synthetic-lab/paintcannon/refs/heads/main/paintcannon-shot.png)
