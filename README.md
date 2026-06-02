@@ -7,48 +7,48 @@ renders to a terminal backend instead of a GUI in your window manager.
 
 PaintCannon supports the following CSS:
 
-* FlexBox
-* Grid
-* Block
-* Inline
-* Margins and padding, including auto margins
-* Overflow hidden and scroll, with native mouse scrolling
-* 24-bit RGB background, border, text, placeholder, and selection coloring with
+- FlexBox
+- Grid
+- Block
+- Inline
+- Margins and padding, including auto margins
+- Overflow hidden and scroll, with native mouse scrolling
+- 24-bit RGB background, border, text, placeholder, and selection coloring with
   256-color and 16-color fallbacks
-* CSS transitions for all color properties
-* Mouse pointer styling (in supported terminals using the kitty protocol)
+- CSS transitions for all color properties
+- Mouse pointer styling (in supported terminals using the kitty protocol)
 
 It also exposes a non-standard set of border styles, since typical
 pixel-based borders can't be rendered in terminals:
 
-* `none`
-* `solid`
-* `double`
-* `heavy`
-* `rounded`
-* `chunky-rounded`
-* `ascii`
+- `none`
+- `solid`
+- `double`
+- `heavy`
+- `rounded`
+- `chunky-rounded`
+- `ascii`
 
 PaintCannon supports the following HTML elements:
 
-* `<div>`
-* `<span>`
-* `<input type="text">`
-* `<button>`
-* `<form>`
-* `<img>` (via ANSI/ASCII rendering)
+- `<div>`
+- `<span>`
+- `<input type="text">`
+- `<button>`
+- `<form>`
+- `<img>` (via ANSI/ASCII rendering)
 
 And the following DOM events and event handlers, with bubbling,
 `stopPropagation`, and `preventDefault` support:
 
-* Click events
-* Mouse enter and leave events
-* Keyboard events
-* Input change events
-* Form submit events
-* Focus and blur events
-* Transition start and end events
-* Scroll events
+- Click events
+- Mouse enter and leave events
+- Keyboard events
+- Input change events
+- Form submit events
+- Focus and blur events
+- Transition start and end events
+- Scroll events
 
 PaintCannon also exposes a `requestAnimationFrame` function to hook into its
 paint timing, much like browsers do.

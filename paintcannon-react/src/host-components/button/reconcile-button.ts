@@ -1,16 +1,16 @@
-import type {PaintCannon} from 'paintcannon';
-import * as button from './button.ts';
-import type {MountedComponent} from '../mounted.ts';
-import {type ApplyCommonProps, applyScrollableProps} from '../reconcile-shared.ts';
+import type { PaintCannon } from "paintcannon";
+import * as button from "./button.ts";
+import type { MountedComponent } from "../mounted.ts";
+import { type ApplyCommonProps, applyScrollableProps } from "../reconcile-shared.ts";
 
 export function create(
   paintCannon: PaintCannon,
   props: button.Props,
   applyCommonProps: ApplyCommonProps,
 ): MountedComponent<typeof button> {
-  const node = paintCannon.createElement('button');
+  const node = paintCannon.createElement("button");
   applyProps(node, {}, props, applyCommonProps);
-  return { kind: 'element', type: button.type, props, children: [], node };
+  return { kind: "element", type: button.type, props, children: [], node };
 }
 
 export function applyProps(

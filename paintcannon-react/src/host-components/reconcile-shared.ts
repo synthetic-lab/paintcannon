@@ -1,7 +1,7 @@
-import type {InputElement, PaintElement, TextAreaElement} from 'paintcannon';
-import type * as input from './input/input.ts';
-import type * as textarea from './textarea/textarea.ts';
-import type {CommonProps, Scrollable} from './shared.ts';
+import type { InputElement, PaintElement, TextAreaElement } from "paintcannon";
+import type * as input from "./input/input.ts";
+import type * as textarea from "./textarea/textarea.ts";
+import type { CommonProps, Scrollable } from "./shared.ts";
 
 export type ApplyCommonProps = (
   node: PaintElement,

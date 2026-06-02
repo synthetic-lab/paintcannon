@@ -1,8 +1,8 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { performance } from 'node:perf_hooks';
-import { fileURLToPath } from 'node:url';
-import { registry } from 'antipattern';
+import fs from "node:fs";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
+import { registry } from "antipattern";
 
 const packageDirectory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,16 +24,21 @@ export interface TerminalSize {
 }
 
 export type AnimationFrameCallback = (timestamp: number) => void;
-export const KEYBOARD_EVENT_TYPES = ['keydown', 'keyup'] as const;
-export type KeyboardEventType = typeof KEYBOARD_EVENT_TYPES[number];
-export type PaintCannonEventType = KeyboardEventType | 'resize';
+export const KEYBOARD_EVENT_TYPES = ["keydown", "keyup"] as const;
+export type KeyboardEventType = (typeof KEYBOARD_EVENT_TYPES)[number];
+export type PaintCannonEventType = KeyboardEventType | "resize";
 export type KeyboardEventListener = (event: PaintKeyboardEvent) => void;
 export type ResizeEventListener = (event: PaintResizeEvent) => void;
-export const MOUSE_ELEMENT_EVENT_TYPES = ['click', 'mouseenter', 'mouseleave', 'mousemove'] as const;
-export const FOCUS_ELEMENT_EVENT_TYPES = ['focus', 'blur'] as const;
-export const FORM_ELEMENT_EVENT_TYPES = ['submit'] as const;
-export const CHANGE_ELEMENT_EVENT_TYPES = ['change'] as const;
-export const TRANSITION_ELEMENT_EVENT_TYPES = ['transitionstart', 'transitionend'] as const;
+export const MOUSE_ELEMENT_EVENT_TYPES = [
+  "click",
+  "mouseenter",
+  "mouseleave",
+  "mousemove",
+] as const;
+export const FOCUS_ELEMENT_EVENT_TYPES = ["focus", "blur"] as const;
+export const FORM_ELEMENT_EVENT_TYPES = ["submit"] as const;
+export const CHANGE_ELEMENT_EVENT_TYPES = ["change"] as const;
+export const TRANSITION_ELEMENT_EVENT_TYPES = ["transitionstart", "transitionend"] as const;
 export const ELEMENT_EVENT_TYPES = [
   ...KEYBOARD_EVENT_TYPES,
   ...MOUSE_ELEMENT_EVENT_TYPES,
@@ -41,14 +46,14 @@ export const ELEMENT_EVENT_TYPES = [
   ...FORM_ELEMENT_EVENT_TYPES,
   ...CHANGE_ELEMENT_EVENT_TYPES,
   ...TRANSITION_ELEMENT_EVENT_TYPES,
-  'scroll',
+  "scroll",
 ] as const;
-export type MouseElementEventType = typeof MOUSE_ELEMENT_EVENT_TYPES[number];
-export type FocusElementEventType = typeof FOCUS_ELEMENT_EVENT_TYPES[number];
-export type FormElementEventType = typeof FORM_ELEMENT_EVENT_TYPES[number];
-export type ChangeElementEventType = typeof CHANGE_ELEMENT_EVENT_TYPES[number];
-export type TransitionElementEventType = typeof TRANSITION_ELEMENT_EVENT_TYPES[number];
-export type ElementEventType = typeof ELEMENT_EVENT_TYPES[number];
+export type MouseElementEventType = (typeof MOUSE_ELEMENT_EVENT_TYPES)[number];
+export type FocusElementEventType = (typeof FOCUS_ELEMENT_EVENT_TYPES)[number];
+export type FormElementEventType = (typeof FORM_ELEMENT_EVENT_TYPES)[number];
+export type ChangeElementEventType = (typeof CHANGE_ELEMENT_EVENT_TYPES)[number];
+export type TransitionElementEventType = (typeof TRANSITION_ELEMENT_EVENT_TYPES)[number];
+export type ElementEventType = (typeof ELEMENT_EVENT_TYPES)[number];
 export type MouseEventListener = (event: PaintMouseEvent) => void;
 export type FocusEventListener = (event: PaintFocusEvent) => void;
 export type SubmitEventListener = (event: PaintSubmitEvent) => void;
@@ -73,41 +78,41 @@ export type ElementEventListenerMap = {
 export type ElementEventListenerFor<T extends ElementEventType> = ElementEventListenerMap[T];
 type ElementEventListener = ElementEventListenerFor<ElementEventType>;
 export type ClickEventListener = MouseEventListener;
-export type ImageRendering = 'ascii' | 'half-block';
-export type CSSWhiteSpace = 'normal' | 'nowrap' | 'pre' | 'pre-wrap' | 'pre-line';
+export type ImageRendering = "ascii" | "half-block";
+export type CSSWhiteSpace = "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
 export type CSSStyleValue = string | number;
 export type CSSCursor =
-  | 'auto'
-  | 'alias'
-  | 'cell'
-  | 'copy'
-  | 'crosshair'
-  | 'default'
-  | 'e-resize'
-  | 'ew-resize'
-  | 'grab'
-  | 'grabbing'
-  | 'help'
-  | 'move'
-  | 'n-resize'
-  | 'ne-resize'
-  | 'nesw-resize'
-  | 'no-drop'
-  | 'not-allowed'
-  | 'ns-resize'
-  | 'nw-resize'
-  | 'nwse-resize'
-  | 'pointer'
-  | 'progress'
-  | 's-resize'
-  | 'se-resize'
-  | 'sw-resize'
-  | 'text'
-  | 'vertical-text'
-  | 'w-resize'
-  | 'wait'
-  | 'zoom-in'
-  | 'zoom-out';
+  | "auto"
+  | "alias"
+  | "cell"
+  | "copy"
+  | "crosshair"
+  | "default"
+  | "e-resize"
+  | "ew-resize"
+  | "grab"
+  | "grabbing"
+  | "help"
+  | "move"
+  | "n-resize"
+  | "ne-resize"
+  | "nesw-resize"
+  | "no-drop"
+  | "not-allowed"
+  | "ns-resize"
+  | "nw-resize"
+  | "nwse-resize"
+  | "pointer"
+  | "progress"
+  | "s-resize"
+  | "se-resize"
+  | "sw-resize"
+  | "text"
+  | "vertical-text"
+  | "w-resize"
+  | "wait"
+  | "zoom-in"
+  | "zoom-out";
 
 export interface NativeKeyboardEvent {
   type: KeyboardEventType;
@@ -163,7 +168,7 @@ export class PaintKeyboardEvent {
 export type KeyboardEvent = PaintKeyboardEvent;
 
 export interface TerminalMouseEvent {
-  type: 'click' | 'mousemove' | 'wheel' | string;
+  type: "click" | "mousemove" | "wheel" | string;
   x: number;
   y: number;
   button: number;
@@ -187,7 +192,7 @@ export interface NativeTransitionEvent {
 }
 
 export interface NativeClickEvent {
-  type: 'click';
+  type: "click";
   targetId: number;
   clientX: number;
   clientY: number;
@@ -290,18 +295,39 @@ export interface NativeBinding {
 }
 
 type TextControlElement = InputElement | TextAreaElement;
-export const PAINT_ELEMENT_TAG_NAMES = ['div', 'span', 'form', 'button', 'img', 'input', 'textarea'] as const;
-export type PaintElementTagName = typeof PAINT_ELEMENT_TAG_NAMES[number];
-export type PaintElementForTagName<T extends PaintElementTagName> =
-  T extends 'div' ? DivElement :
-  T extends 'span' ? SpanElement :
-  T extends 'form' ? FormElement :
-  T extends 'button' ? ButtonElement :
-  T extends 'img' ? ImageElement :
-  T extends 'input' ? InputElement :
-  T extends 'textarea' ? TextAreaElement :
-  never;
-export type PaintElement = DivElement | SpanElement | FormElement | ButtonElement | ImageElement | InputElement | TextAreaElement;
+export const PAINT_ELEMENT_TAG_NAMES = [
+  "div",
+  "span",
+  "form",
+  "button",
+  "img",
+  "input",
+  "textarea",
+] as const;
+export type PaintElementTagName = (typeof PAINT_ELEMENT_TAG_NAMES)[number];
+export type PaintElementForTagName<T extends PaintElementTagName> = T extends "div"
+  ? DivElement
+  : T extends "span"
+    ? SpanElement
+    : T extends "form"
+      ? FormElement
+      : T extends "button"
+        ? ButtonElement
+        : T extends "img"
+          ? ImageElement
+          : T extends "input"
+            ? InputElement
+            : T extends "textarea"
+              ? TextAreaElement
+              : never;
+export type PaintElement =
+  | DivElement
+  | SpanElement
+  | FormElement
+  | ButtonElement
+  | ImageElement
+  | InputElement
+  | TextAreaElement;
 export type PaintNode = PaintElement | TextNode;
 
 export const paintCannonDeps = registry({
@@ -334,18 +360,18 @@ function installProcessCleanupHandlers(): void {
   }
 
   processCleanupInstalled = true;
-  process.once('exit', cleanupLivePaintCannons);
-  process.prependListener('uncaughtExceptionMonitor', cleanupLivePaintCannons);
-  process.prependListener('unhandledRejection', (reason) => {
+  process.once("exit", cleanupLivePaintCannons);
+  process.prependListener("uncaughtExceptionMonitor", cleanupLivePaintCannons);
+  process.prependListener("unhandledRejection", reason => {
     cleanupLivePaintCannons();
-    if (process.listenerCount('unhandledRejection') === 1) {
+    if (process.listenerCount("unhandledRejection") === 1) {
       setImmediate(() => {
         throw reason instanceof Error ? reason : new Error(String(reason));
       });
     }
   });
 
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     const handler: NodeJS.SignalsListener = () => {
       if (handlingFatalError) {
         return;
@@ -422,7 +448,7 @@ export class PaintCannon {
     this.captureCtrlZ = options.captureCtrlZ ?? false;
     this.captureMouse = options.captureMouse ?? false;
     registerLivePaintCannon(this);
-    process.on('SIGCONT', this.handleSigcont);
+    process.on("SIGCONT", this.handleSigcont);
     if (options.syntheticKeyupDelayMs !== undefined) {
       this.setSyntheticKeyupDelay(options.syntheticKeyupDelayMs);
     }
@@ -431,7 +457,7 @@ export class PaintCannon {
 
   createElement<T extends PaintElementTagName>(tagName: T): PaintElementForTagName<T>;
   createElement(tagName: string): PaintElement {
-    if (tagName === 'div') {
+    if (tagName === "div") {
       const element = new DivElement(
         this,
         this.createNativeDiv(),
@@ -442,7 +468,7 @@ export class PaintCannon {
       this.registerElement(element);
       return element;
     }
-    if (tagName === 'span') {
+    if (tagName === "span") {
       const element = new SpanElement(
         this,
         this.createNativeSpan(),
@@ -453,7 +479,7 @@ export class PaintCannon {
       this.registerElement(element);
       return element;
     }
-    if (tagName === 'form') {
+    if (tagName === "form") {
       const element = new FormElement(
         this,
         this.createNativeDiv(),
@@ -464,7 +490,7 @@ export class PaintCannon {
       this.registerElement(element);
       return element;
     }
-    if (tagName === 'button') {
+    if (tagName === "button") {
       const element = new ButtonElement(
         this,
         this.createNativeDiv(),
@@ -475,7 +501,7 @@ export class PaintCannon {
       this.registerElement(element);
       return element;
     }
-    if (tagName === 'img') {
+    if (tagName === "img") {
       const element = new ImageElement(
         this,
         this.createNativeImage(),
@@ -485,7 +511,7 @@ export class PaintCannon {
       this.registerElement(element);
       return element;
     }
-    if (tagName === 'input') {
+    if (tagName === "input") {
       const element = new InputElement(
         this,
         this.createNativeInput(),
@@ -499,7 +525,7 @@ export class PaintCannon {
       this.textControls.push(element);
       return element;
     }
-    if (tagName === 'textarea') {
+    if (tagName === "textarea") {
       const element = new TextAreaElement(
         this,
         this.createNativeTextArea(),
@@ -515,7 +541,7 @@ export class PaintCannon {
       return element;
     }
 
-    const supported = PAINT_ELEMENT_TAG_NAMES.map((tag) => `<${tag}>`).join(', ');
+    const supported = PAINT_ELEMENT_TAG_NAMES.map(tag => `<${tag}>`).join(", ");
     throw new Error(`paintcannon only supports ${supported} right now, got <${tagName}>`);
   }
 
@@ -565,7 +591,7 @@ export class PaintCannon {
 
   requestAnimationFrame(callback: AnimationFrameCallback): number {
     if (this.stopped) {
-      throw new Error('paintcannon renderer has been stopped');
+      throw new Error("paintcannon renderer has been stopped");
     }
 
     const id = this.nextAnimationFrameId++;
@@ -603,7 +629,7 @@ export class PaintCannon {
 
   beginTransaction(): void {
     if (this.stopped) {
-      throw new Error('paintcannon renderer has been stopped');
+      throw new Error("paintcannon renderer has been stopped");
     }
 
     this.transactionDepth += 1;
@@ -611,7 +637,7 @@ export class PaintCannon {
 
   commitTransaction(): void {
     if (this.transactionDepth <= 0) {
-      throw new Error('no active paintcannon transaction to commit');
+      throw new Error("no active paintcannon transaction to commit");
     }
 
     this.transactionDepth -= 1;
@@ -621,17 +647,20 @@ export class PaintCannon {
   }
 
   addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  addEventListener(type: 'resize', listener: ResizeEventListener): void;
-  addEventListener(type: PaintCannonEventType, listener: KeyboardEventListener | ResizeEventListener): void {
-    if (type !== 'keydown' && type !== 'keyup' && type !== 'resize') {
+  addEventListener(type: "resize", listener: ResizeEventListener): void;
+  addEventListener(
+    type: PaintCannonEventType,
+    listener: KeyboardEventListener | ResizeEventListener,
+  ): void {
+    if (type !== "keydown" && type !== "keyup" && type !== "resize") {
       throw new Error(`unsupported event type: ${type}`);
     }
 
     if (this.stopped) {
-      throw new Error('paintcannon renderer has been stopped');
+      throw new Error("paintcannon renderer has been stopped");
     }
 
-    if (type === 'resize') {
+    if (type === "resize") {
       this.resizeEventListeners.add(listener as ResizeEventListener);
     } else {
       this.keyboardEventListeners[type].add(listener as KeyboardEventListener);
@@ -640,13 +669,16 @@ export class PaintCannon {
   }
 
   removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  removeEventListener(type: 'resize', listener: ResizeEventListener): void;
-  removeEventListener(type: PaintCannonEventType, listener: KeyboardEventListener | ResizeEventListener): void {
-    if (type !== 'keydown' && type !== 'keyup' && type !== 'resize') {
+  removeEventListener(type: "resize", listener: ResizeEventListener): void;
+  removeEventListener(
+    type: PaintCannonEventType,
+    listener: KeyboardEventListener | ResizeEventListener,
+  ): void {
+    if (type !== "keydown" && type !== "keyup" && type !== "resize") {
       return;
     }
 
-    if (type === 'resize') {
+    if (type === "resize") {
       this.resizeEventListeners.delete(listener as ResizeEventListener);
     } else {
       this.keyboardEventListeners[type].delete(listener as KeyboardEventListener);
@@ -667,7 +699,7 @@ export class PaintCannon {
     }
 
     if (this.stopped) {
-      throw new Error('paintcannon renderer has been stopped');
+      throw new Error("paintcannon renderer has been stopped");
     }
 
     let eventListeners = this.elementEventListeners.get(element.id);
@@ -747,7 +779,7 @@ export class PaintCannon {
     this.hoveredElement = undefined;
     this.rootElement = undefined;
     livePaintCannons.delete(this);
-    process.off('SIGCONT', this.handleSigcont);
+    process.off("SIGCONT", this.handleSigcont);
     this.binding.stop();
   }
 
@@ -766,7 +798,7 @@ export class PaintCannon {
       this.keyboardEventTimer = undefined;
     }
     livePaintCannons.delete(this);
-    process.off('SIGCONT', this.handleSigcont);
+    process.off("SIGCONT", this.handleSigcont);
     this.binding.releaseTerminal();
     this.binding.stop();
   }
@@ -817,7 +849,7 @@ export class PaintCannon {
     }
 
     const id = this.allocateTemporaryId();
-    this.batchCommands.push({ type: 'createDiv', id });
+    this.batchCommands.push({ type: "createDiv", id });
     return id;
   }
 
@@ -827,7 +859,7 @@ export class PaintCannon {
     }
 
     const id = this.allocateTemporaryId();
-    this.batchCommands.push({ type: 'createSpan', id });
+    this.batchCommands.push({ type: "createSpan", id });
     return id;
   }
 
@@ -837,7 +869,7 @@ export class PaintCannon {
     }
 
     const id = this.allocateTemporaryId();
-    this.batchCommands.push({ type: 'createImage', id });
+    this.batchCommands.push({ type: "createImage", id });
     return id;
   }
 
@@ -847,7 +879,7 @@ export class PaintCannon {
     }
 
     const id = this.allocateTemporaryId();
-    this.batchCommands.push({ type: 'createInput', id });
+    this.batchCommands.push({ type: "createInput", id });
     return id;
   }
 
@@ -857,7 +889,7 @@ export class PaintCannon {
     }
 
     const id = this.allocateTemporaryId();
-    this.batchCommands.push({ type: 'createTextArea', id });
+    this.batchCommands.push({ type: "createTextArea", id });
     return id;
   }
 
@@ -867,13 +899,13 @@ export class PaintCannon {
     }
 
     const id = this.allocateTemporaryId();
-    this.batchCommands.push({ type: 'createText', id, text });
+    this.batchCommands.push({ type: "createText", id, text });
     return id;
   }
 
   private setNativeTextNodeValue(id: number, text: string): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'setText', id, text });
+      this.batchCommands.push({ type: "setText", id, text });
       return;
     }
 
@@ -882,7 +914,7 @@ export class PaintCannon {
 
   private setNativeImageSource(id: number, src: string): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'setImageSource', id, src });
+      this.batchCommands.push({ type: "setImageSource", id, src });
       return;
     }
 
@@ -891,7 +923,7 @@ export class PaintCannon {
 
   private setNativeInputValue(id: number, value: string, cursor: number): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'setInputValue', id, value, cursor });
+      this.batchCommands.push({ type: "setInputValue", id, value, cursor });
       return;
     }
 
@@ -900,7 +932,7 @@ export class PaintCannon {
 
   private setNativeInputFocused(id: number, focused: boolean): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'setInputFocused', id, focused });
+      this.batchCommands.push({ type: "setInputFocused", id, focused });
       return;
     }
 
@@ -909,7 +941,7 @@ export class PaintCannon {
 
   private setNativeInputPlaceholder(id: number, placeholder: string): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'setInputPlaceholder', id, placeholder });
+      this.batchCommands.push({ type: "setInputPlaceholder", id, placeholder });
       return;
     }
 
@@ -918,7 +950,7 @@ export class PaintCannon {
 
   private setNativeTextAreaValue(id: number, value: string, cursor: number): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'setTextAreaValue', id, value, cursor });
+      this.batchCommands.push({ type: "setTextAreaValue", id, value, cursor });
       return;
     }
 
@@ -927,7 +959,7 @@ export class PaintCannon {
 
   private setNativeTextAreaFocused(id: number, focused: boolean): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'setTextAreaFocused', id, focused });
+      this.batchCommands.push({ type: "setTextAreaFocused", id, focused });
       return;
     }
 
@@ -936,7 +968,7 @@ export class PaintCannon {
 
   private setNativeTextAreaPlaceholder(id: number, placeholder: string): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'setTextAreaPlaceholder', id, placeholder });
+      this.batchCommands.push({ type: "setTextAreaPlaceholder", id, placeholder });
       return;
     }
 
@@ -945,7 +977,7 @@ export class PaintCannon {
 
   private setNativeRoot(id: number): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'setRoot', id });
+      this.batchCommands.push({ type: "setRoot", id });
       return;
     }
 
@@ -954,7 +986,7 @@ export class PaintCannon {
 
   private appendNativeChild(parent: PaintElement, child: PaintNode): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'appendChild', parent: parent.id, child: child.id });
+      this.batchCommands.push({ type: "appendChild", parent: parent.id, child: child.id });
     } else {
       this.binding.appendChild(parent.id, child.id);
     }
@@ -965,7 +997,7 @@ export class PaintCannon {
   private insertNativeChildBefore(parent: PaintElement, child: PaintNode, before: PaintNode): void {
     if (this.isTransactionActive()) {
       this.batchCommands.push({
-        type: 'insertChildBefore',
+        type: "insertChildBefore",
         parent: parent.id,
         child: child.id,
         before: before.id,
@@ -981,7 +1013,7 @@ export class PaintCannon {
     assertElement(parent);
     assertPaintNode(child);
     if (this.parents.get(child.id) !== parent) {
-      throw new Error('node is not a child of this parent');
+      throw new Error("node is not a child of this parent");
     }
 
     this.detachNativeNode(child.id);
@@ -1009,7 +1041,7 @@ export class PaintCannon {
 
   private detachNativeNode(id: number): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'detachNode', id });
+      this.batchCommands.push({ type: "detachNode", id });
       return;
     }
 
@@ -1018,7 +1050,7 @@ export class PaintCannon {
 
   private destroyNativeNode(id: number): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'destroyNode', id });
+      this.batchCommands.push({ type: "destroyNode", id });
       return;
     }
 
@@ -1045,11 +1077,11 @@ export class PaintCannon {
       this.focusedTextControl = undefined;
     }
     if (this.hoveredElement !== undefined && ids.has(this.hoveredElement.id)) {
-        this.hoveredElement = undefined;
-      }
-      if (this.rootElement !== undefined && ids.has(this.rootElement.id)) {
-        this.rootElement = undefined;
-      }
+      this.hoveredElement = undefined;
+    }
+    if (this.rootElement !== undefined && ids.has(this.rootElement.id)) {
+      this.rootElement = undefined;
+    }
   }
 
   private cleanupDestroyedNode(node: PaintNode): void {
@@ -1106,7 +1138,7 @@ export class PaintCannon {
 
   private setNativeStyleProperty(id: number, property: string, value: string): void {
     if (this.isTransactionActive()) {
-      this.batchCommands.push({ type: 'setStyleProperty', id, property, value });
+      this.batchCommands.push({ type: "setStyleProperty", id, property, value });
       return;
     }
 
@@ -1160,7 +1192,7 @@ export class PaintCannon {
       return;
     }
 
-    const ids = new Map(mappings.map((mapping) => [mapping.temporaryId, mapping.id]));
+    const ids = new Map(mappings.map(mapping => [mapping.temporaryId, mapping.id]));
     for (const [temporaryId, node] of this.batchNodes) {
       const id = ids.get(temporaryId);
       if (id !== undefined) {
@@ -1251,11 +1283,7 @@ export class PaintCannon {
   }
 
   private scheduleKeyboardEventPump(): void {
-    if (
-      this.stopped ||
-      this.keyboardEventTimer !== undefined ||
-      !this.shouldPumpInputEvents()
-    ) {
+    if (this.stopped || this.keyboardEventTimer !== undefined || !this.shouldPumpInputEvents()) {
       return;
     }
 
@@ -1346,10 +1374,10 @@ export class PaintCannon {
     return (
       this.keyboardListenerCount() > 0 ||
       this.resizeEventListeners.size > 0 ||
-      this.hasElementEventListeners('transitionstart') ||
-      this.hasElementEventListeners('transitionend') ||
-      this.hasElementEventListeners('keydown') ||
-      this.hasElementEventListeners('keyup') ||
+      this.hasElementEventListeners("transitionstart") ||
+      this.hasElementEventListeners("transitionend") ||
+      this.hasElementEventListeners("keydown") ||
+      this.hasElementEventListeners("keyup") ||
       this.textControls.length > 0 ||
       !this.captureCtrlZ ||
       this.captureMouse
@@ -1357,11 +1385,11 @@ export class PaintCannon {
   }
 
   private handleDefaultControlEvent(event: KeyboardEvent): boolean {
-    if (event.type !== 'keydown' || !event.ctrlKey) {
+    if (event.type !== "keydown" || !event.ctrlKey) {
       return false;
     }
 
-    if (!this.captureCtrlZ && event.code === 'KeyZ') {
+    if (!this.captureCtrlZ && event.code === "KeyZ") {
       this.binding.releaseTerminal();
       this.suspendedByPaintCannon = true;
       try {
@@ -1378,11 +1406,11 @@ export class PaintCannon {
   }
 
   private handleDefaultInputEvent(event: KeyboardEvent): boolean {
-    if (event.type !== 'keydown') {
+    if (event.type !== "keydown") {
       return false;
     }
 
-    if (!event.ctrlKey && !event.altKey && !event.metaKey && event.key === 'Tab') {
+    if (!event.ctrlKey && !event.altKey && !event.metaKey && event.key === "Tab") {
       return this.focusNextInput(event.shiftKey ? -1 : 1);
     }
 
@@ -1396,43 +1424,43 @@ export class PaintCannon {
     }
 
     switch (event.key) {
-      case 'Backspace':
+      case "Backspace":
         return input.deleteBackward();
-      case 'Delete':
+      case "Delete":
         return input.deleteForward();
-      case 'ArrowLeft':
+      case "ArrowLeft":
         input.cursorPosition -= 1;
         return true;
-      case 'ArrowRight':
+      case "ArrowRight":
         input.cursorPosition += 1;
         return true;
-      case 'ArrowUp':
+      case "ArrowUp":
         if (input instanceof TextAreaElement) {
           return input.moveCursorVertically(-1);
         }
         return false;
-      case 'ArrowDown':
+      case "ArrowDown":
         if (input instanceof TextAreaElement) {
           return input.moveCursorVertically(1);
         }
         return false;
-      case 'Home':
+      case "Home":
         if (input instanceof TextAreaElement) {
           moveTextAreaCursorToLineStart(input);
         } else {
           input.cursorToStart();
         }
         return true;
-      case 'End':
+      case "End":
         if (input instanceof TextAreaElement) {
           moveTextAreaCursorToLineEnd(input);
         } else {
           input.cursorToEnd();
         }
         return true;
-      case 'Enter':
+      case "Enter":
         if (input instanceof TextAreaElement) {
-          input.insertText('\n');
+          input.insertText("\n");
           return true;
         }
         return this.submitInputForm(input);
@@ -1447,35 +1475,35 @@ export class PaintCannon {
 
   private handleInputControlKey(input: InputElement, event: KeyboardEvent): boolean {
     switch (event.code) {
-      case 'KeyA':
+      case "KeyA":
         if (input instanceof TextAreaElement) {
           moveTextAreaCursorToLineStart(input);
         } else {
           input.cursorToStart();
         }
         return true;
-      case 'KeyE':
+      case "KeyE":
         if (input instanceof TextAreaElement) {
           moveTextAreaCursorToLineEnd(input);
         } else {
           input.cursorToEnd();
         }
         return true;
-      case 'KeyB':
+      case "KeyB":
         input.cursorPosition -= 1;
         return true;
-      case 'KeyF':
+      case "KeyF":
         input.cursorPosition += 1;
         return true;
-      case 'KeyD':
+      case "KeyD":
         return input.deleteForward();
-      case 'KeyH':
+      case "KeyH":
         return input.deleteBackward();
-      case 'KeyK':
+      case "KeyK":
         return input.deleteToEnd();
-      case 'KeyU':
+      case "KeyU":
         return input.deleteToStart();
-      case 'KeyW':
+      case "KeyW":
         return input.deletePreviousWord();
       default:
         return false;
@@ -1492,7 +1520,7 @@ export class PaintCannon {
     }
     this.focusedTextControl = element;
     element.setFocused(true);
-    this.dispatchFocusEvent('focus', element);
+    this.dispatchFocusEvent("focus", element);
     this.render();
   }
 
@@ -1510,7 +1538,7 @@ export class PaintCannon {
     if (syncNative) {
       element.setFocused(false);
     }
-    this.dispatchFocusEvent('blur', element);
+    this.dispatchFocusEvent("blur", element);
   }
 
   private focusNextInput(direction: 1 | -1): boolean {
@@ -1518,12 +1546,11 @@ export class PaintCannon {
       return false;
     }
 
-    const currentIndex = this.focusedTextControl === undefined
-      ? -1
-      : this.textControls.indexOf(this.focusedTextControl);
-    const start = currentIndex < 0
-      ? (direction === 1 ? -1 : 0)
-      : currentIndex;
+    const currentIndex =
+      this.focusedTextControl === undefined
+        ? -1
+        : this.textControls.indexOf(this.focusedTextControl);
+    const start = currentIndex < 0 ? (direction === 1 ? -1 : 0) : currentIndex;
     const nextIndex = (start + direction + this.textControls.length) % this.textControls.length;
     this.focusInput(this.textControls[nextIndex]);
     return true;
@@ -1573,37 +1600,42 @@ export class PaintCannon {
   }
 
   private handleTerminalMouseEvent(input: TerminalMouseEvent): boolean {
-    if (input.type === 'wheel') {
+    if (input.type === "wheel") {
       return this.handleWheelEvent(input);
     }
 
-    const hasMouseEnter = this.hasElementEventListeners('mouseenter');
-    const hasMouseLeave = this.hasElementEventListeners('mouseleave');
-    const hasMouseMove = this.hasElementEventListeners('mousemove');
-    const hasClick = this.hasElementEventListeners('click');
+    const hasMouseEnter = this.hasElementEventListeners("mouseenter");
+    const hasMouseLeave = this.hasElementEventListeners("mouseleave");
+    const hasMouseMove = this.hasElementEventListeners("mousemove");
+    const hasClick = this.hasElementEventListeners("click");
 
-    if (input.type === 'mousemove' && !hasMouseEnter && !hasMouseLeave && !hasMouseMove) {
+    if (input.type === "mousemove" && !hasMouseEnter && !hasMouseLeave && !hasMouseMove) {
       return false;
     }
 
     const targetId = this.binding.targetIdForPoint(input.x, input.y);
     const target = targetId === null ? undefined : this.elements.get(targetId);
 
-    if (input.type === 'click' && !hasClick && !isTextControl(target) && !(target instanceof ButtonElement)) {
+    if (
+      input.type === "click" &&
+      !hasClick &&
+      !isTextControl(target) &&
+      !(target instanceof ButtonElement)
+    ) {
       return false;
     }
 
-    if (input.type === 'mousemove') {
+    if (input.type === "mousemove") {
       if (hasMouseEnter || hasMouseLeave) {
         this.dispatchHoverBoundaryEvents(target, input);
       }
       if (target !== undefined && hasMouseMove) {
-        this.dispatchMouseEvent('mousemove', target, input, true);
+        this.dispatchMouseEvent("mousemove", target, input, true);
       }
       return true;
     }
 
-    if (input.type === 'click' && target !== undefined) {
+    if (input.type === "click" && target !== undefined) {
       let handled = false;
       if (isTextControl(target)) {
         this.focusInput(target);
@@ -1611,7 +1643,7 @@ export class PaintCannon {
         handled = true;
       }
       if (hasClick) {
-        const event = this.dispatchMouseEvent('click', target, input, true);
+        const event = this.dispatchMouseEvent("click", target, input, true);
         if (target instanceof ButtonElement && !event.defaultPrevented) {
           handled = this.submitButtonForm(target) || handled;
         }
@@ -1638,8 +1670,8 @@ export class PaintCannon {
     }
 
     const current = this.getScrollMetrics(scrollTarget) ?? emptyScrollMetrics();
-    const canScrollX = isElementAxisScrollable(scrollTarget, 'x');
-    const canScrollY = isElementAxisScrollable(scrollTarget, 'y');
+    const canScrollX = isElementAxisScrollable(scrollTarget, "x");
+    const canScrollY = isElementAxisScrollable(scrollTarget, "y");
     const nextLeft = canScrollX ? current.scrollLeft + input.deltaX * 4 : current.scrollLeft;
     const nextTop = canScrollY ? current.scrollTop + input.deltaY * 3 : current.scrollTop;
 
@@ -1658,8 +1690,8 @@ export class PaintCannon {
     deltaY: number,
   ): PaintElement | undefined {
     for (const element of this.elementPath(target)) {
-      const canScrollX = deltaX !== 0 && isElementAxisScrollable(element, 'x');
-      const canScrollY = deltaY !== 0 && isElementAxisScrollable(element, 'y');
+      const canScrollX = deltaX !== 0 && isElementAxisScrollable(element, "x");
+      const canScrollY = deltaY !== 0 && isElementAxisScrollable(element, "y");
       if (canScrollX || canScrollY) {
         return element;
       }
@@ -1667,25 +1699,28 @@ export class PaintCannon {
     return undefined;
   }
 
-  private dispatchHoverBoundaryEvents(nextHoveredElement: PaintElement | undefined, input: TerminalMouseEvent): void {
+  private dispatchHoverBoundaryEvents(
+    nextHoveredElement: PaintElement | undefined,
+    input: TerminalMouseEvent,
+  ): void {
     if (nextHoveredElement === this.hoveredElement) {
       return;
     }
 
     const previousPath = this.elementPath(this.hoveredElement);
     const nextPath = this.elementPath(nextHoveredElement);
-    const nextIds = new Set(nextPath.map((element) => element.id));
-    const previousIds = new Set(previousPath.map((element) => element.id));
+    const nextIds = new Set(nextPath.map(element => element.id));
+    const previousIds = new Set(previousPath.map(element => element.id));
 
     for (const element of previousPath) {
       if (!nextIds.has(element.id)) {
-        this.dispatchMouseEvent('mouseleave', element, input, false);
+        this.dispatchMouseEvent("mouseleave", element, input, false);
       }
     }
 
     for (const element of nextPath.slice().reverse()) {
       if (!previousIds.has(element.id)) {
-        this.dispatchMouseEvent('mouseenter', element, input, false);
+        this.dispatchMouseEvent("mouseenter", element, input, false);
       }
     }
 
@@ -1748,7 +1783,7 @@ export class PaintCannon {
   }
 
   private submitButtonForm(button: ButtonElement): boolean {
-    if (button.type !== 'submit') {
+    if (button.type !== "submit") {
       return false;
     }
 
@@ -1793,9 +1828,7 @@ export class PaintCannon {
     let currentTarget: PaintElement | undefined = target;
     while (currentTarget !== undefined) {
       event.setCurrentTarget(currentTarget);
-      const listeners = Array.from(
-        this.elementEventListeners.get(currentTarget.id)?.[type] ?? [],
-      );
+      const listeners = Array.from(this.elementEventListeners.get(currentTarget.id)?.[type] ?? []);
       for (const listener of listeners) {
         (listener as MouseEventListener)(event);
         if (event.propagationStopped) {
@@ -2041,7 +2074,7 @@ export class PaintFocusEvent {
 }
 
 export class PaintSubmitEvent {
-  readonly type: FormElementEventType = 'submit';
+  readonly type: FormElementEventType = "submit";
   readonly target: FormElement;
   currentTarget: PaintElement;
   readonly submitter: InputElement | ButtonElement;
@@ -2068,7 +2101,7 @@ export class PaintSubmitEvent {
 }
 
 export class PaintChangeEvent {
-  readonly type: ChangeElementEventType = 'change';
+  readonly type: ChangeElementEventType = "change";
   readonly target: TextControlElement;
   currentTarget: PaintElement;
   defaultPrevented = false;
@@ -2093,7 +2126,7 @@ export class PaintChangeEvent {
 }
 
 export class PaintScrollEvent {
-  readonly type: 'scroll' = 'scroll';
+  readonly type: "scroll" = "scroll";
   readonly target: PaintElement;
   currentTarget: PaintElement;
   readonly scrollLeft: number;
@@ -2130,7 +2163,7 @@ export class PaintScrollEvent {
 }
 
 export class PaintResizeEvent {
-  readonly type: 'resize' = 'resize';
+  readonly type: "resize" = "resize";
   readonly cols: number;
   readonly rows: number;
 
@@ -2176,15 +2209,16 @@ export class DivElement {
     owner: PaintCannon,
     id: number,
     private readonly appendNativeChild: (parent: PaintElement, child: PaintNode) => void,
-    private readonly insertNativeChildBefore: (parent: PaintElement, child: PaintNode, before: PaintNode) => void,
+    private readonly insertNativeChildBefore: (
+      parent: PaintElement,
+      child: PaintNode,
+      before: PaintNode,
+    ) => void,
     setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {
     this.ownerDocument = owner;
     this.id = id;
-    this.style = new CSSStyleDeclaration(
-      () => this.id,
-      setNativeStyleProperty,
-    );
+    this.style = new CSSStyleDeclaration(() => this.id, setNativeStyleProperty);
   }
 
   id: number;
@@ -2251,7 +2285,7 @@ export class DivElement {
   addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   addEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
   addEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  addEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  addEventListener(type: "scroll", listener: ScrollEventListener): void;
   addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   addEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
@@ -2262,7 +2296,7 @@ export class DivElement {
   removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   removeEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
   removeEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  removeEventListener(type: "scroll", listener: ScrollEventListener): void;
   removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
@@ -2272,16 +2306,18 @@ export class DivElement {
 export class FormElement extends DivElement {}
 
 export class ButtonElement extends DivElement {
-  private buttonType: 'submit' | 'button' = 'submit';
+  private buttonType: "submit" | "button" = "submit";
 
-  get type(): 'submit' | 'button' {
+  get type(): "submit" | "button" {
     return this.buttonType;
   }
 
   set type(value: string) {
     const next = String(value);
-    if (next !== 'submit' && next !== 'button') {
-      throw new Error(`paintcannon only supports <button type="submit"> and <button type="button"> right now, got "${next}"`);
+    if (next !== "submit" && next !== "button") {
+      throw new Error(
+        `paintcannon only supports <button type="submit"> and <button type="button"> right now, got "${next}"`,
+      );
     }
     this.buttonType = next;
   }
@@ -2295,15 +2331,16 @@ export class SpanElement {
     owner: PaintCannon,
     id: number,
     private readonly appendNativeChild: (parent: PaintElement, child: PaintNode) => void,
-    private readonly insertNativeChildBefore: (parent: PaintElement, child: PaintNode, before: PaintNode) => void,
+    private readonly insertNativeChildBefore: (
+      parent: PaintElement,
+      child: PaintNode,
+      before: PaintNode,
+    ) => void,
     setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {
     this.ownerDocument = owner;
     this.id = id;
-    this.style = new CSSStyleDeclaration(
-      () => this.id,
-      setNativeStyleProperty,
-    );
+    this.style = new CSSStyleDeclaration(() => this.id, setNativeStyleProperty);
   }
 
   id: number;
@@ -2370,7 +2407,7 @@ export class SpanElement {
   addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   addEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
   addEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  addEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  addEventListener(type: "scroll", listener: ScrollEventListener): void;
   addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   addEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
@@ -2381,7 +2418,7 @@ export class SpanElement {
   removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   removeEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
   removeEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
+  removeEventListener(type: "scroll", listener: ScrollEventListener): void;
   removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
   removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
@@ -2392,7 +2429,7 @@ export class ImageElement {
   readonly ownerDocument: PaintCannon;
   readonly style: CSSStyleDeclaration;
   id: number;
-  private source = '';
+  private source = "";
 
   constructor(
     owner: PaintCannon,
@@ -2402,10 +2439,7 @@ export class ImageElement {
   ) {
     this.ownerDocument = owner;
     this.id = id;
-    this.style = new CSSStyleDeclaration(
-      () => this.id,
-      setNativeStyleProperty,
-    );
+    this.style = new CSSStyleDeclaration(() => this.id, setNativeStyleProperty);
   }
 
   get src(): string {
@@ -2448,9 +2482,9 @@ export class InputElement {
   readonly ownerDocument: PaintCannon;
   readonly style: CSSStyleDeclaration;
   id: number;
-  private inputType = 'text';
-  private inputValue = '';
-  private placeholderValue = '';
+  private inputType = "text";
+  private inputValue = "";
+  private placeholderValue = "";
   private cursor = 0;
   private focused = false;
 
@@ -2465,10 +2499,7 @@ export class InputElement {
   ) {
     this.ownerDocument = owner;
     this.id = id;
-    this.style = new CSSStyleDeclaration(
-      () => this.id,
-      setNativeStyleProperty,
-    );
+    this.style = new CSSStyleDeclaration(() => this.id, setNativeStyleProperty);
   }
 
   get type(): string {
@@ -2477,7 +2508,7 @@ export class InputElement {
 
   set type(value: string) {
     const next = String(value);
-    if (next !== 'text') {
+    if (next !== "text") {
       throw new Error(`paintcannon only supports <input type="text"> right now, got "${next}"`);
     }
     this.inputType = next;
@@ -2567,7 +2598,7 @@ export class InputElement {
     const chars = Array.from(this.inputValue);
     const insert = Array.from(text);
     chars.splice(this.cursor, 0, ...insert);
-    this.inputValue = chars.join('');
+    this.inputValue = chars.join("");
     this.cursor += insert.length;
     this.syncValue();
   }
@@ -2580,7 +2611,7 @@ export class InputElement {
     const chars = Array.from(this.inputValue);
     chars.splice(this.cursor - 1, 1);
     this.cursor -= 1;
-    this.inputValue = chars.join('');
+    this.inputValue = chars.join("");
     this.syncValue();
     return true;
   }
@@ -2592,7 +2623,7 @@ export class InputElement {
     }
 
     chars.splice(this.cursor, 1);
-    this.inputValue = chars.join('');
+    this.inputValue = chars.join("");
     this.syncValue();
     return true;
   }
@@ -2604,7 +2635,7 @@ export class InputElement {
 
     const chars = Array.from(this.inputValue);
     chars.splice(0, this.cursor);
-    this.inputValue = chars.join('');
+    this.inputValue = chars.join("");
     this.cursor = 0;
     this.syncValue();
     return true;
@@ -2617,7 +2648,7 @@ export class InputElement {
     }
 
     chars.splice(this.cursor);
-    this.inputValue = chars.join('');
+    this.inputValue = chars.join("");
     this.syncValue();
     return true;
   }
@@ -2629,15 +2660,15 @@ export class InputElement {
 
     const chars = Array.from(this.inputValue);
     let start = this.cursor;
-    while (start > 0 && chars[start - 1] === ' ') {
+    while (start > 0 && chars[start - 1] === " ") {
       start -= 1;
     }
-    while (start > 0 && chars[start - 1] !== ' ') {
+    while (start > 0 && chars[start - 1] !== " ") {
       start -= 1;
     }
 
     chars.splice(start, this.cursor - start);
-    this.inputValue = chars.join('');
+    this.inputValue = chars.join("");
     this.cursor = start;
     this.syncValue();
     return true;
@@ -2693,14 +2724,25 @@ export class TextAreaElement extends InputElement {
     setNativeInputFocused: (id: number, focused: boolean) => void,
     setNativeInputPlaceholder: (id: number, placeholder: string) => void,
     setNativeCursorAtPoint: (id: number, x: number, y: number) => number | null,
-    private readonly moveNativeTextAreaCursorVertically: (id: number, direction: number) => number | null,
+    private readonly moveNativeTextAreaCursorVertically: (
+      id: number,
+      direction: number,
+    ) => number | null,
     setNativeStyleProperty: (id: number, property: string, value: string) => void,
   ) {
-    super(owner, id, setNativeInputValue, setNativeInputFocused, setNativeInputPlaceholder, setNativeCursorAtPoint, setNativeStyleProperty);
+    super(
+      owner,
+      id,
+      setNativeInputValue,
+      setNativeInputFocused,
+      setNativeInputPlaceholder,
+      setNativeCursorAtPoint,
+      setNativeStyleProperty,
+    );
   }
 
   override get type(): string {
-    return 'textarea';
+    return "textarea";
   }
 
   override set type(value: string) {
@@ -2753,8 +2795,11 @@ export class TextAreaElement extends InputElement {
   override addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   override addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   override addEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  override addEventListener(type: 'scroll', listener: ScrollEventListener): void;
-  override addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
+  override addEventListener(type: "scroll", listener: ScrollEventListener): void;
+  override addEventListener(
+    type: TransitionElementEventType,
+    listener: TransitionEventListener,
+  ): void;
   override addEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.addElementEventListener(this, type, listener);
   }
@@ -2763,8 +2808,11 @@ export class TextAreaElement extends InputElement {
   override removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
   override removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
   override removeEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  override removeEventListener(type: 'scroll', listener: ScrollEventListener): void;
-  override removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
+  override removeEventListener(type: "scroll", listener: ScrollEventListener): void;
+  override removeEventListener(
+    type: TransitionElementEventType,
+    listener: TransitionEventListener,
+  ): void;
   override removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
     this.ownerDocument.removeElementEventListener(this, type, listener);
   }
@@ -2777,7 +2825,7 @@ export class TextNode {
     owner: PaintCannon,
     id: number,
     private readonly setNativeTextNodeValue: (id: number, value: string) => void,
-    private data: string = '',
+    private data: string = "",
   ) {
     this.ownerDocument = owner;
     this.id = id;
@@ -2838,508 +2886,508 @@ export class CSSStyleDeclaration {
 
     const previous = this.getPropertyValue(name);
     delete this.values[name];
-    this.setNativeStyleProperty(this.getElementId(), name, '');
+    this.setNativeStyleProperty(this.getElementId(), name, "");
     return previous;
   }
 
   getPropertyValue(property: CSSStylePropertyName): string {
-    return this.values[normalizeStyleName(property)] || '';
+    return this.values[normalizeStyleName(property)] || "";
   }
 
-  get display(): 'inline' | 'block' | 'flex' | 'flexbox' | 'grid' | string {
-    return this.getPropertyValue('display');
+  get display(): "inline" | "block" | "flex" | "flexbox" | "grid" | string {
+    return this.getPropertyValue("display");
   }
 
-  set display(value: 'inline' | 'block' | 'flex' | 'flexbox' | 'grid' | string) {
-    this.setProperty('display', value);
+  set display(value: "inline" | "block" | "flex" | "flexbox" | "grid" | string) {
+    this.setProperty("display", value);
   }
 
-  get overflow(): 'visible' | 'hidden' | 'scroll' | string {
-    return this.getPropertyValue('overflow');
+  get overflow(): "visible" | "hidden" | "scroll" | string {
+    return this.getPropertyValue("overflow");
   }
 
-  set overflow(value: 'visible' | 'hidden' | 'scroll' | string) {
-    this.setProperty('overflow', value);
+  set overflow(value: "visible" | "hidden" | "scroll" | string) {
+    this.setProperty("overflow", value);
   }
 
-  get overflowX(): 'visible' | 'hidden' | 'scroll' | string {
-    return this.getPropertyValue('overflow-x');
+  get overflowX(): "visible" | "hidden" | "scroll" | string {
+    return this.getPropertyValue("overflow-x");
   }
 
-  set overflowX(value: 'visible' | 'hidden' | 'scroll' | string) {
-    this.setProperty('overflow-x', value);
+  set overflowX(value: "visible" | "hidden" | "scroll" | string) {
+    this.setProperty("overflow-x", value);
   }
 
-  get overflowY(): 'visible' | 'hidden' | 'scroll' | string {
-    return this.getPropertyValue('overflow-y');
+  get overflowY(): "visible" | "hidden" | "scroll" | string {
+    return this.getPropertyValue("overflow-y");
   }
 
-  set overflowY(value: 'visible' | 'hidden' | 'scroll' | string) {
-    this.setProperty('overflow-y', value);
+  set overflowY(value: "visible" | "hidden" | "scroll" | string) {
+    this.setProperty("overflow-y", value);
   }
 
-  get flexDirection(): 'row' | 'column' | string {
-    return this.getPropertyValue('flex-direction');
+  get flexDirection(): "row" | "column" | string {
+    return this.getPropertyValue("flex-direction");
   }
 
-  set flexDirection(value: 'row' | 'column' | string) {
-    this.setProperty('flex-direction', value);
+  set flexDirection(value: "row" | "column" | string) {
+    this.setProperty("flex-direction", value);
   }
 
   get flexWrap(): string {
-    return this.getPropertyValue('flex-wrap');
+    return this.getPropertyValue("flex-wrap");
   }
 
   set flexWrap(value: string) {
-    this.setProperty('flex-wrap', value);
+    this.setProperty("flex-wrap", value);
   }
 
   get flexFlow(): string {
-    return this.getPropertyValue('flex-flow');
+    return this.getPropertyValue("flex-flow");
   }
 
   set flexFlow(value: string) {
-    this.setProperty('flex-flow', value);
+    this.setProperty("flex-flow", value);
   }
 
   get flexBasis(): string {
-    return this.getPropertyValue('flex-basis');
+    return this.getPropertyValue("flex-basis");
   }
 
   set flexBasis(value: string | number) {
-    this.setProperty('flex-basis', value);
+    this.setProperty("flex-basis", value);
   }
 
   get flexGrow(): string {
-    return this.getPropertyValue('flex-grow');
+    return this.getPropertyValue("flex-grow");
   }
 
   set flexGrow(value: string | number) {
-    this.setProperty('flex-grow', value);
+    this.setProperty("flex-grow", value);
   }
 
   get flexShrink(): string {
-    return this.getPropertyValue('flex-shrink');
+    return this.getPropertyValue("flex-shrink");
   }
 
   set flexShrink(value: string | number) {
-    this.setProperty('flex-shrink', value);
+    this.setProperty("flex-shrink", value);
   }
 
   get flex(): string {
-    return this.getPropertyValue('flex');
+    return this.getPropertyValue("flex");
   }
 
   set flex(value: string | number) {
-    this.setProperty('flex', value);
+    this.setProperty("flex", value);
   }
 
   get justifyContent(): string {
-    return this.getPropertyValue('justify-content');
+    return this.getPropertyValue("justify-content");
   }
 
   set justifyContent(value: string) {
-    this.setProperty('justify-content', value);
+    this.setProperty("justify-content", value);
   }
 
   get alignItems(): string {
-    return this.getPropertyValue('align-items');
+    return this.getPropertyValue("align-items");
   }
 
   set alignItems(value: string) {
-    this.setProperty('align-items', value);
+    this.setProperty("align-items", value);
   }
 
   get alignSelf(): string {
-    return this.getPropertyValue('align-self');
+    return this.getPropertyValue("align-self");
   }
 
   set alignSelf(value: string) {
-    this.setProperty('align-self', value);
+    this.setProperty("align-self", value);
   }
 
   get alignContent(): string {
-    return this.getPropertyValue('align-content');
+    return this.getPropertyValue("align-content");
   }
 
   set alignContent(value: string) {
-    this.setProperty('align-content', value);
+    this.setProperty("align-content", value);
   }
 
   get justifyItems(): string {
-    return this.getPropertyValue('justify-items');
+    return this.getPropertyValue("justify-items");
   }
 
   set justifyItems(value: string) {
-    this.setProperty('justify-items', value);
+    this.setProperty("justify-items", value);
   }
 
   get justifySelf(): string {
-    return this.getPropertyValue('justify-self');
+    return this.getPropertyValue("justify-self");
   }
 
   set justifySelf(value: string) {
-    this.setProperty('justify-self', value);
+    this.setProperty("justify-self", value);
   }
 
   get gap(): string {
-    return this.getPropertyValue('gap');
+    return this.getPropertyValue("gap");
   }
 
   set gap(value: string | number) {
-    this.setProperty('gap', value);
+    this.setProperty("gap", value);
   }
 
   get rowGap(): string {
-    return this.getPropertyValue('row-gap');
+    return this.getPropertyValue("row-gap");
   }
 
   set rowGap(value: string | number) {
-    this.setProperty('row-gap', value);
+    this.setProperty("row-gap", value);
   }
 
   get columnGap(): string {
-    return this.getPropertyValue('column-gap');
+    return this.getPropertyValue("column-gap");
   }
 
   set columnGap(value: string | number) {
-    this.setProperty('column-gap', value);
+    this.setProperty("column-gap", value);
   }
 
   get padding(): string {
-    return this.getPropertyValue('padding');
+    return this.getPropertyValue("padding");
   }
 
   set padding(value: string | number) {
-    this.setProperty('padding', value);
+    this.setProperty("padding", value);
   }
 
   get paddingTop(): string {
-    return this.getPropertyValue('padding-top');
+    return this.getPropertyValue("padding-top");
   }
 
   set paddingTop(value: string | number) {
-    this.setProperty('padding-top', value);
+    this.setProperty("padding-top", value);
   }
 
   get paddingRight(): string {
-    return this.getPropertyValue('padding-right');
+    return this.getPropertyValue("padding-right");
   }
 
   set paddingRight(value: string | number) {
-    this.setProperty('padding-right', value);
+    this.setProperty("padding-right", value);
   }
 
   get paddingBottom(): string {
-    return this.getPropertyValue('padding-bottom');
+    return this.getPropertyValue("padding-bottom");
   }
 
   set paddingBottom(value: string | number) {
-    this.setProperty('padding-bottom', value);
+    this.setProperty("padding-bottom", value);
   }
 
   get paddingLeft(): string {
-    return this.getPropertyValue('padding-left');
+    return this.getPropertyValue("padding-left");
   }
 
   set paddingLeft(value: string | number) {
-    this.setProperty('padding-left', value);
+    this.setProperty("padding-left", value);
   }
 
   get margin(): string {
-    return this.getPropertyValue('margin');
+    return this.getPropertyValue("margin");
   }
 
   set margin(value: string | number) {
-    this.setProperty('margin', value);
+    this.setProperty("margin", value);
   }
 
   get marginTop(): string {
-    return this.getPropertyValue('margin-top');
+    return this.getPropertyValue("margin-top");
   }
 
   set marginTop(value: string | number) {
-    this.setProperty('margin-top', value);
+    this.setProperty("margin-top", value);
   }
 
   get marginRight(): string {
-    return this.getPropertyValue('margin-right');
+    return this.getPropertyValue("margin-right");
   }
 
   set marginRight(value: string | number) {
-    this.setProperty('margin-right', value);
+    this.setProperty("margin-right", value);
   }
 
   get marginBottom(): string {
-    return this.getPropertyValue('margin-bottom');
+    return this.getPropertyValue("margin-bottom");
   }
 
   set marginBottom(value: string | number) {
-    this.setProperty('margin-bottom', value);
+    this.setProperty("margin-bottom", value);
   }
 
   get marginLeft(): string {
-    return this.getPropertyValue('margin-left');
+    return this.getPropertyValue("margin-left");
   }
 
   set marginLeft(value: string | number) {
-    this.setProperty('margin-left', value);
+    this.setProperty("margin-left", value);
   }
 
   get width(): string {
-    return this.getPropertyValue('width');
+    return this.getPropertyValue("width");
   }
 
   set width(value: string | number) {
-    this.setProperty('width', value);
+    this.setProperty("width", value);
   }
 
   get height(): string {
-    return this.getPropertyValue('height');
+    return this.getPropertyValue("height");
   }
 
   set height(value: string | number) {
-    this.setProperty('height', value);
+    this.setProperty("height", value);
   }
 
   get minHeight(): string {
-    return this.getPropertyValue('min-height');
+    return this.getPropertyValue("min-height");
   }
 
   set minHeight(value: string | number) {
-    this.setProperty('min-height', value);
+    this.setProperty("min-height", value);
   }
 
   get maxHeight(): string {
-    return this.getPropertyValue('max-height');
+    return this.getPropertyValue("max-height");
   }
 
   set maxHeight(value: string | number) {
-    this.setProperty('max-height', value);
+    this.setProperty("max-height", value);
   }
 
   get whiteSpace(): CSSWhiteSpace | string {
-    return this.getPropertyValue('white-space');
+    return this.getPropertyValue("white-space");
   }
 
   set whiteSpace(value: CSSWhiteSpace | string) {
-    this.setProperty('white-space', value);
+    this.setProperty("white-space", value);
   }
 
   get imageRendering(): ImageRendering | string {
-    return this.getPropertyValue('image-rendering');
+    return this.getPropertyValue("image-rendering");
   }
 
   set imageRendering(value: ImageRendering | string) {
-    this.setProperty('image-rendering', value);
+    this.setProperty("image-rendering", value);
   }
 
   get border(): string {
-    return this.getPropertyValue('border');
+    return this.getPropertyValue("border");
   }
 
   set border(value: string) {
-    this.setProperty('border', value);
+    this.setProperty("border", value);
   }
 
   get borderTop(): string {
-    return this.getPropertyValue('border-top');
+    return this.getPropertyValue("border-top");
   }
 
   set borderTop(value: string) {
-    this.setProperty('border-top', value);
+    this.setProperty("border-top", value);
   }
 
   get borderRight(): string {
-    return this.getPropertyValue('border-right');
+    return this.getPropertyValue("border-right");
   }
 
   set borderRight(value: string) {
-    this.setProperty('border-right', value);
+    this.setProperty("border-right", value);
   }
 
   get borderBottom(): string {
-    return this.getPropertyValue('border-bottom');
+    return this.getPropertyValue("border-bottom");
   }
 
   set borderBottom(value: string) {
-    this.setProperty('border-bottom', value);
+    this.setProperty("border-bottom", value);
   }
 
   get borderLeft(): string {
-    return this.getPropertyValue('border-left');
+    return this.getPropertyValue("border-left");
   }
 
   set borderLeft(value: string) {
-    this.setProperty('border-left', value);
+    this.setProperty("border-left", value);
   }
 
   get borderColor(): string {
-    return this.getPropertyValue('border-color');
+    return this.getPropertyValue("border-color");
   }
 
   set borderColor(value: string) {
-    this.setProperty('border-color', value);
+    this.setProperty("border-color", value);
   }
 
   get color(): string {
-    return this.getPropertyValue('color');
+    return this.getPropertyValue("color");
   }
 
   set color(value: string) {
-    this.setProperty('color', value);
+    this.setProperty("color", value);
   }
 
   get placeholderColor(): string {
-    return this.getPropertyValue('placeholder-color');
+    return this.getPropertyValue("placeholder-color");
   }
 
   set placeholderColor(value: string) {
-    this.setProperty('placeholder-color', value);
+    this.setProperty("placeholder-color", value);
   }
 
   get backgroundColor(): string {
-    return this.getPropertyValue('background-color');
+    return this.getPropertyValue("background-color");
   }
 
   set backgroundColor(value: string) {
-    this.setProperty('background-color', value);
+    this.setProperty("background-color", value);
   }
 
   get selectionBackgroundColor(): string {
-    return this.getPropertyValue('selection-background-color');
+    return this.getPropertyValue("selection-background-color");
   }
 
   set selectionBackgroundColor(value: string) {
-    this.setProperty('selection-background-color', value);
+    this.setProperty("selection-background-color", value);
   }
 
   get transition(): string {
-    return this.getPropertyValue('transition');
+    return this.getPropertyValue("transition");
   }
 
   set transition(value: string) {
-    this.setProperty('transition', value);
+    this.setProperty("transition", value);
   }
 
   get cursor(): CSSCursor | string {
-    return this.getPropertyValue('cursor');
+    return this.getPropertyValue("cursor");
   }
 
   set cursor(value: CSSCursor | string) {
-    this.setProperty('cursor', value);
+    this.setProperty("cursor", value);
   }
 
   get gridTemplateColumns(): string {
-    return this.getPropertyValue('grid-template-columns');
+    return this.getPropertyValue("grid-template-columns");
   }
 
   set gridTemplateColumns(value: string) {
-    this.setProperty('grid-template-columns', value);
+    this.setProperty("grid-template-columns", value);
   }
 
   get gridTemplateRows(): string {
-    return this.getPropertyValue('grid-template-rows');
+    return this.getPropertyValue("grid-template-rows");
   }
 
   set gridTemplateRows(value: string) {
-    this.setProperty('grid-template-rows', value);
+    this.setProperty("grid-template-rows", value);
   }
 
   get gridAutoColumns(): string {
-    return this.getPropertyValue('grid-auto-columns');
+    return this.getPropertyValue("grid-auto-columns");
   }
 
   set gridAutoColumns(value: string) {
-    this.setProperty('grid-auto-columns', value);
+    this.setProperty("grid-auto-columns", value);
   }
 
   get gridAutoRows(): string {
-    return this.getPropertyValue('grid-auto-rows');
+    return this.getPropertyValue("grid-auto-rows");
   }
 
   set gridAutoRows(value: string) {
-    this.setProperty('grid-auto-rows', value);
+    this.setProperty("grid-auto-rows", value);
   }
 
   get gridAutoFlow(): string {
-    return this.getPropertyValue('grid-auto-flow');
+    return this.getPropertyValue("grid-auto-flow");
   }
 
   set gridAutoFlow(value: string) {
-    this.setProperty('grid-auto-flow', value);
+    this.setProperty("grid-auto-flow", value);
   }
 
   get gridColumn(): string {
-    return this.getPropertyValue('grid-column');
+    return this.getPropertyValue("grid-column");
   }
 
   set gridColumn(value: string) {
-    this.setProperty('grid-column', value);
+    this.setProperty("grid-column", value);
   }
 
   get gridRow(): string {
-    return this.getPropertyValue('grid-row');
+    return this.getPropertyValue("grid-row");
   }
 
   set gridRow(value: string) {
-    this.setProperty('grid-row', value);
+    this.setProperty("grid-row", value);
   }
 
   get gridColumnStart(): string {
-    return this.getPropertyValue('grid-column-start');
+    return this.getPropertyValue("grid-column-start");
   }
 
   set gridColumnStart(value: string | number) {
-    this.setProperty('grid-column-start', value);
+    this.setProperty("grid-column-start", value);
   }
 
   get gridColumnEnd(): string {
-    return this.getPropertyValue('grid-column-end');
+    return this.getPropertyValue("grid-column-end");
   }
 
   set gridColumnEnd(value: string | number) {
-    this.setProperty('grid-column-end', value);
+    this.setProperty("grid-column-end", value);
   }
 
   get gridRowStart(): string {
-    return this.getPropertyValue('grid-row-start');
+    return this.getPropertyValue("grid-row-start");
   }
 
   set gridRowStart(value: string | number) {
-    this.setProperty('grid-row-start', value);
+    this.setProperty("grid-row-start", value);
   }
 
   get gridRowEnd(): string {
-    return this.getPropertyValue('grid-row-end');
+    return this.getPropertyValue("grid-row-end");
   }
 
   set gridRowEnd(value: string | number) {
-    this.setProperty('grid-row-end', value);
+    this.setProperty("grid-row-end", value);
   }
 }
 
 function assertElement(value: unknown): asserts value is PaintElement {
   if (!isPaintElement(value)) {
-    throw new TypeError('expected a paintcannon element');
+    throw new TypeError("expected a paintcannon element");
   }
 }
 
 function assertPaintNode(value: unknown): asserts value is PaintNode {
   if (!isPaintElement(value) && !(value instanceof TextNode)) {
-    throw new TypeError('expected a paintcannon node');
+    throw new TypeError("expected a paintcannon node");
   }
 }
 
 function isPaintElement(value: unknown): value is PaintElement {
   return (
     value instanceof DivElement ||
-      value instanceof SpanElement ||
-      value instanceof FormElement ||
-      value instanceof ButtonElement ||
-      value instanceof ImageElement ||
-      value instanceof InputElement ||
-      value instanceof TextAreaElement
+    value instanceof SpanElement ||
+    value instanceof FormElement ||
+    value instanceof ButtonElement ||
+    value instanceof ImageElement ||
+    value instanceof InputElement ||
+    value instanceof TextAreaElement
   );
 }
 
@@ -3359,7 +3407,7 @@ function moveTextAreaCursorToLineEnd(input: TextAreaElement): void {
 
 function lineStart(chars: string[], cursor: number): number {
   let index = Math.max(0, Math.min(chars.length, Math.floor(cursor)));
-  while (index > 0 && chars[index - 1] !== '\n') {
+  while (index > 0 && chars[index - 1] !== "\n") {
     index -= 1;
   }
   return index;
@@ -3367,7 +3415,7 @@ function lineStart(chars: string[], cursor: number): number {
 
 function lineEnd(chars: string[], cursor: number): number {
   let index = Math.max(0, Math.min(chars.length, Math.floor(cursor)));
-  while (index < chars.length && chars[index] !== '\n') {
+  while (index < chars.length && chars[index] !== "\n") {
     index += 1;
   }
   return index;
@@ -3378,18 +3426,19 @@ function isElementEventType(type: string): type is ElementEventType {
 }
 
 function isAxisScrollable(value: string): boolean {
-  return value === 'scroll';
+  return value === "scroll";
 }
 
-function isElementAxisScrollable(element: PaintElement, axis: 'x' | 'y'): boolean {
-  const overflow = axis === 'x'
-    ? element.style.overflowX || element.style.overflow
-    : element.style.overflowY || element.style.overflow;
+function isElementAxisScrollable(element: PaintElement, axis: "x" | "y"): boolean {
+  const overflow =
+    axis === "x"
+      ? element.style.overflowX || element.style.overflow
+      : element.style.overflowY || element.style.overflow;
   if (isAxisScrollable(overflow)) {
     return true;
   }
 
-  return element instanceof TextAreaElement && axis === 'y' && overflow !== 'hidden';
+  return element instanceof TextAreaElement && axis === "y" && overflow !== "hidden";
 }
 
 function normalizeScrollOffset(value: number): number {
@@ -3411,77 +3460,79 @@ function emptyScrollMetrics(): NativeScrollMetrics {
 }
 
 function normalizeStyleName(property: string): CSSStyleProperty {
-  return property.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`) as CSSStyleProperty;
+  return property.replace(/[A-Z]/g, char => `-${char.toLowerCase()}`) as CSSStyleProperty;
 }
 
 export const SUPPORTED_STYLE_PROPERTY_NAMES = [
-  'display',
-  'overflow',
-  'overflow-x',
-  'overflow-y',
-  'image-rendering',
-  'flex-direction',
-  'flex-wrap',
-  'flex-flow',
-  'flex-basis',
-  'flex-grow',
-  'flex-shrink',
-  'flex',
-  'justify-content',
-  'align-items',
-  'align-self',
-  'align-content',
-  'justify-items',
-  'justify-self',
-  'gap',
-  'row-gap',
-  'column-gap',
-  'padding',
-  'padding-top',
-  'padding-right',
-  'padding-bottom',
-  'padding-left',
-  'margin',
-  'margin-top',
-  'margin-right',
-  'margin-bottom',
-  'margin-left',
-  'width',
-  'height',
-  'min-height',
-  'max-height',
-  'white-space',
-  'border',
-  'border-top',
-  'border-right',
-  'border-bottom',
-  'border-left',
-  'border-color',
-  'color',
-  'placeholder-color',
-  'transition',
-  'background',
-  'background-color',
-  'selection-background-color',
-  'cursor',
-  'grid-template-columns',
-  'grid-template-rows',
-  'grid-auto-columns',
-  'grid-auto-rows',
-  'grid-auto-flow',
-  'grid-column',
-  'grid-row',
-  'grid-column-start',
-  'grid-column-end',
-  'grid-row-start',
-  'grid-row-end',
+  "display",
+  "overflow",
+  "overflow-x",
+  "overflow-y",
+  "image-rendering",
+  "flex-direction",
+  "flex-wrap",
+  "flex-flow",
+  "flex-basis",
+  "flex-grow",
+  "flex-shrink",
+  "flex",
+  "justify-content",
+  "align-items",
+  "align-self",
+  "align-content",
+  "justify-items",
+  "justify-self",
+  "gap",
+  "row-gap",
+  "column-gap",
+  "padding",
+  "padding-top",
+  "padding-right",
+  "padding-bottom",
+  "padding-left",
+  "margin",
+  "margin-top",
+  "margin-right",
+  "margin-bottom",
+  "margin-left",
+  "width",
+  "height",
+  "min-height",
+  "max-height",
+  "white-space",
+  "border",
+  "border-top",
+  "border-right",
+  "border-bottom",
+  "border-left",
+  "border-color",
+  "color",
+  "placeholder-color",
+  "transition",
+  "background",
+  "background-color",
+  "selection-background-color",
+  "cursor",
+  "grid-template-columns",
+  "grid-template-rows",
+  "grid-auto-columns",
+  "grid-auto-rows",
+  "grid-auto-flow",
+  "grid-column",
+  "grid-row",
+  "grid-column-start",
+  "grid-column-end",
+  "grid-row-start",
+  "grid-row-end",
 ] as const;
-export type CSSStyleProperty = typeof SUPPORTED_STYLE_PROPERTY_NAMES[number];
+export type CSSStyleProperty = (typeof SUPPORTED_STYLE_PROPERTY_NAMES)[number];
 type CamelCase<S extends string> = S extends `${infer Head}-${infer Tail}`
   ? `${Head}${Capitalize<CamelCase<Tail>>}`
   : S;
 export type CSSStylePropertyName = CSSStyleProperty | CamelCase<CSSStyleProperty>;
-export type CSSStyleProperties = Partial<Record<CSSStylePropertyName, CSSStyleValue | null | undefined>>;
+export type CSSStyleProperties = Partial<
+  Record<CSSStylePropertyName, CSSStyleValue | null | undefined>
+>;
 const SUPPORTED_STYLE_PROPERTIES = new Set<string>(SUPPORTED_STYLE_PROPERTY_NAMES);
 
 function fpsToInterval(fps: number): number {
@@ -3494,11 +3545,11 @@ function fpsToInterval(fps: number): number {
 
 function loadNativeBinding(): NativeBinding {
   const candidates = [
-    '../paintcannon.node',
+    "../paintcannon.node",
     `../paintcannon.${process.platform}-${process.arch}.node`,
     `../paintcannon.${process.platform}-${process.arch}-gnu.node`,
     `../paintcannon.${process.platform}-${process.arch}-musl.node`,
-    '../index.node',
+    "../index.node",
   ];
 
   for (const candidate of candidates) {
@@ -3511,6 +3562,6 @@ function loadNativeBinding(): NativeBinding {
   }
 
   throw new Error(
-    `Could not find paintcannon native binding. Run "npm run build:debug" first. Tried: ${candidates.join(', ')}`
+    `Could not find paintcannon native binding. Run "npm run build:debug" first. Tried: ${candidates.join(", ")}`,
   );
 }

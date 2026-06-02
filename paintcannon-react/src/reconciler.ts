@@ -1,13 +1,10 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import React from 'react';
-import createReconciler, {type ReactContext} from 'react-reconciler';
-import {
-  DefaultEventPriority,
-  NoEventPriority,
-} from 'react-reconciler/constants.js';
-import * as Scheduler from 'scheduler';
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import React from "react";
+import createReconciler, { type ReactContext } from "react-reconciler";
+import { DefaultEventPriority, NoEventPriority } from "react-reconciler/constants.js";
+import * as Scheduler from "scheduler";
 import type {
   CSSStyleProperties,
   CSSStylePropertyName,
@@ -18,17 +15,10 @@ import type {
   PaintElement,
   PaintNode,
   SpanElement as PaintSpanElement,
-} from 'paintcannon';
-import {
-  ELEMENT_EVENT_TYPES,
-  PaintCannon,
-} from 'paintcannon';
-import {
-  AnimationContext,
-  AnimationScheduler,
-  AppContext,
-} from './hooks/index.ts';
-import * as hostComponents from './host-components/index.ts';
+} from "paintcannon";
+import { ELEMENT_EVENT_TYPES, PaintCannon } from "paintcannon";
+import { AnimationContext, AnimationScheduler, AppContext } from "./hooks/index.ts";
+import * as hostComponents from "./host-components/index.ts";
 
 type HostType = hostComponents.HostType;
 type HostProps = hostComponents.HostProps;
@@ -96,7 +86,7 @@ const reconciler = createReconciler({
   },
   createTextInstance(text: string, container: RootContainer) {
     return {
-      kind: 'text',
+      kind: "text",
       text,
       node: container.paintCannon.createTextNode(text),
     } satisfies HostText;
@@ -142,13 +132,13 @@ const reconciler = createReconciler({
     instance.node.nodeValue = newText;
   },
   hideInstance(instance: HostElement) {
-    instance.node.style.display = 'none';
+    instance.node.style.display = "none";
   },
   unhideInstance(instance: HostElement) {
     instance.node.style.display = defaultDisplay(instance.type);
   },
   hideTextInstance(instance: HostText) {
-    instance.node.nodeValue = '';
+    instance.node.nodeValue = "";
   },
   unhideTextInstance(instance: HostText, text: string) {
     instance.node.nodeValue = text;
@@ -199,10 +189,10 @@ const reconciler = createReconciler({
 
 export function createRoot(options: CreateRootOptions = {}): PaintCannonReactRoot {
   const paintCannon = options.paintCannon ?? new PaintCannon(options);
-  const container = options.container ?? paintCannon.createElement('div');
+  const container = options.container ?? paintCannon.createElement("div");
   if (options.container === undefined) {
-    container.style.width = '100%';
-    container.style.height = '100%';
+    container.style.width = "100%";
+    container.style.height = "100%";
   }
   paintCannon.setRoot(container);
   const rootContainer: RootContainer = {
@@ -217,7 +207,7 @@ export function createRoot(options: CreateRootOptions = {}): PaintCannonReactRoo
     null,
     false,
     null,
-    '',
+    "",
     reportReactError,
     reportReactError,
     reportReactError,
@@ -261,18 +251,14 @@ export function createRoot(options: CreateRootOptions = {}): PaintCannonReactRoo
     container,
     render(element: React.ReactNode): void {
       if (exited) {
-        throw new Error('paintcannon-react root has exited');
+        throw new Error("paintcannon-react root has exited");
       }
 
       reconciler.updateContainer(
         React.createElement(
           AppContext.Provider,
           { value: app },
-          React.createElement(
-            AnimationContext.Provider,
-            { value: animationScheduler },
-            element,
-          ),
+          React.createElement(AnimationContext.Provider, { value: animationScheduler }, element),
         ),
         reactRoot,
         null,
@@ -291,7 +277,10 @@ export function createRoot(options: CreateRootOptions = {}): PaintCannonReactRoo
   };
 }
 
-export function render(element: React.ReactNode, options: CreateRootOptions = {}): PaintCannonReactRoot {
+export function render(
+  element: React.ReactNode,
+  options: CreateRootOptions = {},
+): PaintCannonReactRoot {
   const root = createRoot(options);
   root.render(element);
   return root;
@@ -319,7 +308,11 @@ function removeVirtualChild(parent: HostParent, child: HostNode): void {
   }
 }
 
-function createHostElement(paintCannon: PaintCannon, type: HostType, props: HostProps): HostElement {
+function createHostElement(
+  paintCannon: PaintCannon,
+  type: HostType,
+  props: HostProps,
+): HostElement {
   if (type === hostComponents.div.type) {
     return hostComponents.reconcileDiv.create(
       paintCannon,
@@ -369,14 +362,14 @@ function createHostElement(paintCannon: PaintCannon, type: HostType, props: Host
 
 function appendPaintChild(parent: PaintElement, child: PaintNode): void {
   if (!canHaveChildren(parent)) {
-    throw new Error('Input and Textarea cannot have children');
+    throw new Error("Input and Textarea cannot have children");
   }
   parent.appendChild(child);
 }
 
 function insertPaintChild(parent: PaintElement, child: PaintNode, before: PaintNode): void {
   if (!canHaveChildren(parent)) {
-    throw new Error('Input and Textarea cannot have children');
+    throw new Error("Input and Textarea cannot have children");
   }
   parent.insertBefore(child, before);
 }
@@ -430,7 +423,11 @@ function applyCommonProps(
   applyEvents(node, oldProps, newProps);
 }
 
-function applyStyle(node: PaintElement, oldStyle: CSSStyleProperties | undefined, newStyle: CSSStyleProperties | undefined): void {
+function applyStyle(
+  node: PaintElement,
+  oldStyle: CSSStyleProperties | undefined,
+  newStyle: CSSStyleProperties | undefined,
+): void {
   if (oldStyle === newStyle) {
     return;
   }
@@ -467,23 +464,38 @@ function applyEvents(node: PaintElement, oldProps: Partial<HostProps>, newProps:
   }
 }
 
-function listenerProp(props: Partial<HostProps>, prop: hostComponents.EventPropName): ((event: unknown) => void) | undefined {
+function listenerProp(
+  props: Partial<HostProps>,
+  prop: hostComponents.EventPropName,
+): ((event: unknown) => void) | undefined {
   const value = (props as Partial<Record<hostComponents.EventPropName, unknown>>)[prop];
-  return typeof value === 'function' ? value as (event: unknown) => void : undefined;
+  return typeof value === "function" ? (value as (event: unknown) => void) : undefined;
 }
 
 function canHaveChildren(node: PaintElement): node is ChildContainerElement {
-  return 'appendChild' in node && 'insertBefore' in node;
+  return "appendChild" in node && "insertBefore" in node;
 }
 
-function addElementListener(node: PaintElement, eventType: ElementEventType, listener: (event: unknown) => void): void {
-  (node as {addEventListener(type: ElementEventType, listener: (event: unknown) => void): void})
-    .addEventListener(eventType, reactEventListener(listener));
+function addElementListener(
+  node: PaintElement,
+  eventType: ElementEventType,
+  listener: (event: unknown) => void,
+): void {
+  (
+    node as { addEventListener(type: ElementEventType, listener: (event: unknown) => void): void }
+  ).addEventListener(eventType, reactEventListener(listener));
 }
 
-function removeElementListener(node: PaintElement, eventType: ElementEventType, listener: (event: unknown) => void): void {
-  (node as {removeEventListener(type: ElementEventType, listener: (event: unknown) => void): void})
-    .removeEventListener(eventType, reactEventListener(listener));
+function removeElementListener(
+  node: PaintElement,
+  eventType: ElementEventType,
+  listener: (event: unknown) => void,
+): void {
+  (
+    node as {
+      removeEventListener(type: ElementEventType, listener: (event: unknown) => void): void;
+    }
+  ).removeEventListener(eventType, reactEventListener(listener));
 }
 
 function reactEventListener(listener: (event: unknown) => void): (event: unknown) => void {
@@ -500,7 +512,7 @@ function reactEventListener(listener: (event: unknown) => void): (event: unknown
 }
 
 function defaultDisplay(type: HostType): string {
-  return type === hostComponents.span.type ? 'inline' : 'block';
+  return type === hostComponents.span.type ? "inline" : "block";
 }
 
 function reportReactError(error: unknown): void {
@@ -511,10 +523,10 @@ function reportReactError(error: unknown): void {
 
 function loadPackageInfo(): PackageInfo {
   const packageJsonPath = findPackageJsonPath();
-  const packageJson = fs.readFileSync(packageJsonPath, 'utf8');
+  const packageJson = fs.readFileSync(packageJsonPath, "utf8");
   const parsed = JSON.parse(packageJson) as Partial<PackageInfo> | undefined;
 
-  if (parsed?.name !== 'paintcannon-react' || typeof parsed.version !== 'string') {
+  if (parsed?.name !== "paintcannon-react" || typeof parsed.version !== "string") {
     throw new Error(`Invalid package metadata in ${packageJsonPath}`);
   }
 
@@ -527,22 +539,26 @@ function loadPackageInfo(): PackageInfo {
 function findPackageJsonPath(): string {
   let directory = sourceDirectory;
   while (true) {
-    const packageJsonPath = path.join(directory, 'package.json');
+    const packageJsonPath = path.join(directory, "package.json");
     if (fs.existsSync(packageJsonPath)) {
-      const parsed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as Partial<PackageInfo> | undefined;
-      if (parsed?.name === 'paintcannon-react') {
+      const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as
+        | Partial<PackageInfo>
+        | undefined;
+      if (parsed?.name === "paintcannon-react") {
         return packageJsonPath;
       }
     }
 
     const parent = path.dirname(directory);
     if (parent === directory) {
-      throw new Error('Could not find paintcannon-react package metadata');
+      throw new Error("Could not find paintcannon-react package metadata");
     }
     directory = parent;
   }
 }
 
 const eventProps = [
-  ...ELEMENT_EVENT_TYPES.map((eventType) => [hostComponents.EVENT_PROP_NAMES[eventType], eventType] as const),
+  ...ELEMENT_EVENT_TYPES.map(
+    eventType => [hostComponents.EVENT_PROP_NAMES[eventType], eventType] as const,
+  ),
 ] satisfies ReadonlyArray<readonly [hostComponents.EventPropName, ElementEventType]>;

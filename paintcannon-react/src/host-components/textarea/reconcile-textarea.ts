@@ -1,20 +1,20 @@
-import type {PaintCannon} from 'paintcannon';
-import * as textarea from './textarea.ts';
-import type {MountedComponent} from '../mounted.ts';
+import type { PaintCannon } from "paintcannon";
+import * as textarea from "./textarea.ts";
+import type { MountedComponent } from "../mounted.ts";
 import {
   type ApplyCommonProps,
   applyScrollableProps,
   applyTextControlProps,
-} from '../reconcile-shared.ts';
+} from "../reconcile-shared.ts";
 
 export function create(
   paintCannon: PaintCannon,
   props: textarea.Props,
   applyCommonProps: ApplyCommonProps,
 ): MountedComponent<typeof textarea> {
-  const node = paintCannon.createElement('textarea');
+  const node = paintCannon.createElement("textarea");
   applyProps(node, {}, props, applyCommonProps);
-  return { kind: 'element', type: textarea.type, props, children: [], node };
+  return { kind: "element", type: textarea.type, props, children: [], node };
 }
 
 export function applyProps(

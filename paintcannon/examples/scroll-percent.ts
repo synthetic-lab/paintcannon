@@ -1,4 +1,4 @@
-import { PaintCannon } from '../index.ts';
+import { PaintCannon } from "../index.ts";
 
 const pc = new PaintCannon({
   alternateScreen: true,
@@ -7,53 +7,59 @@ const pc = new PaintCannon({
   fps: 30,
 });
 
-const root = pc.createElement('div');
-root.style.display = 'flex';
-root.style.flexDirection = 'column';
-root.style.width = '100%';
-root.style.height = '100%';
-root.style.backgroundColor = 'black';
+const root = pc.createElement("div");
+root.style.display = "flex";
+root.style.flexDirection = "column";
+root.style.width = "100%";
+root.style.height = "100%";
+root.style.backgroundColor = "black";
 pc.setRoot(root);
 
-const header = pc.createElement('div');
-header.style.width = '100%';
-header.style.height = '10%';
-header.style.backgroundColor = 'cyan';
+const header = pc.createElement("div");
+header.style.width = "100%";
+header.style.height = "10%";
+header.style.backgroundColor = "cyan";
 
-const status = pc.createTextNode('Percent scroll demo. Resize the terminal; wheel over the panel. Ctrl-C exits.');
+const status = pc.createTextNode(
+  "Percent scroll demo. Resize the terminal; wheel over the panel. Ctrl-C exits.",
+);
 header.appendChild(status);
 
-const body = pc.createElement('div');
-body.style.display = 'flex';
-body.style.flexDirection = 'row';
-body.style.width = '100%';
-body.style.height = '90%';
+const body = pc.createElement("div");
+body.style.display = "flex";
+body.style.flexDirection = "row";
+body.style.width = "100%";
+body.style.height = "90%";
 
-const viewport = pc.createElement('div');
-viewport.style.width = '85%';
-viewport.style.height = '100%';
-viewport.style.overflowY = 'scroll';
-viewport.style.overflowX = 'hidden';
-viewport.style.backgroundColor = 'blue';
-viewport.style.selectionBackgroundColor = 'yellow';
+const viewport = pc.createElement("div");
+viewport.style.width = "85%";
+viewport.style.height = "100%";
+viewport.style.overflowY = "scroll";
+viewport.style.overflowX = "hidden";
+viewport.style.backgroundColor = "blue";
+viewport.style.selectionBackgroundColor = "yellow";
 
-const rail = pc.createElement('div');
-rail.style.width = '15%';
-rail.style.height = '100%';
-rail.style.backgroundColor = 'magenta';
-rail.style.whiteSpace = 'pre';
+const rail = pc.createElement("div");
+rail.style.width = "15%";
+rail.style.height = "100%";
+rail.style.backgroundColor = "magenta";
+rail.style.whiteSpace = "pre";
 
-const content = pc.createElement('div');
-content.style.display = 'flex';
-content.style.flexDirection = 'column';
-content.style.width = '100%';
+const content = pc.createElement("div");
+content.style.display = "flex";
+content.style.flexDirection = "column";
+content.style.width = "100%";
 
 const rowCount = 10_000;
 pc.transaction(() => {
   for (let index = 1; index <= rowCount; index += 1) {
-    const line = pc.createElement('div');
-    line.style.width = '100%';
-    line.appendChild(pc.createTextNode(`percent row ${String(index).padStart(2, '0')} - resize changes visible content`));
+    const line = pc.createElement("div");
+    line.style.width = "100%";
+    line.appendChild(
+      pc.createTextNode(
+        `percent row ${String(index).padStart(2, "0")} - resize changes visible content`,
+      ),
+    );
     content.appendChild(line);
   }
 });
@@ -67,11 +73,11 @@ body.appendChild(rail);
 root.appendChild(header);
 root.appendChild(body);
 
-viewport.addEventListener('scroll', (event) => {
+viewport.addEventListener("scroll", event => {
   updateScrollbar(event.scrollTop, event.scrollHeight, viewport.clientHeight);
 });
 
-pc.addEventListener('resize', () => {
+pc.addEventListener("resize", () => {
   updateScrollbar(viewport.scrollTop, viewport.scrollHeight, viewport.clientHeight);
 });
 
@@ -84,11 +90,11 @@ function scrollbarText(scrollTop: number, scrollHeight: number, clientHeight: nu
   const height = Math.max(1, clientHeight);
   const max = Math.max(1, scrollHeight - clientHeight);
   const thumb = Math.min(height - 1, Math.floor((scrollTop / max) * (height - 1)));
-  let text = '';
+  let text = "";
   for (let row = 0; row < height; row += 1) {
-    text += row === thumb ? '#' : '|';
+    text += row === thumb ? "#" : "|";
     if (row < height - 1) {
-      text += '\n';
+      text += "\n";
     }
   }
   return text;

@@ -1,10 +1,21 @@
 {
   "name": "paintcannon",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.0.1",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/native.d.ts",
+    "paintcannon.node"
+  ],
   "scripts": {
     "build": "napi build --release --dts dist/native.d.ts && tsc",
     "build:debug": "napi build --dts dist/native.d.ts && tsc",
@@ -34,7 +45,8 @@
     "demo:spans": "npm run build:debug && node dist/examples/spans.js",
     "demo:textarea": "npm run build:debug && node dist/examples/textarea.js",
     "demo:transitions": "npm run build:debug && node dist/examples/transitions.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
   },
   "napi": {
     "binaryName": "paintcannon",

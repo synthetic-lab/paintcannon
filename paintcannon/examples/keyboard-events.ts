@@ -1,40 +1,40 @@
-import { PaintCannon, type KeyboardEvent } from '../index.ts';
+import { PaintCannon, type KeyboardEvent } from "../index.ts";
 
 const pc = new PaintCannon({ captureCtrlC: true, fps: 30 });
 
-const root = pc.createElement('div');
+const root = pc.createElement("div");
 pc.setRoot(root);
-root.style.display = 'flex';
-root.style.flexDirection = 'column';
-root.style.justifyContent = 'center';
-root.style.alignItems = 'center';
-root.style.width = '100%';
-root.style.height = '100%';
-root.style.gap = '1px';
-root.style.backgroundColor = 'black';
+root.style.display = "flex";
+root.style.flexDirection = "column";
+root.style.justifyContent = "center";
+root.style.alignItems = "center";
+root.style.width = "100%";
+root.style.height = "100%";
+root.style.gap = "1px";
+root.style.backgroundColor = "black";
 
-const title = pc.createElement('div');
-title.style.display = 'flex';
-title.style.justifyContent = 'center';
-title.style.alignItems = 'center';
-title.style.width = '90px';
-title.style.height = '3px';
-title.style.backgroundColor = 'blue';
+const title = pc.createElement("div");
+title.style.display = "flex";
+title.style.justifyContent = "center";
+title.style.alignItems = "center";
+title.style.width = "90px";
+title.style.height = "3px";
+title.style.backgroundColor = "blue";
 title.appendChild(
   pc.createTextNode(
-    `press keys - q, Escape, or Ctrl-C exits - kitty=${pc.kittyKeyboardEnabled ? 'yes' : 'no'}`,
+    `press keys - q, Escape, or Ctrl-C exits - kitty=${pc.kittyKeyboardEnabled ? "yes" : "no"}`,
   ),
 );
 
-const status = pc.createElement('div');
-status.style.display = 'flex';
-status.style.justifyContent = 'center';
-status.style.alignItems = 'center';
-status.style.width = '110px';
-status.style.height = '3px';
-status.style.backgroundColor = 'green';
+const status = pc.createElement("div");
+status.style.display = "flex";
+status.style.justifyContent = "center";
+status.style.alignItems = "center";
+status.style.width = "110px";
+status.style.height = "3px";
+status.style.backgroundColor = "green";
 
-const statusText = pc.createTextNode('waiting for keyboard input');
+const statusText = pc.createTextNode("waiting for keyboard input");
 status.appendChild(statusText);
 
 root.appendChild(title);
@@ -46,15 +46,15 @@ function onKeyboardEvent(event: KeyboardEvent) {
   eventCount += 1;
   statusText.nodeValue = `${eventCount}: type=${event.type} key=${event.key} code=${event.code} repeat=${event.repeat} ctrl=${event.ctrlKey} alt=${event.altKey} meta=${event.metaKey} shift=${event.shiftKey}`;
 
-  if (event.key === 'q' || event.key === 'Escape' || (event.ctrlKey && event.code === 'KeyC')) {
+  if (event.key === "q" || event.key === "Escape" || (event.ctrlKey && event.code === "KeyC")) {
     event.preventDefault();
     pc.stop();
     process.exit(0);
   }
 }
 
-pc.addEventListener('keydown', onKeyboardEvent);
-pc.addEventListener('keyup', onKeyboardEvent);
+pc.addEventListener("keydown", onKeyboardEvent);
+pc.addEventListener("keyup", onKeyboardEvent);
 
 function paint() {
   pc.requestAnimationFrame(paint);

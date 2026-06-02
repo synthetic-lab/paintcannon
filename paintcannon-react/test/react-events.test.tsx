@@ -1,6 +1,6 @@
-import React from 'react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mock } from 'antipattern';
+import React from "react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mock } from "antipattern";
 import {
   PaintCannon,
   PaintKeyboardEvent,
@@ -9,9 +9,13 @@ import {
   type PaintElement,
   type PaintResizeEvent,
   type TextAreaElement,
-} from 'paintcannon';
-import { Div, Input, Textarea, render } from '../src/index.ts';
-import { createMockNativeBinding, mouseEvent, type MockNativePaintCannon } from '../../paintcannon/test/mock-native.ts';
+} from "paintcannon";
+import { Div, Input, Textarea, render } from "../src/index.ts";
+import {
+  createMockNativeBinding,
+  mouseEvent,
+  type MockNativePaintCannon,
+} from "../../paintcannon/test/mock-native.ts";
 
 let restores: Array<() => void> = [];
 let mockNativeInstances: MockNativePaintCannon[] = [];
@@ -19,7 +23,7 @@ let mockNativeInstances: MockNativePaintCannon[] = [];
 beforeEach(() => {
   mockNativeInstances = [];
   restores = [
-    mock(paintCannonDeps, 'loadNativeBinding', () => createMockNativeBinding(mockNativeInstances)),
+    mock(paintCannonDeps, "loadNativeBinding", () => createMockNativeBinding(mockNativeInstances)),
   ];
 });
 
@@ -30,22 +34,19 @@ afterEach(() => {
   restores = [];
 });
 
-describe('keyboard events', () => {
-  it('targets root content when no text control is focused', async () => {
+describe("keyboard events", () => {
+  it("targets root content when no text control is focused", async () => {
     const events: string[] = [];
-    const root = render(
-      <Div onKeyDown={event => events.push(event.key)}>root</Div>,
-      { fps: 120 },
-    );
+    const root = render(<Div onKeyDown={event => events.push(event.key)}>root</Div>, { fps: 120 });
 
     await commit();
-    dispatchKey(root.paintCannon, 'z');
+    dispatchKey(root.paintCannon, "z");
     root.paintCannon.stop();
 
-    expect(events).toEqual(['z']);
+    expect(events).toEqual(["z"]);
   });
 
-  it('targets the focused text control and does not notify sibling controls', async () => {
+  it("targets the focused text control and does not notify sibling controls", async () => {
     const events: string[] = [];
     let input: InputElement | undefined;
     let textarea: TextAreaElement | undefined;
@@ -79,21 +80,21 @@ describe('keyboard events', () => {
     expect(textarea).toBeDefined();
 
     input?.focus();
-    dispatchKey(root.paintCannon, 'a');
+    dispatchKey(root.paintCannon, "a");
     textarea?.focus();
-    dispatchKey(root.paintCannon, 'b');
+    dispatchKey(root.paintCannon, "b");
     root.paintCannon.stop();
 
-    expect(events).toEqual(['input:a', 'textarea:b']);
+    expect(events).toEqual(["input:a", "textarea:b"]);
   });
 
-  it('does not re-apply autoFocus on controlled updates', async () => {
+  it("does not re-apply autoFocus on controlled updates", async () => {
     const events: string[] = [];
     let textarea: TextAreaElement | undefined;
     let update = (): void => {};
 
     function App(): React.ReactElement {
-      const [value, setValue] = React.useState('');
+      const [value, setValue] = React.useState("");
       update = () => {
         setValue(current => `${current}x`);
       };
@@ -117,13 +118,13 @@ describe('keyboard events', () => {
     textarea?.focus();
     update();
     await commit();
-    dispatchKey(root.paintCannon, 'a');
+    dispatchKey(root.paintCannon, "a");
     root.paintCannon.stop();
 
-    expect(events).toEqual(['textarea:a']);
+    expect(events).toEqual(["textarea:a"]);
   });
 
-  it('can leave edit mode on blur and defer focus to another input', async () => {
+  it("can leave edit mode on blur and defer focus to another input", async () => {
     const events: string[] = [];
     let mainInput: InputElement | undefined;
     let editInput: InputElement | undefined;
@@ -166,20 +167,20 @@ describe('keyboard events', () => {
     mainInput?.focus();
     await Promise.resolve();
     await commit();
-    dispatchKey(root.paintCannon, 'a');
+    dispatchKey(root.paintCannon, "a");
     root.paintCannon.stop();
 
-    expect(events).toEqual(['main:a']);
+    expect(events).toEqual(["main:a"]);
   });
 });
 
-describe('controlled text controls', () => {
-  it('supports React-style value plus onChange without manually controlling cursorPosition', async () => {
+describe("controlled text controls", () => {
+  it("supports React-style value plus onChange without manually controlling cursorPosition", async () => {
     const changes: string[] = [];
     let input: InputElement | undefined;
 
     function App(): React.ReactElement {
-      const [value, setValue] = React.useState('');
+      const [value, setValue] = React.useState("");
       return (
         <Input
           ref={element => {
@@ -198,14 +199,14 @@ describe('controlled text controls', () => {
     const root = render(<App />, { fps: 120 });
     const mockNative = mockNativeInstances[0];
     if (mockNative === undefined) {
-      throw new Error('expected mock native instance');
+      throw new Error("expected mock native instance");
     }
 
     await commit();
     mockNative.keyboardEvents.push({
-      type: 'keydown',
-      key: 'a',
-      code: 'KeyA',
+      type: "keydown",
+      key: "a",
+      code: "KeyA",
       ctrlKey: false,
       altKey: false,
       metaKey: false,
@@ -216,22 +217,22 @@ describe('controlled text controls', () => {
     await commit();
     root.paintCannon.stop();
 
-    expect(changes).toEqual(['a']);
-    expect(input?.value).toBe('a');
+    expect(changes).toEqual(["a"]);
+    expect(input?.value).toBe("a");
     expect(input?.cursorPosition).toBe(1);
   });
 });
 
-describe('resize events', () => {
-  it('uses the normal render path instead of sync rendering inside the input pump', () => {
+describe("resize events", () => {
+  it("uses the normal render path instead of sync rendering inside the input pump", () => {
     const sizes: Array<[number, number]> = [];
     const paintCannon = new PaintCannon({ fps: 120 });
     const mockNative = mockNativeInstances[0];
     if (mockNative === undefined) {
-      throw new Error('expected mock native instance');
+      throw new Error("expected mock native instance");
     }
 
-    paintCannon.addEventListener('resize', (event: PaintResizeEvent) => {
+    paintCannon.addEventListener("resize", (event: PaintResizeEvent) => {
       sizes.push([event.cols, event.rows]);
     });
     mockNative.resizeEvents.push({ cols: 100, rows: 40 });
@@ -244,8 +245,8 @@ describe('resize events', () => {
   });
 });
 
-describe('scroll events', () => {
-  it('commits state updates from onScroll before the input pump returns', async () => {
+describe("scroll events", () => {
+  it("commits state updates from onScroll before the input pump returns", async () => {
     let scroller: PaintElement | undefined;
     let renderedTop = -1;
 
@@ -257,7 +258,7 @@ describe('scroll events', () => {
           ref={element => {
             scroller = element;
           }}
-          style={{overflowY: 'scroll'}}
+          style={{ overflowY: "scroll" }}
           onScroll={event => {
             setScrollTop(event.scrollTop);
           }}
@@ -268,7 +269,7 @@ describe('scroll events', () => {
     const root = render(<App />, { captureMouse: true, fps: 120 });
     const mockNative = mockNativeInstances[0];
     if (mockNative === undefined) {
-      throw new Error('expected mock native instance');
+      throw new Error("expected mock native instance");
     }
 
     await commit();
@@ -282,7 +283,7 @@ describe('scroll events', () => {
       clientWidth: 10,
       clientHeight: 4,
     });
-    mockNative.mouseEvents.push(mouseEvent('wheel', { deltaY: -1 }));
+    mockNative.mouseEvents.push(mouseEvent("wheel", { deltaY: -1 }));
 
     runKeyboardEventPump(root.paintCannon);
     root.paintCannon.stop();
@@ -291,31 +292,31 @@ describe('scroll events', () => {
   });
 });
 
-describe('style props', () => {
-  it('clears a style property when the next React style value is undefined', async () => {
+describe("style props", () => {
+  it("clears a style property when the next React style value is undefined", async () => {
     let row: PaintElement | undefined;
     const view = (backgroundColor: string | undefined): React.ReactElement => (
       <Div
         ref={element => {
           row = element;
         }}
-        style={{backgroundColor}}
+        style={{ backgroundColor }}
       >
         row
       </Div>
     );
-    const root = render(view('#1e3a5f'), { fps: 120 });
+    const root = render(view("#1e3a5f"), { fps: 120 });
     const mockNative = mockNativeInstances[0];
     if (mockNative === undefined) {
-      throw new Error('expected mock native instance');
+      throw new Error("expected mock native instance");
     }
 
     await commit();
     expect(row).toBeDefined();
     expect(mockNative.styleMutations).toContainEqual({
       id: row?.id,
-      property: 'background-color',
-      value: '#1e3a5f',
+      property: "background-color",
+      value: "#1e3a5f",
     });
 
     root.render(view(undefined));
@@ -325,8 +326,8 @@ describe('style props', () => {
 
     expect(mockNative.styleMutations).toContainEqual({
       id: row?.id,
-      property: 'background-color',
-      value: '',
+      property: "background-color",
+      value: "",
     });
   });
 });
@@ -338,18 +339,24 @@ function dispatchKey(paintCannon: PaintCannon, key: string): void {
   };
   const target = anyPaintCannon.keyboardEventTarget();
   if (target === undefined) {
-    throw new Error('expected keyboard event target');
+    throw new Error("expected keyboard event target");
   }
-  anyPaintCannon.dispatchKeyboardEvent(target, new PaintKeyboardEvent({
-    type: 'keydown',
-    key,
-    code: `Key${key.toUpperCase()}`,
-    ctrlKey: false,
-    altKey: false,
-    metaKey: false,
-    shiftKey: false,
-    repeat: false,
-  }, target));
+  anyPaintCannon.dispatchKeyboardEvent(
+    target,
+    new PaintKeyboardEvent(
+      {
+        type: "keydown",
+        key,
+        code: `Key${key.toUpperCase()}`,
+        ctrlKey: false,
+        altKey: false,
+        metaKey: false,
+        shiftKey: false,
+        repeat: false,
+      },
+      target,
+    ),
+  );
 }
 
 function runKeyboardEventPump(paintCannon: PaintCannon): void {

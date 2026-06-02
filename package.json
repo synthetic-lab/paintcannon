@@ -9,6 +9,9 @@
     "build": "npm run build --workspaces",
     "build:debug": "npm run build:debug --workspace paintcannon && npm run build --workspace paintcannon-react",
     "test": "npm run test --workspace paintcannon && npm run test --workspace paintcannon-react",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky",
     "demo": "npm run demo --workspace paintcannon",
     "demo:alt-restart": "npm run demo:alt-restart --workspace paintcannon",
     "demo:borders": "npm run demo:borders --workspace paintcannon",
@@ -36,5 +39,15 @@
     "demo:textarea": "npm run demo:textarea --workspace paintcannon",
     "demo:todo": "npm run demo:todo --workspace paintcannon-react",
     "demo:transitions": "npm run demo:transitions --workspace paintcannon"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx,json,md}": [
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.8.3"
   }
 }

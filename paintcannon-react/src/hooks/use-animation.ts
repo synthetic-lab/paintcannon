@@ -1,5 +1,5 @@
-import React from 'react';
-import type {PaintCannon} from 'paintcannon';
+import React from "react";
+import type { PaintCannon } from "paintcannon";
 
 type AnimationCallback = (currentTime: number) => void;
 type AnimationSubscription = {
@@ -25,14 +25,14 @@ export type AnimationResult = {
 export const AnimationContext = React.createContext<AnimationContextValue | undefined>(undefined);
 
 const maximumTimerInterval = 2_147_483_647;
-const zeroAnimationState: Omit<AnimationResult, 'reset'> = { frame: 0, time: 0, delta: 0 };
+const zeroAnimationState: Omit<AnimationResult, "reset"> = { frame: 0, time: 0, delta: 0 };
 
 export function useAnimation(options: AnimationOptions = {}): AnimationResult {
   const { interval, isActive = true } = options;
   const safeInterval = interval === undefined ? undefined : normalizeAnimationInterval(interval);
   const animation = React.useContext(AnimationContext);
   if (animation === undefined) {
-    throw new Error('useAnimation() must be used inside a paintcannon-react render tree');
+    throw new Error("useAnimation() must be used inside a paintcannon-react render tree");
   }
 
   const [resetKey, setResetKey] = React.useState(0);
@@ -40,11 +40,11 @@ export function useAnimation(options: AnimationOptions = {}): AnimationResult {
   const lastRenderTimeRef = React.useRef(0);
   const previousOptionsRef = React.useRef({ isActive, safeInterval, resetKey });
   const previousOptions = previousOptionsRef.current;
-  const shouldReset = isActive && (
-    safeInterval !== previousOptions.safeInterval ||
-    !previousOptions.isActive ||
-    resetKey !== previousOptions.resetKey
-  );
+  const shouldReset =
+    isActive &&
+    (safeInterval !== previousOptions.safeInterval ||
+      !previousOptions.isActive ||
+      resetKey !== previousOptions.resetKey);
   const reset = React.useCallback(() => {
     setResetKey(value => value + 1);
   }, []);
@@ -56,7 +56,7 @@ export function useAnimation(options: AnimationOptions = {}): AnimationResult {
 
     setState(zeroAnimationState);
     let startTime = 0;
-    const subscription = animation.subscribe((currentTime) => {
+    const subscription = animation.subscribe(currentTime => {
       const elapsed = currentTime - startTime;
       const delta = currentTime - lastRenderTimeRef.current;
       lastRenderTimeRef.current = currentTime;
@@ -86,11 +86,14 @@ export function useAnimation(options: AnimationOptions = {}): AnimationResult {
 export class AnimationScheduler implements AnimationContextValue {
   private nextId = 1;
   private animationFrameId: number | undefined;
-  private readonly subscribers = new Map<number, {
-    callback: AnimationCallback;
-    interval: number | undefined;
-    nextTime: number;
-  }>();
+  private readonly subscribers = new Map<
+    number,
+    {
+      callback: AnimationCallback;
+      interval: number | undefined;
+      nextTime: number;
+    }
+  >();
 
   subscribe(callback: AnimationCallback, interval: number | undefined): AnimationSubscription {
     const id = this.nextId;
@@ -126,7 +129,7 @@ export class AnimationScheduler implements AnimationContextValue {
       return;
     }
 
-    this.animationFrameId = this.paintCannon.requestAnimationFrame((timestamp) => {
+    this.animationFrameId = this.paintCannon.requestAnimationFrame(timestamp => {
       this.animationFrameId = undefined;
       this.tick(timestamp);
     });
@@ -149,7 +152,10 @@ export class AnimationScheduler implements AnimationContextValue {
       }
 
       if (subscriber.nextTime <= currentTime) {
-        const intervalsElapsed = Math.max(1, Math.floor((currentTime - subscriber.nextTime) / subscriber.interval) + 1);
+        const intervalsElapsed = Math.max(
+          1,
+          Math.floor((currentTime - subscriber.nextTime) / subscriber.interval) + 1,
+        );
         subscriber.nextTime += subscriber.interval * intervalsElapsed;
         subscriber.callback(currentTime);
       }

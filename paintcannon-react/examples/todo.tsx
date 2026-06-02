@@ -1,10 +1,10 @@
-import React, {useCallback, useEffect, useRef, useState} from 'react';
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type {
   CSSStyleProperties,
   PaintChangeEvent,
   PaintKeyboardEvent,
   PaintScrollEvent,
-} from 'paintcannon';
+} from "paintcannon";
 import {
   Button,
   Div,
@@ -15,7 +15,7 @@ import {
   useApp,
   type DivElement,
   type InputElement,
-} from '../src/index.ts';
+} from "../src/index.ts";
 
 interface Todo {
   id: number;
@@ -29,29 +29,25 @@ interface TodoScrollMetrics {
   clientHeight: number;
 }
 
-type HoverTarget =
-  | 'add'
-  | `check:${number}`
-  | `edit:${number}`
-  | `delete:${number}`;
+type HoverTarget = "add" | `check:${number}` | `edit:${number}` | `delete:${number}`;
 
 function TodoApp(): React.ReactElement {
-  const {exit, paintCannon} = useApp();
+  const { exit, paintCannon } = useApp();
   const listRef = useRef<DivElement | null>(null);
   const mainInputRef = useRef<InputElement | null>(null);
   const editReturnSelectionIdRef = useRef<number | undefined>(undefined);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState("");
   const [todos, setTodos] = useState<Todo[]>([
-    {id: 1, text: 'Ship the React reconciler', completed: true},
-    {id: 2, text: 'Write the first pass of the docs', completed: false},
-    {id: 3, text: 'Add screenshots to the README', completed: false},
-    {id: 4, text: 'Sketch the next paintcannon-react hook API', completed: false},
-    {id: 5, text: 'Support <a> tags with clickable terminal links', completed: false},
-    {id: 6, text: 'Support clickable labels for inputs', completed: false},
+    { id: 1, text: "Ship the React reconciler", completed: true },
+    { id: 2, text: "Write the first pass of the docs", completed: false },
+    { id: 3, text: "Add screenshots to the README", completed: false },
+    { id: 4, text: "Sketch the next paintcannon-react hook API", completed: false },
+    { id: 5, text: "Support <a> tags with clickable terminal links", completed: false },
+    { id: 6, text: "Support clickable labels for inputs", completed: false },
   ]);
   const [nextId, setNextId] = useState(7);
   const [editingId, setEditingId] = useState<number | undefined>();
-  const [editingText, setEditingText] = useState('');
+  const [editingText, setEditingText] = useState("");
   const [selectedIndex, setSelectedIndex] = useState<number | undefined>();
   const [mainInputFocused, setMainInputFocused] = useState(false);
   const [hovered, setHovered] = useState<HoverTarget | undefined>();
@@ -62,13 +58,13 @@ function TodoApp(): React.ReactElement {
   });
 
   const updateScrollMetrics = useCallback((metrics: TodoScrollMetrics): void => {
-    setScrollMetrics(current => (
+    setScrollMetrics(current =>
       current.scrollTop === metrics.scrollTop &&
       current.scrollHeight === metrics.scrollHeight &&
       current.clientHeight === metrics.clientHeight
         ? current
-        : metrics
-    ));
+        : metrics,
+    );
   }, []);
 
   const readListScrollMetrics = useCallback((): void => {
@@ -129,8 +125,8 @@ function TodoApp(): React.ReactElement {
 
   useEffect(() => {
     const handleResize = (): void => readListScrollMetrics();
-    paintCannon.addEventListener('resize', handleResize);
-    return () => paintCannon.removeEventListener('resize', handleResize);
+    paintCannon.addEventListener("resize", handleResize);
+    return () => paintCannon.removeEventListener("resize", handleResize);
   }, [paintCannon, readListScrollMetrics]);
 
   const addTodo = (): void => {
@@ -139,9 +135,9 @@ function TodoApp(): React.ReactElement {
       return;
     }
 
-    setTodos(current => [{id: nextId, text, completed: false}, ...current]);
+    setTodos(current => [{ id: nextId, text, completed: false }, ...current]);
     setNextId(id => id + 1);
-    setDraft('');
+    setDraft("");
   };
 
   const beginEdit = (todo: Todo, returnToSelection = false): void => {
@@ -180,12 +176,10 @@ function TodoApp(): React.ReactElement {
     if (text.length === 0) {
       setTodos(current => current.filter(todo => todo.id !== editedId));
     } else {
-      setTodos(current => current.map(todo => (
-        todo.id === editedId ? {...todo, text} : todo
-      )));
+      setTodos(current => current.map(todo => (todo.id === editedId ? { ...todo, text } : todo)));
     }
     setEditingId(undefined);
-    setEditingText('');
+    setEditingText("");
     if (text.length > 0 && returnSelectionId === editedId && restoreSelectionAfterEdit(editedId)) {
       return;
     }
@@ -196,7 +190,7 @@ function TodoApp(): React.ReactElement {
     const returnSelectionId = editReturnSelectionIdRef.current;
     editReturnSelectionIdRef.current = undefined;
     setEditingId(undefined);
-    setEditingText('');
+    setEditingText("");
     if (returnSelectionId !== undefined && restoreSelectionAfterEdit(returnSelectionId)) {
       return;
     }
@@ -214,11 +208,13 @@ function TodoApp(): React.ReactElement {
   };
 
   const moveSelectionDown = (): void => {
-    setSelectedIndex(index => (
+    setSelectedIndex(index =>
       index === undefined
-        ? (todos.length > 0 ? 0 : undefined)
-        : Math.min(todos.length - 1, index + 1)
-    ));
+        ? todos.length > 0
+          ? 0
+          : undefined
+        : Math.min(todos.length - 1, index + 1),
+    );
   };
 
   const moveSelectionUp = (): void => {
@@ -235,9 +231,9 @@ function TodoApp(): React.ReactElement {
   };
 
   const toggleTodo = (id: number): void => {
-    setTodos(current => current.map(item => (
-      item.id === id ? {...item, completed: !item.completed} : item
-    )));
+    setTodos(current =>
+      current.map(item => (item.id === id ? { ...item, completed: !item.completed } : item)),
+    );
   };
 
   const deleteTodo = (id: number): void => {
@@ -259,65 +255,67 @@ function TodoApp(): React.ReactElement {
   return (
     <Div
       style={{
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
         gap: 1,
-        backgroundColor: '#0b1120',
-        color: '#e5e7eb',
+        backgroundColor: "#0b1120",
+        color: "#e5e7eb",
       }}
       onKeyDown={event => {
         if (editingId === undefined && selectedIndex !== undefined) {
-          if (event.key === 'ArrowDown') {
+          if (event.key === "ArrowDown") {
             event.preventDefault();
             moveSelectionDown();
             return;
           }
-          if (event.key === 'ArrowUp') {
+          if (event.key === "ArrowUp") {
             event.preventDefault();
             moveSelectionUp();
             return;
           }
-          if (selectedTodo !== undefined && event.key.toLowerCase() === 't') {
+          if (selectedTodo !== undefined && event.key.toLowerCase() === "t") {
             event.preventDefault();
             toggleTodo(selectedTodo.id);
             return;
           }
-          if (selectedTodo !== undefined && event.key.toLowerCase() === 'e') {
+          if (selectedTodo !== undefined && event.key.toLowerCase() === "e") {
             event.preventDefault();
             if (!selectedTodo.completed) {
               beginEdit(selectedTodo, true);
             }
             return;
           }
-          if (selectedTodo !== undefined && event.key.toLowerCase() === 'x') {
+          if (selectedTodo !== undefined && event.key.toLowerCase() === "x") {
             event.preventDefault();
             deleteTodo(selectedTodo.id);
             return;
           }
         }
-        if (event.key === 'Escape' && editingId !== undefined) {
+        if (event.key === "Escape" && editingId !== undefined) {
           event.preventDefault();
           cancelEdit();
           return;
         }
-        if (event.key === 'Escape' || (event.ctrlKey && event.code === 'KeyC')) {
+        if (event.key === "Escape" || (event.ctrlKey && event.code === "KeyC")) {
           event.preventDefault();
           exit();
         }
       }}
     >
-      <Div style={{width: 74, maxHeight: '90%', display: 'flex', flexDirection: 'column', gap: 1}}>
-        <Span style={{color: '#38bdf8'}}>paintcannon-react todos</Span>
+      <Div
+        style={{ width: 74, maxHeight: "90%", display: "flex", flexDirection: "column", gap: 1 }}
+      >
+        <Span style={{ color: "#38bdf8" }}>paintcannon-react todos</Span>
         <Form
           style={{
-            display: 'flex',
-            flexDirection: 'row',
+            display: "flex",
+            flexDirection: "row",
             gap: 1,
-            width: '100%',
+            width: "100%",
           }}
           onSubmit={event => {
             event.preventDefault();
@@ -332,11 +330,11 @@ function TodoApp(): React.ReactElement {
             style={{
               width: 58,
               height: 3,
-              border: 'rounded',
-              borderColor: '#475569',
-              backgroundColor: mainInputFocused ? selectedRowBackground : '#020617',
-              color: mainInputFocused ? '#ffffff' : '#f8fafc',
-              placeholderColor: mainInputFocused ? '#94a3b8' : '#64748b',
+              border: "rounded",
+              borderColor: "#475569",
+              backgroundColor: mainInputFocused ? selectedRowBackground : "#020617",
+              color: mainInputFocused ? "#ffffff" : "#f8fafc",
+              placeholderColor: mainInputFocused ? "#94a3b8" : "#64748b",
             }}
             onChange={(event: PaintChangeEvent) => {
               setDraft(event.target.value);
@@ -349,7 +347,7 @@ function TodoApp(): React.ReactElement {
               setMainInputFocused(false);
             }}
             onKeyDown={(event: PaintKeyboardEvent) => {
-              if (event.key === 'ArrowDown') {
+              if (event.key === "ArrowDown") {
                 event.preventDefault();
                 event.stopPropagation();
                 enterSelectionMode();
@@ -358,8 +356,8 @@ function TodoApp(): React.ReactElement {
           />
           <Button
             type="submit"
-            style={addButtonStyle(hovered === 'add')}
-            onMouseEnter={() => setHovered('add')}
+            style={addButtonStyle(hovered === "add")}
+            onMouseEnter={() => setHovered("add")}
             onMouseLeave={() => setHovered(undefined)}
           >
             Add
@@ -367,10 +365,10 @@ function TodoApp(): React.ReactElement {
         </Form>
         <Div
           style={{
-            display: 'flex',
-            flexDirection: 'row',
+            display: "flex",
+            flexDirection: "row",
             gap: 1,
-            width: '100%',
+            width: "100%",
             minHeight: 0,
             flexShrink: 1,
           }}
@@ -378,17 +376,17 @@ function TodoApp(): React.ReactElement {
           <Div
             ref={listRef}
             style={{
-              display: 'flex',
-              flexDirection: 'column',
+              display: "flex",
+              flexDirection: "column",
               gap: 1,
               width: 72,
               minHeight: 0,
               flexShrink: 1,
-              overflowY: 'scroll',
-              padding: '1 1',
-              border: 'rounded',
-              borderColor: '#334155',
-              backgroundColor: '#111827',
+              overflowY: "scroll",
+              padding: "1 1",
+              border: "rounded",
+              borderColor: "#334155",
+              backgroundColor: "#111827",
             }}
             onScroll={(event: PaintScrollEvent) => {
               const list = listRef.current;
@@ -400,7 +398,7 @@ function TodoApp(): React.ReactElement {
             }}
           >
             {todos.length === 0 ? (
-              <Div style={{color: '#64748b'}}>No todos</Div>
+              <Div style={{ color: "#64748b" }}>No todos</Div>
             ) : (
               todos.map(todo => (
                 <TodoRow
@@ -426,10 +424,10 @@ function TodoApp(): React.ReactElement {
           </Div>
           <ScrollRail metrics={scrollMetrics} />
         </Div>
-        <Div style={{color: selectedIndex === undefined ? '#64748b' : '#38bdf8'}}>
+        <Div style={{ color: selectedIndex === undefined ? "#64748b" : "#38bdf8" }}>
           {selectionInstruction}
         </Div>
-        <Div style={{color: '#64748b'}}>
+        <Div style={{ color: "#64748b" }}>
           {todos.filter(todo => !todo.completed).length} open / {todos.length} total
         </Div>
       </Div>
@@ -437,7 +435,7 @@ function TodoApp(): React.ReactElement {
   );
 }
 
-function ScrollRail({metrics}: {metrics: TodoScrollMetrics}): React.ReactElement {
+function ScrollRail({ metrics }: { metrics: TodoScrollMetrics }): React.ReactElement {
   const clientHeight = Math.max(0, Math.floor(metrics.clientHeight));
   const scrollHeight = Math.max(clientHeight, Math.floor(metrics.scrollHeight));
   const overflow = scrollHeight > clientHeight && clientHeight > 0;
@@ -447,9 +445,8 @@ function ScrollRail({metrics}: {metrics: TodoScrollMetrics}): React.ReactElement
     : trackHeight;
   const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
   const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
-  const thumbTop = overflow && maxScrollTop > 0
-    ? Math.round((metrics.scrollTop / maxScrollTop) * maxThumbTop)
-    : 0;
+  const thumbTop =
+    overflow && maxScrollTop > 0 ? Math.round((metrics.scrollTop / maxScrollTop) * maxThumbTop) : 0;
   const thumbBottom = Math.max(0, trackHeight - thumbTop - thumbHeight);
 
   return (
@@ -457,22 +454,22 @@ function ScrollRail({metrics}: {metrics: TodoScrollMetrics}): React.ReactElement
       style={{
         width: 1,
         height: trackHeight,
-        display: 'flex',
-        flexDirection: 'column',
+        display: "flex",
+        flexDirection: "column",
         flexShrink: 0,
-        backgroundColor: '#111827',
+        backgroundColor: "#111827",
       }}
     >
-      <Div style={{height: thumbTop, width: 1, flexShrink: 0}} />
+      <Div style={{ height: thumbTop, width: 1, flexShrink: 0 }} />
       <Div
         style={{
           height: thumbHeight,
           width: 1,
           flexShrink: 0,
-          backgroundColor: overflow ? '#38bdf8' : '#334155',
+          backgroundColor: overflow ? "#38bdf8" : "#334155",
         }}
       />
-      <Div style={{height: thumbBottom, width: 1, flexShrink: 0}} />
+      <Div style={{ height: thumbBottom, width: 1, flexShrink: 0 }} />
     </Div>
   );
 }
@@ -480,16 +477,16 @@ function ScrollRail({metrics}: {metrics: TodoScrollMetrics}): React.ReactElement
 const todoListVerticalChrome = 2;
 const todoRowHeight = 3;
 const todoRowStride = 4;
-const selectedRowBackground = '#1e3a5f';
+const selectedRowBackground = "#1e3a5f";
 
 function selectionHint(selectedTodo: Todo | undefined): string {
   if (selectedTodo === undefined) {
-    return 'Press Down to select todos';
+    return "Press Down to select todos";
   }
 
   return selectedTodo.completed
-    ? 'Press Up or Down to select items; T toggles, X deletes'
-    : 'Press Up or Down to select items; T toggles, E edits, X deletes';
+    ? "Press Up or Down to select items; T toggles, X deletes"
+    : "Press Up or Down to select items; T toggles, E edits, X deletes";
 }
 
 function indexAfterDelete(
@@ -552,11 +549,11 @@ function TodoRow({
   return (
     <Div
       style={{
-        display: 'flex',
-        flexDirection: 'row',
-        alignItems: 'center',
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
         gap: 1,
-        width: '100%',
+        width: "100%",
         flexShrink: 0,
         backgroundColor: selected ? selectedRowBackground : undefined,
       }}
@@ -571,7 +568,7 @@ function TodoRow({
           toggleTodo();
         }}
       >
-        {todo.completed ? '✓' : ' '}
+        {todo.completed ? "✓" : " "}
       </Button>
       {editing ? (
         <Input
@@ -581,16 +578,16 @@ function TodoRow({
             flexGrow: 1,
             flexShrink: 1,
             height: 3,
-            border: 'rounded',
-            borderColor: '#38bdf8',
-            backgroundColor: '#020617',
-            color: '#f8fafc',
+            border: "rounded",
+            borderColor: "#38bdf8",
+            backgroundColor: "#020617",
+            color: "#f8fafc",
           }}
           onChange={(event: PaintChangeEvent) => {
             setEditingText(event.target.value);
           }}
           onKeyDown={(event: PaintKeyboardEvent) => {
-            if (event.key === 'Enter') {
+            if (event.key === "Enter") {
               event.preventDefault();
               commitEdit();
             }
@@ -604,18 +601,18 @@ function TodoRow({
           style={{
             flexGrow: 1,
             flexShrink: 1,
-            color: todo.completed ? '#64748b' : '#f8fafc',
+            color: todo.completed ? "#64748b" : "#f8fafc",
           }}
         >
           {todo.completed ? `${todo.text} (done)` : todo.text}
         </Div>
       )}
       {todo.completed ? (
-        <Div style={{width: 3, height: 3, flexShrink: 0}} />
+        <Div style={{ width: 3, height: 3, flexShrink: 0 }} />
       ) : (
         <Button
           type="button"
-          style={iconButtonStyle('edit', editHover)}
+          style={iconButtonStyle("edit", editHover)}
           onMouseEnter={() => setHovered(`edit:${todo.id}`)}
           onMouseLeave={() => setHovered(undefined)}
           onClick={event => {
@@ -628,7 +625,7 @@ function TodoRow({
       )}
       <Button
         type="button"
-        style={iconButtonStyle('delete', deleteHover)}
+        style={iconButtonStyle("delete", deleteHover)}
         onMouseEnter={() => setHovered(`delete:${todo.id}`)}
         onMouseLeave={() => setHovered(undefined)}
         onClick={event => {
@@ -643,75 +640,75 @@ function TodoRow({
 }
 
 function addButtonStyle(hovered: boolean): CSSStyleProperties {
-  const backgroundColor = hovered ? '#15803d' : '#14532d';
+  const backgroundColor = hovered ? "#15803d" : "#14532d";
   return {
     width: 14,
     height: 3,
     flexShrink: 0,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    border: 'chunky-rounded',
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    border: "chunky-rounded",
     borderColor: backgroundColor,
     backgroundColor,
-    color: '#f0fdf4',
-    cursor: 'pointer',
+    color: "#f0fdf4",
+    cursor: "pointer",
   };
 }
 
 function checkboxStyle(completed: boolean, hovered: boolean): CSSStyleProperties {
   if (completed) {
-    const backgroundColor = hovered ? '#166534' : '#14532d';
+    const backgroundColor = hovered ? "#166534" : "#14532d";
     return {
       width: 3,
       height: 3,
       flexShrink: 0,
-      border: 'chunky-rounded',
+      border: "chunky-rounded",
       borderColor: backgroundColor,
       backgroundColor,
-      color: '#dcfce7',
-      cursor: 'pointer',
+      color: "#dcfce7",
+      cursor: "pointer",
     };
   }
 
-  const backgroundColor = hovered ? '#1e293b' : '#020617';
+  const backgroundColor = hovered ? "#1e293b" : "#020617";
   return {
     width: 3,
     height: 3,
     flexShrink: 0,
-    border: 'chunky-rounded',
+    border: "chunky-rounded",
     borderColor: backgroundColor,
     backgroundColor,
-    color: '#94a3b8',
-    cursor: 'pointer',
+    color: "#94a3b8",
+    cursor: "pointer",
   };
 }
 
-function iconButtonStyle(kind: 'edit' | 'delete', hovered: boolean): CSSStyleProperties {
-  if (kind === 'edit') {
-    const backgroundColor = hovered ? '#713f12' : '#1e293b';
+function iconButtonStyle(kind: "edit" | "delete", hovered: boolean): CSSStyleProperties {
+  if (kind === "edit") {
+    const backgroundColor = hovered ? "#713f12" : "#1e293b";
     return {
       width: 3,
       height: 3,
       flexShrink: 0,
-      border: 'chunky-rounded',
+      border: "chunky-rounded",
       borderColor: backgroundColor,
       backgroundColor,
-      color: '#fef3c7',
-      cursor: 'pointer',
+      color: "#fef3c7",
+      cursor: "pointer",
     };
   }
 
-  const backgroundColor = hovered ? '#7f1d1d' : '#450a0a';
+  const backgroundColor = hovered ? "#7f1d1d" : "#450a0a";
   return {
     width: 3,
     height: 3,
     flexShrink: 0,
-    border: 'chunky-rounded',
+    border: "chunky-rounded",
     borderColor: backgroundColor,
     backgroundColor,
-    color: '#fee2e2',
-    cursor: 'pointer',
+    color: "#fee2e2",
+    cursor: "pointer",
   };
 }
 

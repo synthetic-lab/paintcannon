@@ -9,7 +9,7 @@ import type {
   TerminalMouseEvent,
   TerminalResizeEvent,
   TerminalSize,
-} from '../index.ts';
+} from "../index.ts";
 
 export interface NativeTextControlState {
   value: string;
@@ -148,7 +148,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
     }
     for (const command of commands) {
       if (
-        command.type === 'setStyleProperty' &&
+        command.type === "setStyleProperty" &&
         command.id !== undefined &&
         command.property !== undefined &&
         command.value !== undefined
@@ -225,14 +225,16 @@ export class MockNativePaintCannon implements NativePaintCannon {
   }
 
   scrollMetrics(id: number): NativeScrollMetrics {
-    return this.scrollMetricsById.get(id) ?? {
-      scrollLeft: 0,
-      scrollTop: 0,
-      scrollWidth: 0,
-      scrollHeight: 0,
-      clientWidth: 0,
-      clientHeight: 0,
-    };
+    return (
+      this.scrollMetricsById.get(id) ?? {
+        scrollLeft: 0,
+        scrollTop: 0,
+        scrollWidth: 0,
+        scrollHeight: 0,
+        clientWidth: 0,
+        clientHeight: 0,
+      }
+    );
   }
 
   setSyntheticKeyupDelay(_delayMs: number): void {}
@@ -294,9 +296,12 @@ function resolveBatchId(id: number, mappings: NativeBatchIdMapping[]): number {
   return mappings.find(mapping => mapping.temporaryId === id)?.id ?? id;
 }
 
-export function keyDown(key: string, options: Partial<NativeKeyboardEvent> = {}): NativeKeyboardEvent {
+export function keyDown(
+  key: string,
+  options: Partial<NativeKeyboardEvent> = {},
+): NativeKeyboardEvent {
   return {
-    type: 'keydown',
+    type: "keydown",
     key,
     code: options.code ?? (key.length === 1 ? `Key${key.toUpperCase()}` : key),
     ctrlKey: false,
@@ -309,7 +314,7 @@ export function keyDown(key: string, options: Partial<NativeKeyboardEvent> = {})
 }
 
 export function mouseEvent(
-  type: TerminalMouseEvent['type'],
+  type: TerminalMouseEvent["type"],
   options: Partial<TerminalMouseEvent> = {},
 ): TerminalMouseEvent {
   return {
@@ -329,9 +334,9 @@ export function mouseEvent(
 
 function emptyTextControlState(): NativeTextControlState {
   return {
-    value: '',
+    value: "",
     cursor: 0,
     focused: false,
-    placeholder: '',
+    placeholder: "",
   };
 }

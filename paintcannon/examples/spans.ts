@@ -1,49 +1,51 @@
-import { PaintCannon } from '../index.ts';
+import { PaintCannon } from "../index.ts";
 
 const pc = new PaintCannon({ fps: 30 });
 
-const root = pc.createElement('div');
+const root = pc.createElement("div");
 pc.setRoot(root);
-root.style.display = 'flex';
-root.style.justifyContent = 'center';
-root.style.alignItems = 'center';
-root.style.width = '100%';
-root.style.height = '100%';
-root.style.backgroundColor = 'black';
+root.style.display = "flex";
+root.style.justifyContent = "center";
+root.style.alignItems = "center";
+root.style.width = "100%";
+root.style.height = "100%";
+root.style.backgroundColor = "black";
 
-const paragraph = pc.createElement('div');
-paragraph.style.width = '58px';
-paragraph.style.height = '8px';
-paragraph.style.backgroundColor = 'blue';
+const paragraph = pc.createElement("div");
+paragraph.style.width = "58px";
+paragraph.style.height = "8px";
+paragraph.style.backgroundColor = "blue";
 
-paragraph.appendChild(pc.createTextNode('Inline text can contain '));
+paragraph.appendChild(pc.createTextNode("Inline text can contain "));
 
-const hot = pc.createElement('span');
-hot.style.backgroundColor = 'red';
-hot.appendChild(pc.createTextNode('styled spans'));
+const hot = pc.createElement("span");
+hot.style.backgroundColor = "red";
+hot.appendChild(pc.createTextNode("styled spans"));
 paragraph.appendChild(hot);
 
-paragraph.appendChild(pc.createTextNode(' that keep flowing with surrounding text and wrap across terminal cells. '));
+paragraph.appendChild(
+  pc.createTextNode(" that keep flowing with surrounding text and wrap across terminal cells. "),
+);
 
-const inlineDiv = pc.createElement('div');
-inlineDiv.style.display = 'inline';
-inlineDiv.style.backgroundColor = 'green';
-inlineDiv.appendChild(pc.createTextNode('Inline divs'));
+const inlineDiv = pc.createElement("div");
+inlineDiv.style.display = "inline";
+inlineDiv.style.backgroundColor = "green";
+inlineDiv.appendChild(pc.createTextNode("Inline divs"));
 paragraph.appendChild(inlineDiv);
-paragraph.appendChild(pc.createTextNode(' can flow too. '));
+paragraph.appendChild(pc.createTextNode(" can flow too. "));
 
-const cool = pc.createElement('span');
-cool.style.backgroundColor = 'cyan';
-cool.appendChild(pc.createTextNode('Nested '));
+const cool = pc.createElement("span");
+cool.style.backgroundColor = "cyan";
+cool.appendChild(pc.createTextNode("Nested "));
 
-const nested = pc.createElement('span');
-nested.style.backgroundColor = 'magenta';
-nested.appendChild(pc.createTextNode('inline'));
+const nested = pc.createElement("span");
+nested.style.backgroundColor = "magenta";
+nested.appendChild(pc.createTextNode("inline"));
 cool.appendChild(nested);
 
-cool.appendChild(pc.createTextNode(' spans'));
+cool.appendChild(pc.createTextNode(" spans"));
 paragraph.appendChild(cool);
-paragraph.appendChild(pc.createTextNode(' work too.'));
+paragraph.appendChild(pc.createTextNode(" work too."));
 
 root.appendChild(paragraph);
 

@@ -1,4 +1,4 @@
-import * as hostComponents from './host-components/index.ts';
+import * as hostComponents from "./host-components/index.ts";
 
 export {
   useAnimation,
@@ -6,14 +6,14 @@ export {
   type AnimationOptions,
   type AnimationResult,
   type PaintCannonReactApp,
-} from './hooks/index.ts';
+} from "./hooks/index.ts";
 
 export {
   createRoot,
   render,
   type CreateRootOptions,
   type PaintCannonReactRoot,
-} from './reconciler.ts';
+} from "./reconciler.ts";
 
 export type DivProps = hostComponents.div.Props;
 export type DivElement = hostComponents.div.Element;

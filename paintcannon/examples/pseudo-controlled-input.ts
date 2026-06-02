@@ -1,4 +1,4 @@
-import { PaintCannon, TextAreaElement, type InputElement, type KeyboardEvent } from '../index.ts';
+import { PaintCannon, TextAreaElement, type InputElement, type KeyboardEvent } from "../index.ts";
 
 type TextControl = InputElement | TextAreaElement;
 
@@ -7,7 +7,7 @@ interface ControlledField {
   value: string;
   cursor: number;
   updates: number;
-  stats: ReturnType<PaintCannon['createTextNode']>;
+  stats: ReturnType<PaintCannon["createTextNode"]>;
 }
 
 const pc = new PaintCannon({
@@ -16,28 +16,32 @@ const pc = new PaintCannon({
   fps: 60,
 });
 
-const root = pc.createElement('div');
-root.style.display = 'flex';
-root.style.flexDirection = 'column';
-root.style.justifyContent = 'center';
-root.style.alignItems = 'center';
-root.style.width = '100%';
-root.style.height = '100%';
+const root = pc.createElement("div");
+root.style.display = "flex";
+root.style.flexDirection = "column";
+root.style.justifyContent = "center";
+root.style.alignItems = "center";
+root.style.width = "100%";
+root.style.height = "100%";
 root.style.gap = 1;
-root.style.backgroundColor = '#111827';
-root.style.color = '#e5e7eb';
+root.style.backgroundColor = "#111827";
+root.style.color = "#e5e7eb";
 pc.setRoot(root);
 
-const title = pc.createElement('div');
-title.style.color = '#93c5fd';
-title.appendChild(pc.createTextNode('core pseudo-controlled input demo'));
+const title = pc.createElement("div");
+title.style.color = "#93c5fd";
+title.appendChild(pc.createTextNode("core pseudo-controlled input demo"));
 
-const subtitle = pc.createElement('div');
-subtitle.style.color = '#94a3b8';
-subtitle.appendChild(pc.createTextNode('Userland prevents default, computes value, then sets value/cursor manually. Escape exits.'));
+const subtitle = pc.createElement("div");
+subtitle.style.color = "#94a3b8";
+subtitle.appendChild(
+  pc.createTextNode(
+    "Userland prevents default, computes value, then sets value/cursor manually. Escape exits.",
+  ),
+);
 
-const inputField = field('input', 'type here', false);
-const textareaField = field('textarea', 'multi-line typing', true);
+const inputField = field("input", "type here", false);
+const textareaField = field("textarea", "multi-line typing", true);
 
 root.appendChild(title);
 root.appendChild(subtitle);
@@ -47,8 +51,8 @@ root.appendChild(textareaField.row);
 inputField.control.focus();
 pc.render();
 
-pc.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' || (event.ctrlKey && event.code === 'KeyC')) {
+pc.addEventListener("keydown", event => {
+  if (event.key === "Escape" || (event.ctrlKey && event.code === "KeyC")) {
     event.preventDefault();
     pc.stop();
     process.exit(0);
@@ -56,42 +60,42 @@ pc.addEventListener('keydown', (event) => {
 });
 
 function field(labelText: string, placeholder: string, multiline: boolean) {
-  const row = pc.createElement('div');
-  row.style.display = 'flex';
-  row.style.flexDirection = 'row';
-  row.style.alignItems = 'center';
+  const row = pc.createElement("div");
+  row.style.display = "flex";
+  row.style.flexDirection = "row";
+  row.style.alignItems = "center";
   row.style.gap = 2;
 
-  const label = pc.createElement('div');
+  const label = pc.createElement("div");
   label.style.width = 10;
-  label.style.color = '#cbd5e1';
+  label.style.color = "#cbd5e1";
   label.appendChild(pc.createTextNode(labelText));
 
-  const input = pc.createElement(multiline ? 'textarea' : 'input');
+  const input = pc.createElement(multiline ? "textarea" : "input");
   input.placeholder = placeholder;
   input.style.width = 48;
   input.style.minHeight = multiline ? 5 : 3;
-  input.style.backgroundColor = '#020617';
-  input.style.color = '#f8fafc';
-  input.style.placeholderColor = '#64748b';
-  input.style.border = 'rounded';
-  input.style.borderColor = '#64748b';
+  input.style.backgroundColor = "#020617";
+  input.style.color = "#f8fafc";
+  input.style.placeholderColor = "#64748b";
+  input.style.border = "rounded";
+  input.style.borderColor = "#64748b";
 
-  const statsBox = pc.createElement('div');
+  const statsBox = pc.createElement("div");
   statsBox.style.width = 18;
-  statsBox.style.color = '#a7f3d0';
-  const stats = pc.createTextNode('updates=0');
+  statsBox.style.color = "#a7f3d0";
+  const stats = pc.createTextNode("updates=0");
   statsBox.appendChild(stats);
 
   const controlled: ControlledField = {
     input,
-    value: '',
+    value: "",
     cursor: 0,
     updates: 0,
     stats,
   };
 
-  input.addEventListener('keydown', (event) => {
+  input.addEventListener("keydown", event => {
     if (handleControlledKey(controlled, event)) {
       event.preventDefault();
     }
@@ -104,7 +108,7 @@ function field(labelText: string, placeholder: string, multiline: boolean) {
 }
 
 function handleControlledKey(field: ControlledField, event: KeyboardEvent): boolean {
-  if (event.altKey || event.metaKey || event.type !== 'keydown') {
+  if (event.altKey || event.metaKey || event.type !== "keydown") {
     return false;
   }
 
@@ -133,13 +137,13 @@ function editText(
 
   if (event.ctrlKey) {
     switch (event.code) {
-      case 'KeyA':
+      case "KeyA":
         return { value, cursor: 0 };
-      case 'KeyE':
+      case "KeyE":
         return { value, cursor: chars.length };
-      case 'KeyB':
+      case "KeyB":
         return { value, cursor: clampCursor(cursor - 1, chars.length) };
-      case 'KeyF':
+      case "KeyF":
         return { value, cursor: clampCursor(cursor + 1, chars.length) };
       default:
         return undefined;
@@ -147,28 +151,28 @@ function editText(
   }
 
   switch (event.key) {
-    case 'Backspace':
+    case "Backspace":
       if (cursor === 0) {
         return { value, cursor };
       }
       chars.splice(cursor - 1, 1);
-      return { value: chars.join(''), cursor: cursor - 1 };
-    case 'Delete':
+      return { value: chars.join(""), cursor: cursor - 1 };
+    case "Delete":
       if (cursor >= chars.length) {
         return { value, cursor };
       }
       chars.splice(cursor, 1);
-      return { value: chars.join(''), cursor };
-    case 'ArrowLeft':
+      return { value: chars.join(""), cursor };
+    case "ArrowLeft":
       return { value, cursor: clampCursor(cursor - 1, chars.length) };
-    case 'ArrowRight':
+    case "ArrowRight":
       return { value, cursor: clampCursor(cursor + 1, chars.length) };
-    case 'Home':
+    case "Home":
       return { value, cursor: 0 };
-    case 'End':
+    case "End":
       return { value, cursor: chars.length };
-    case 'Enter':
-      return multiline ? insert(chars, cursor, '\n') : undefined;
+    case "Enter":
+      return multiline ? insert(chars, cursor, "\n") : undefined;
     default:
       return event.key.length === 1 ? insert(chars, cursor, event.key) : undefined;
   }
@@ -178,7 +182,7 @@ function insert(chars: string[], cursor: number, text: string): { value: string;
   const inserted = Array.from(text);
   chars.splice(cursor, 0, ...inserted);
   return {
-    value: chars.join(''),
+    value: chars.join(""),
     cursor: cursor + inserted.length,
   };
 }

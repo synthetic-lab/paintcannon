@@ -1,4 +1,4 @@
-import { PaintCannon, type KeyboardEvent } from '../index.ts';
+import { PaintCannon, type KeyboardEvent } from "../index.ts";
 
 const pc = new PaintCannon({ fps: 30 });
 
@@ -19,38 +19,38 @@ let leftScore = 0;
 let rightScore = 0;
 let lastBallStep = 0;
 let lastFrame = 0;
-let winner: 'left' | 'right' | undefined;
+let winner: "left" | "right" | undefined;
 const heldKeys = new Set<string>();
 
-const root = pc.createElement('div');
+const root = pc.createElement("div");
 pc.setRoot(root);
-root.style.width = '100%';
-root.style.height = '100%';
-root.style.backgroundColor = 'black';
+root.style.width = "100%";
+root.style.height = "100%";
+root.style.backgroundColor = "black";
 
-const panel = pc.createElement('div');
-panel.style.backgroundColor = 'black';
+const panel = pc.createElement("div");
+panel.style.backgroundColor = "black";
 panel.style.width = `${width}px`;
 panel.style.height = `${height}px`;
-panel.style.whiteSpace = 'pre';
+panel.style.whiteSpace = "pre";
 
 const frame = pc.createTextNode(renderFrame());
 panel.appendChild(frame);
 root.appendChild(panel);
 
-pc.addEventListener('keydown', onKeyDown);
+pc.addEventListener("keydown", onKeyDown);
 if (pc.kittyKeyboardEnabled) {
-  pc.addEventListener('keyup', onKeyUp);
+  pc.addEventListener("keyup", onKeyUp);
 }
 pc.requestAnimationFrame(tick);
 
-process.once('SIGINT', () => {
+process.once("SIGINT", () => {
   pc.stop();
   process.exit(130);
 });
 
 function onKeyDown(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
+  if (event.key === "Escape") {
     pc.stop();
     return;
   }
@@ -68,7 +68,7 @@ function onKeyUp(event: KeyboardEvent) {
 
 function tick(timestamp: number) {
   if (winner) {
-    frame.nodeValue = `${winner === 'left' ? 'Left' : 'Right'} side won ${leftScore}-${rightScore}`;
+    frame.nodeValue = `${winner === "left" ? "Left" : "Right"} side won ${leftScore}-${rightScore}`;
     pc.requestAnimationFrame(() => {
       setTimeout(() => pc.stop(), 750);
     });
@@ -93,16 +93,16 @@ function moveHeldPaddles(timestamp: number) {
   lastFrame = timestamp;
   const amount = paddleCellsPerSecond * elapsedSeconds;
 
-  if (heldKeys.has('KeyW')) {
+  if (heldKeys.has("KeyW")) {
     leftY -= amount;
   }
-  if (heldKeys.has('KeyS')) {
+  if (heldKeys.has("KeyS")) {
     leftY += amount;
   }
-  if (heldKeys.has('ArrowUp')) {
+  if (heldKeys.has("ArrowUp")) {
     rightY -= amount;
   }
-  if (heldKeys.has('ArrowDown')) {
+  if (heldKeys.has("ArrowDown")) {
     rightY += amount;
   }
 
@@ -112,16 +112,16 @@ function moveHeldPaddles(timestamp: number) {
 
 function movePaddleForKeydown(code: string) {
   switch (code) {
-    case 'KeyW':
+    case "KeyW":
       leftY -= fallbackPaddleStep;
       break;
-    case 'KeyS':
+    case "KeyS":
       leftY += fallbackPaddleStep;
       break;
-    case 'ArrowUp':
+    case "ArrowUp":
       rightY -= fallbackPaddleStep;
       break;
-    case 'ArrowDown':
+    case "ArrowDown":
       rightY += fallbackPaddleStep;
       break;
   }
@@ -171,9 +171,9 @@ function stepBall() {
   }
 
   if (leftScore >= winningScore) {
-    winner = 'left';
+    winner = "left";
   } else if (rightScore >= winningScore) {
-    winner = 'right';
+    winner = "right";
   }
 }
 
@@ -194,24 +194,24 @@ function paddleBounce(y: number, paddleY: number) {
 }
 
 function renderFrame() {
-  const rows = Array.from({ length: height }, () => Array.from({ length: width }, () => ' '));
+  const rows = Array.from({ length: height }, () => Array.from({ length: width }, () => " "));
 
   for (let x = 0; x < width; x++) {
-    rows[0][x] = '-';
-    rows[height - 1][x] = '-';
+    rows[0][x] = "-";
+    rows[height - 1][x] = "-";
   }
 
   for (let y = 1; y < height - 1; y++) {
-    rows[y][Math.floor(width / 2)] = y % 2 === 0 ? ':' : ' ';
+    rows[y][Math.floor(width / 2)] = y % 2 === 0 ? ":" : " ";
   }
 
   for (let index = 0; index < paddleHeight; index++) {
-    rows[Math.round(leftY) + index][0] = '#';
-    rows[Math.round(rightY) + index][width - 1] = '#';
+    rows[Math.round(leftY) + index][0] = "#";
+    rows[Math.round(rightY) + index][width - 1] = "#";
   }
 
   if (ballX >= 0 && ballX < width && ballY >= 0 && ballY < height) {
-    rows[ballY][ballX] = 'o';
+    rows[ballY][ballX] = "o";
   }
 
   const score = `Left ${leftScore}   Right ${rightScore}`;
@@ -220,13 +220,13 @@ function renderFrame() {
     rows[1][scoreX + i] = score[i];
   }
 
-  const help = 'W/S vs Up/Down';
+  const help = "W/S vs Up/Down";
   const helpX = Math.floor((width - help.length) / 2);
   for (let i = 0; i < help.length; i++) {
     rows[height - 2][helpX + i] = help[i];
   }
 
-  return rows.map((row) => row.join('')).join('\n');
+  return rows.map(row => row.join("")).join("\n");
 }
 
 function resizeToTerminal() {

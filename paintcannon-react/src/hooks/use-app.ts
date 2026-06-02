@@ -1,5 +1,5 @@
-import React from 'react';
-import type {PaintCannon} from 'paintcannon';
+import React from "react";
+import type { PaintCannon } from "paintcannon";
 
 export type PaintCannonReactApp = {
   readonly paintCannon: PaintCannon;
@@ -12,7 +12,7 @@ export const AppContext = React.createContext<PaintCannonReactApp | undefined>(u
 export function useApp(): PaintCannonReactApp {
   const app = React.useContext(AppContext);
   if (app === undefined) {
-    throw new Error('useApp() must be used inside a paintcannon-react render tree');
+    throw new Error("useApp() must be used inside a paintcannon-react render tree");
   }
   return app;
 }
