@@ -5,6 +5,7 @@
   "types": "dist/index.d.ts",
   "type": "module",
   "files": [
+    "README.md",
     "dist/index.js",
     "dist/index.d.ts",
     "dist/native.d.ts",

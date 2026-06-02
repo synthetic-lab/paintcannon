@@ -5,6 +5,7 @@
   "types": "dist/src/index.d.ts",
   "type": "module",
   "files": [
+    "README.md",
     "dist/src"
   ],
   "scripts": {
@@ -20,10 +21,12 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "paintcannon": "0.0.1",
-    "react": "^19.0.0",
     "react-reconciler": "^0.31.0",
     "scheduler": "^0.25.0"
+  },
+  "peerDependencies": {
+    "paintcannon": "^0.0.1",
+    "react": "^19.0.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
