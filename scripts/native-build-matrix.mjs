@@ -6,7 +6,7 @@ const paintcannonPackage = JSON.parse(
 
 const targetSettings = {
   "x86_64-apple-darwin": {
-    host: "macos-13",
+    host: "macos-26-intel",
     build: "npm run build:native --workspace paintcannon -- --target x86_64-apple-darwin",
   },
   "aarch64-apple-darwin": {
