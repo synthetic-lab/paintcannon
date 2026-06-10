@@ -78,3 +78,10 @@ node ./paintcannon-react/dist/examples/todo.js
 NAPI-RS native targets are declared in `paintcannon/package.json`'s
 `napi.targets`; update that list to add or remove platform builds. CI and
 release jobs read the same target list when building native artifacts.
+
+Local package release tag creation is guarded by Git's `reference-transaction`
+hook, since Git does not have a `pre-tag` hook. The hook validates the
+package-scoped tag name, then runs `npm run release:check` before the local tag
+ref is committed. Releases use package-scoped tags: `paintcannon@0.0.1`
+publishes only `paintcannon`, while `paintcannon-react@0.0.1` publishes only
+`paintcannon-react`.

@@ -1,0 +1,31 @@
+state="$1"
+
+if [ "$state" != "prepared" ]; then
+  exit 0
+fi
+
+zero_oid="0000000000000000000000000000000000000000"
+run_release_check=0
+
+while read -r _old_oid new_oid ref_name; do
+  if [ "$new_oid" = "$zero_oid" ]; then
+    continue
+  fi
+
+  case "$ref_name" in
+    refs/tags/paintcannon@*)
+      tag_name="${ref_name#refs/tags/}"
+      node scripts/verify-release-tag.mjs paintcannon "$tag_name" || exit $?
+      run_release_check=1
+      ;;
+    refs/tags/paintcannon-react@*)
+      tag_name="${ref_name#refs/tags/}"
+      node scripts/verify-release-tag.mjs paintcannon-react "$tag_name" || exit $?
+      run_release_check=1
+      ;;
+  esac
+done
+
+if [ "$run_release_check" = "1" ]; then
+  npm run release:check
+fi
