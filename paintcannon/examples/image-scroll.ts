@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PaintCannon } from "../index.ts";
+import { PaintCannon } from "../main.ts";
 
 const pngPath = join("/tmp", "paintcannon-image-scroll-demo.png");
 const pngBase64 =

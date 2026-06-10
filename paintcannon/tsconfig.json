@@ -14,5 +14,5 @@
     "rewriteRelativeImportExtensions": true,
     "types": ["node"]
   },
-  "include": ["index.ts", "examples/**/*.ts"]
+  "include": ["main.ts", "examples/**/*.ts"]
 }

@@ -1,19 +1,38 @@
 {
   "name": "paintcannon",
   "version": "0.0.1",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "license": "ISC",
+  "main": "dist/main.js",
+  "types": "dist/main.d.ts",
   "type": "module",
+  "imports": {
+    "#paintcannon-native": {
+      "types": "./dist/napi/index.d.ts",
+      "default": "./dist/napi/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "files": [
     "README.md",
-    "dist/index.js",
-    "dist/index.d.ts",
-    "dist/native.d.ts",
-    "paintcannon.node"
+    "LICENSE",
+    "dist/main.js",
+    "dist/main.d.ts",
+    "dist/napi/index.js",
+    "dist/napi/index.d.ts"
   ],
   "scripts": {
-    "build": "napi build --release --dts dist/native.d.ts && tsc",
-    "build:debug": "napi build --dts dist/native.d.ts && tsc",
+    "build": "npm run build:native:local && npm run build:ts",
+    "build:debug": "npm run build:native:debug && npm run build:ts",
+    "build:ts": "tsc",
+    "build:native": "napi build --platform --release --output-dir dist/napi --dts index.d.ts --js index.js --esm",
+    "build:native:local": "napi build --platform --release --target x86_64-unknown-linux-gnu --output-dir dist/napi --dts index.d.ts --js index.js --esm",
+    "build:native:debug": "napi build --platform --target x86_64-unknown-linux-gnu --output-dir dist/napi --dts index.d.ts --js index.js --esm",
+    "artifacts": "napi artifacts",
+    "create-npm-dirs": "napi create-npm-dirs",
+    "napi:prepublish": "napi prepublish -t npm",
     "demo": "npm run build:debug && node dist/examples/basic.js",
     "demo:alt-restart": "npm run build:debug && node dist/examples/alt-screen-restart.js",
     "demo:borders": "npm run build:debug && node dist/examples/borders.js",
@@ -40,12 +59,22 @@
     "demo:spans": "npm run build:debug && node dist/examples/spans.js",
     "demo:textarea": "npm run build:debug && node dist/examples/textarea.js",
     "demo:transitions": "npm run build:debug && node dist/examples/transitions.js",
-    "test": "vitest run",
-    "prepublishOnly": "npm run build"
+    "test": "npm run build:native:debug && vitest run",
+    "prepublishOnly": "npm run build:native:local && npm run build:ts && node scripts/verify-native-artifacts.mjs && npm run napi:prepublish"
   },
   "napi": {
     "binaryName": "paintcannon",
-    "targets": []
+    "packageName": "@syntheticlab/paintcannon-native",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl"
+    ]
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.6.2",

@@ -9,7 +9,7 @@ import type {
   TerminalMouseEvent,
   TerminalResizeEvent,
   TerminalSize,
-} from "../index.ts";
+} from "../main.ts";
 
 export interface NativeTextControlState {
   value: string;

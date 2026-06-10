@@ -1,4 +1,4 @@
-import { PaintCannon, TextAreaElement, type InputElement, type KeyboardEvent } from "../index.ts";
+import { PaintCannon, TextAreaElement, type InputElement, type KeyboardEvent } from "../main.ts";
 
 type TextControl = InputElement | TextAreaElement;
 

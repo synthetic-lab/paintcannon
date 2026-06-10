@@ -3,7 +3,7 @@ import {
   type InputElement,
   type PaintFocusEvent,
   type TextAreaElement,
-} from "../index.ts";
+} from "../main.ts";
 
 const pc = new PaintCannon({
   alternateScreen: true,

@@ -1,6 +1,7 @@
 {
   "name": "paintcannon-monorepo",
   "private": true,
+  "license": "ISC",
   "workspaces": [
     "paintcannon",
     "paintcannon-react"

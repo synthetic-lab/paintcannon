@@ -1,4 +1,4 @@
-import { PaintCannon } from "../index.ts";
+import { PaintCannon } from "../main.ts";
 
 const pc = new PaintCannon({ fps: 30 });
 

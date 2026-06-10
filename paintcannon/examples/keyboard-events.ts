@@ -1,4 +1,4 @@
-import { PaintCannon, type KeyboardEvent } from "../index.ts";
+import { PaintCannon, type KeyboardEvent } from "../main.ts";
 
 const pc = new PaintCannon({ captureCtrlC: true, fps: 30 });
 

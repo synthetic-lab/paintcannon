@@ -1,10 +1,34 @@
-import fs from "node:fs";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { fileURLToPath } from "node:url";
 import { registry } from "antipattern";
+import { PaintCannon as NativePaintCannonClass } from "#paintcannon-native";
+import type {
+  BatchCommand as NativeBatchCommand,
+  BatchIdMapping as NativeBatchIdMapping,
+  KeyboardEvent as NativeKeyboardEvent,
+  PaintCannon as NativePaintCannon,
+  ScrollMetrics as NativeScrollMetrics,
+  TerminalMouseEvent,
+  TerminalResizeEvent,
+  TerminalSize,
+  TransitionEvent as NativeTransitionEvent,
+} from "#paintcannon-native";
 
-const packageDirectory = path.dirname(fileURLToPath(import.meta.url));
+export type {
+  BatchCommand as NativeBatchCommand,
+  BatchIdMapping as NativeBatchIdMapping,
+  ClickEvent as NativeClickEvent,
+  KeyboardEvent as NativeKeyboardEvent,
+  PaintCannon as NativePaintCannon,
+  ScrollMetrics as NativeScrollMetrics,
+  TerminalMouseEvent,
+  TerminalResizeEvent,
+  TerminalSize,
+  TransitionEvent as NativeTransitionEvent,
+} from "#paintcannon-native";
+
+const nativeBinding: NativeBinding = {
+  PaintCannon: NativePaintCannonClass as NativeBinding["PaintCannon"],
+};
 
 export interface PaintCannonOptions {
   fps?: number;
@@ -14,13 +38,6 @@ export interface PaintCannonOptions {
   captureCtrlZ?: boolean;
   alternateScreen?: boolean;
   captureMouse?: boolean;
-}
-
-export interface TerminalSize {
-  cols: number;
-  rows: number;
-  pixelWidth: number;
-  pixelHeight: number;
 }
 
 export type AnimationFrameCallback = (timestamp: number) => void;
@@ -39,6 +56,7 @@ export const FOCUS_ELEMENT_EVENT_TYPES = ["focus", "blur"] as const;
 export const FORM_ELEMENT_EVENT_TYPES = ["submit"] as const;
 export const CHANGE_ELEMENT_EVENT_TYPES = ["change"] as const;
 export const TRANSITION_ELEMENT_EVENT_TYPES = ["transitionstart", "transitionend"] as const;
+const TRANSITION_ELEMENT_EVENT_TYPE_SET = new Set<string>(TRANSITION_ELEMENT_EVENT_TYPES);
 export const ELEMENT_EVENT_TYPES = [
   ...KEYBOARD_EVENT_TYPES,
   ...MOUSE_ELEMENT_EVENT_TYPES,
@@ -60,23 +78,85 @@ export type SubmitEventListener = (event: PaintSubmitEvent) => void;
 export type ChangeEventListener = (event: PaintChangeEvent) => void;
 export type ScrollEventListener = (event: PaintScrollEvent) => void;
 export type TransitionEventListener = (event: PaintTransitionEvent) => void;
+type ElementEventListenerFunction =
+  | KeyboardEventListener
+  | MouseEventListener
+  | FocusEventListener
+  | SubmitEventListener
+  | ChangeEventListener
+  | ScrollEventListener
+  | TransitionEventListener;
+type ElementEventListenerTuple = readonly [ElementEventType, ElementEventListenerFunction];
+type ElementEventListenerTuplesFor<
+  TTypes extends readonly ElementEventType[],
+  TListener extends ElementEventListenerFunction,
+> = {
+  [Index in keyof TTypes]: TTypes[Index] extends ElementEventType
+    ? readonly [TTypes[Index], TListener]
+    : never;
+}[number];
+type KeyboardElementEventListenerTuple = ElementEventListenerTuplesFor<
+  typeof KEYBOARD_EVENT_TYPES,
+  KeyboardEventListener
+>;
+type MouseElementEventListenerTuple = ElementEventListenerTuplesFor<
+  typeof MOUSE_ELEMENT_EVENT_TYPES,
+  MouseEventListener
+>;
+type FocusElementEventListenerTuple = ElementEventListenerTuplesFor<
+  typeof FOCUS_ELEMENT_EVENT_TYPES,
+  FocusEventListener
+>;
+type FormElementEventListenerTuple = ElementEventListenerTuplesFor<
+  typeof FORM_ELEMENT_EVENT_TYPES,
+  SubmitEventListener
+>;
+type ChangeElementEventListenerTuple = ElementEventListenerTuplesFor<
+  typeof CHANGE_ELEMENT_EVENT_TYPES,
+  ChangeEventListener
+>;
+type TransitionElementEventListenerTuple = ElementEventListenerTuplesFor<
+  typeof TRANSITION_ELEMENT_EVENT_TYPES,
+  TransitionEventListener
+>;
+type ScrollElementEventListenerTuple = readonly ["scroll", ScrollEventListener];
+type ExactElementEventListenerTuple<TEvents extends ElementEventListenerTuple> = [
+  Exclude<ElementEventType, TEvents[0]>,
+  Exclude<TEvents[0], ElementEventType>,
+] extends [never, never]
+  ? TEvents
+  : never;
+type AllElementEventListenerTuple = ExactElementEventListenerTuple<
+  | KeyboardElementEventListenerTuple
+  | MouseElementEventListenerTuple
+  | FocusElementEventListenerTuple
+  | FormElementEventListenerTuple
+  | ChangeElementEventListenerTuple
+  | ScrollElementEventListenerTuple
+  | TransitionElementEventListenerTuple
+>;
+type BasicElementEventListenerTuple =
+  | KeyboardElementEventListenerTuple
+  | MouseElementEventListenerTuple
+  | FocusElementEventListenerTuple
+  | ChangeElementEventListenerTuple
+  | TransitionElementEventListenerTuple;
+type ContainerElementEventListenerTuple = AllElementEventListenerTuple;
+type TextAreaElementEventListenerTuple =
+  | BasicElementEventListenerTuple
+  | ScrollElementEventListenerTuple;
 export type ElementEventListenerMap = {
-  keydown: KeyboardEventListener;
-  keyup: KeyboardEventListener;
-  click: MouseEventListener;
-  mouseenter: MouseEventListener;
-  mouseleave: MouseEventListener;
-  mousemove: MouseEventListener;
-  focus: FocusEventListener;
-  blur: FocusEventListener;
-  submit: SubmitEventListener;
-  change: ChangeEventListener;
-  transitionstart: TransitionEventListener;
-  transitionend: TransitionEventListener;
-  scroll: ScrollEventListener;
+  [TType in AllElementEventListenerTuple[0]]: Extract<
+    AllElementEventListenerTuple,
+    readonly [TType, ElementEventListenerFunction]
+  >[1];
 };
 export type ElementEventListenerFor<T extends ElementEventType> = ElementEventListenerMap[T];
 type ElementEventListener = ElementEventListenerFor<ElementEventType>;
+type EventListenerForTuple<
+  TEvents extends ElementEventListenerTuple,
+  TType extends ElementEventType,
+> = Extract<TEvents, readonly [TType, ElementEventListenerFunction]>[1];
 export type ClickEventListener = MouseEventListener;
 export type ImageRendering = "ascii" | "half-block";
 export type CSSWhiteSpace = "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
@@ -114,15 +194,8 @@ export type CSSCursor =
   | "zoom-in"
   | "zoom-out";
 
-export interface NativeKeyboardEvent {
-  type: KeyboardEventType;
-  key: string;
-  code: string;
-  ctrlKey: boolean;
-  altKey: boolean;
-  metaKey: boolean;
-  shiftKey: boolean;
-  repeat: boolean;
+function isTransitionElementEventType(type: string): type is TransitionElementEventType {
+  return TRANSITION_ELEMENT_EVENT_TYPE_SET.has(type);
 }
 
 export class PaintKeyboardEvent {
@@ -140,7 +213,7 @@ export class PaintKeyboardEvent {
   propagationStopped = false;
 
   constructor(event: NativeKeyboardEvent, target?: PaintElement) {
-    this.type = event.type;
+    this.type = event.type as KeyboardEventType;
     this.target = target;
     this.currentTarget = target;
     this.key = event.key;
@@ -167,132 +240,11 @@ export class PaintKeyboardEvent {
 
 export type KeyboardEvent = PaintKeyboardEvent;
 
-export interface TerminalMouseEvent {
-  type: "click" | "mousemove" | "wheel" | string;
-  x: number;
-  y: number;
-  button: number;
-  deltaX: number;
-  deltaY: number;
-  ctrlKey: boolean;
-  altKey: boolean;
-  metaKey: boolean;
-  shiftKey: boolean;
-}
-
-export interface TerminalResizeEvent {
-  cols: number;
-  rows: number;
-}
-
-export interface NativeTransitionEvent {
-  type: TransitionElementEventType;
-  targetId: number;
-  propertyName: string;
-}
-
-export interface NativeClickEvent {
-  type: "click";
-  targetId: number;
-  clientX: number;
-  clientY: number;
-  button: number;
-  ctrlKey: boolean;
-  altKey: boolean;
-  metaKey: boolean;
-  shiftKey: boolean;
-}
-
-export interface NativeScrollMetrics {
-  scrollLeft: number;
-  scrollTop: number;
-  scrollWidth: number;
-  scrollHeight: number;
-  clientWidth: number;
-  clientHeight: number;
-}
-
-export interface NativeBatchCommand {
-  type: string;
-  id?: number;
-  parent?: number;
-  child?: number;
-  before?: number;
-  text?: string;
-  src?: string;
-  cursor?: number;
-  focused?: boolean;
-  placeholder?: string;
-  property?: string;
-  value?: string;
-}
-
-export interface NativeBatchIdMapping {
-  temporaryId: number;
-  id: number;
-}
-
-export interface NativePaintCannon {
-  createDiv(): number;
-  createSpan(): number;
-  createImage(): number;
-  createInput(): number;
-  createTextArea(): number;
-  createTextNode(text: string): number;
-  setTextNodeValue(id: number, text: string): void;
-  setImageSource(id: number, src: string): void;
-  setInputValue(id: number, value: string, cursor: number): void;
-  setInputFocused(id: number, focused: boolean): void;
-  setInputPlaceholder(id: number, placeholder: string): void;
-  setTextAreaValue(id: number, value: string, cursor: number): void;
-  setTextAreaFocused(id: number, focused: boolean): void;
-  setTextAreaPlaceholder(id: number, placeholder: string): void;
-  moveTextAreaCursorVertically(id: number, direction: number): number | null;
-  setTextControlCursorAtPoint(id: number, x: number, y: number): number | null;
-  setRoot(id: number): void;
-  appendChild(parent: number, child: number): void;
-  insertChildBefore(parent: number, child: number, before: number): void;
-  detachNode(id: number): void;
-  destroyNode(id: number): void;
-  setStyleProperty(id: number, property: string, value: string): void;
-  applyBatch(commands: NativeBatchCommand[]): NativeBatchIdMapping[];
-  terminalSize(): TerminalSize;
-  readonly kittyKeyboardEnabled: boolean;
-  render(): void;
-  renderSync(): void;
-  invalidateFrame(): void;
-  drainKeyboardEvents(): NativeKeyboardEvent[];
-  drainMouseEvents(): TerminalMouseEvent[];
-  drainResizeEvents(): TerminalResizeEvent[];
-  drainTransitionEvents(): NativeTransitionEvent[];
-  clickEventForMouseClick(
-    x: number,
-    y: number,
-    button: number,
-    ctrlKey: boolean,
-    altKey: boolean,
-    metaKey: boolean,
-    shiftKey: boolean,
-  ): NativeClickEvent | null;
-  targetIdForPoint(x: number, y: number): number | null;
-  setScrollOffset(id: number, scrollLeft: number, scrollTop: number): NativeScrollMetrics | null;
-  scrollMetrics(id: number): NativeScrollMetrics | null;
-  setSyntheticKeyupDelay(delayMs: number): void;
-  releaseTerminal(): void;
-  captureTerminal(): void;
-  interruptProcessGroup(): void;
-  suspendProcessGroup(): void;
-  stop(): void;
-}
-
-export interface NativeBinding {
+export type NativeBinding = {
   PaintCannon: new (
-    forceCompatMode?: boolean,
-    alternateScreen?: boolean,
-    captureMouse?: boolean,
-    captureCtrlC?: boolean,
+    ...args: ConstructorParameters<typeof NativePaintCannonClass>
   ) => NativePaintCannon;
-}
+};
 
 type TextControlElement = InputElement | TextAreaElement;
 export const PAINT_ELEMENT_TAG_NAMES = [
@@ -305,29 +257,19 @@ export const PAINT_ELEMENT_TAG_NAMES = [
   "textarea",
 ] as const;
 export type PaintElementTagName = (typeof PAINT_ELEMENT_TAG_NAMES)[number];
-export type PaintElementForTagName<T extends PaintElementTagName> = T extends "div"
-  ? DivElement
-  : T extends "span"
-    ? SpanElement
-    : T extends "form"
-      ? FormElement
-      : T extends "button"
-        ? ButtonElement
-        : T extends "img"
-          ? ImageElement
-          : T extends "input"
-            ? InputElement
-            : T extends "textarea"
-              ? TextAreaElement
-              : never;
-export type PaintElement =
-  | DivElement
-  | SpanElement
-  | FormElement
-  | ButtonElement
-  | ImageElement
-  | InputElement
-  | TextAreaElement;
+const PAINT_ELEMENT_TAG_NAME_SET = new Set<string>(PAINT_ELEMENT_TAG_NAMES);
+type ExactPaintElementTagMap<T extends { [Tag in PaintElementTagName]: object }> =
+  Exclude<keyof T, PaintElementTagName> extends never ? T : never;
+export type PaintElementByTagName = ExactPaintElementTagMap<{
+  div: DivElement;
+  span: SpanElement;
+  form: FormElement;
+  button: ButtonElement;
+  img: ImageElement;
+  input: InputElement;
+  textarea: TextAreaElement;
+}>;
+export type PaintElement = PaintElementByTagName[PaintElementTagName];
 export type PaintNode = PaintElement | TextNode;
 
 export const paintCannonDeps = registry({
@@ -422,6 +364,17 @@ export class PaintCannon {
     Partial<Record<ElementEventType, Set<ElementEventListener>>>
   >();
   private readonly scrollMetrics = new Map<number, NativeScrollMetrics>();
+  private readonly elementFactories: {
+    [Tag in PaintElementTagName]: () => PaintElementByTagName[Tag];
+  } = {
+    div: () => this.createDivElement(),
+    span: () => this.createSpanElement(),
+    form: () => this.createFormElement(),
+    button: () => this.createButtonElement(),
+    img: () => this.createImageElement(),
+    input: () => this.createInputElement(),
+    textarea: () => this.createTextAreaElement(),
+  };
   private hoveredElement: PaintElement | undefined;
   private rootElement: PaintElement | undefined;
   private readonly handleSigcont = () => {
@@ -455,94 +408,103 @@ export class PaintCannon {
     this.scheduleKeyboardEventPump();
   }
 
-  createElement<T extends PaintElementTagName>(tagName: T): PaintElementForTagName<T>;
-  createElement(tagName: string): PaintElement {
-    if (tagName === "div") {
-      const element = new DivElement(
-        this,
-        this.createNativeDiv(),
-        (parent, child) => this.appendNativeChild(parent, child),
-        (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
-        (id, property, value) => this.setNativeStyleProperty(id, property, value),
-      );
-      this.registerElement(element);
-      return element;
-    }
-    if (tagName === "span") {
-      const element = new SpanElement(
-        this,
-        this.createNativeSpan(),
-        (parent, child) => this.appendNativeChild(parent, child),
-        (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
-        (id, property, value) => this.setNativeStyleProperty(id, property, value),
-      );
-      this.registerElement(element);
-      return element;
-    }
-    if (tagName === "form") {
-      const element = new FormElement(
-        this,
-        this.createNativeDiv(),
-        (parent, child) => this.appendNativeChild(parent, child),
-        (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
-        (id, property, value) => this.setNativeStyleProperty(id, property, value),
-      );
-      this.registerElement(element);
-      return element;
-    }
-    if (tagName === "button") {
-      const element = new ButtonElement(
-        this,
-        this.createNativeDiv(),
-        (parent, child) => this.appendNativeChild(parent, child),
-        (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
-        (id, property, value) => this.setNativeStyleProperty(id, property, value),
-      );
-      this.registerElement(element);
-      return element;
-    }
-    if (tagName === "img") {
-      const element = new ImageElement(
-        this,
-        this.createNativeImage(),
-        (id, src) => this.setNativeImageSource(id, src),
-        (id, property, value) => this.setNativeStyleProperty(id, property, value),
-      );
-      this.registerElement(element);
-      return element;
-    }
-    if (tagName === "input") {
-      const element = new InputElement(
-        this,
-        this.createNativeInput(),
-        (id, value, cursor) => this.setNativeInputValue(id, value, cursor),
-        (id, focused) => this.setNativeInputFocused(id, focused),
-        (id, placeholder) => this.setNativeInputPlaceholder(id, placeholder),
-        (id, x, y) => this.binding.setTextControlCursorAtPoint(id, x, y),
-        (id, property, value) => this.setNativeStyleProperty(id, property, value),
-      );
-      this.registerElement(element);
-      this.textControls.push(element);
-      return element;
-    }
-    if (tagName === "textarea") {
-      const element = new TextAreaElement(
-        this,
-        this.createNativeTextArea(),
-        (id, value, cursor) => this.setNativeTextAreaValue(id, value, cursor),
-        (id, focused) => this.setNativeTextAreaFocused(id, focused),
-        (id, placeholder) => this.setNativeTextAreaPlaceholder(id, placeholder),
-        (id, x, y) => this.binding.setTextControlCursorAtPoint(id, x, y),
-        (id, direction) => this.binding.moveTextAreaCursorVertically(id, direction),
-        (id, property, value) => this.setNativeStyleProperty(id, property, value),
-      );
-      this.registerElement(element);
-      this.textControls.push(element);
-      return element;
+  createElement<T extends PaintElementTagName>(tagName: T): PaintElementByTagName[T] {
+    if (!isPaintElementTagName(tagName)) {
+      const supported = PAINT_ELEMENT_TAG_NAMES.map(tag => `<${tag}>`).join(", ");
+      throw new Error(`paintcannon only supports ${supported} right now, got <${tagName}>`);
     }
 
-    const supported = PAINT_ELEMENT_TAG_NAMES.map(tag => `<${tag}>`).join(", ");
-    throw new Error(`paintcannon only supports ${supported} right now, got <${tagName}>`);
+    return this.elementFactories[tagName]();
+  }
+
+  private createDivElement(): DivElement {
+    const element = new DivElement(
+      this,
+      this.createNativeDiv(),
+      (parent, child) => this.appendNativeChild(parent, child),
+      (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
+      (id, property, value) => this.setNativeStyleProperty(id, property, value),
+    );
+    this.registerElement(element);
+    return element;
+  }
+
+  private createSpanElement(): SpanElement {
+    const element = new SpanElement(
+      this,
+      this.createNativeSpan(),
+      (parent, child) => this.appendNativeChild(parent, child),
+      (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
+      (id, property, value) => this.setNativeStyleProperty(id, property, value),
+    );
+    this.registerElement(element);
+    return element;
+  }
+
+  private createFormElement(): FormElement {
+    const element = new FormElement(
+      this,
+      this.createNativeDiv(),
+      (parent, child) => this.appendNativeChild(parent, child),
+      (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
+      (id, property, value) => this.setNativeStyleProperty(id, property, value),
+    );
+    this.registerElement(element);
+    return element;
+  }
+
+  private createButtonElement(): ButtonElement {
+    const element = new ButtonElement(
+      this,
+      this.createNativeDiv(),
+      (parent, child) => this.appendNativeChild(parent, child),
+      (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
+      (id, property, value) => this.setNativeStyleProperty(id, property, value),
+    );
+    this.registerElement(element);
+    return element;
+  }
+
+  private createImageElement(): ImageElement {
+    const element = new ImageElement(
+      this,
+      this.createNativeImage(),
+      (id, src) => this.setNativeImageSource(id, src),
+      (id, property, value) => this.setNativeStyleProperty(id, property, value),
+    );
+    this.registerElement(element);
+    return element;
+  }
+
+  private createInputElement(): InputElement {
+    const element = new InputElement(
+      this,
+      this.createNativeInput(),
+      (id, value, cursor) => this.setNativeInputValue(id, value, cursor),
+      (id, focused) => this.setNativeInputFocused(id, focused),
+      (id, placeholder) => this.setNativeInputPlaceholder(id, placeholder),
+      (id, x, y) => this.binding.setTextControlCursorAtPoint(id, x, y),
+      (id, property, value) => this.setNativeStyleProperty(id, property, value),
+    );
+    this.registerElement(element);
+    this.textControls.push(element);
+    return element;
+  }
+
+  private createTextAreaElement(): TextAreaElement {
+    const element = new TextAreaElement(
+      this,
+      this.createNativeTextArea(),
+      (id, value, cursor) => this.setNativeTextAreaValue(id, value, cursor),
+      (id, focused) => this.setNativeTextAreaFocused(id, focused),
+      (id, placeholder) => this.setNativeTextAreaPlaceholder(id, placeholder),
+      (id, x, y) => this.binding.setTextControlCursorAtPoint(id, x, y),
+      (id, direction) => this.binding.moveTextAreaCursorVertically(id, direction),
+      (id, property, value) => this.setNativeStyleProperty(id, property, value),
+    );
+    this.registerElement(element);
+    this.textControls.push(element);
+    return element;
   }
 
   createTextNode(data: string): TextNode {
@@ -690,7 +652,7 @@ export class PaintCannon {
   }
 
   addElementEventListener(
-    element: PaintElement,
+    element: ElementEventTarget,
     type: ElementEventType,
     listener: ElementEventListener,
   ): void {
@@ -718,7 +680,7 @@ export class PaintCannon {
   }
 
   removeElementEventListener(
-    element: PaintElement,
+    element: ElementEventTarget,
     type: ElementEventType,
     listener: ElementEventListener,
   ): void {
@@ -1473,7 +1435,7 @@ export class PaintCannon {
     }
   }
 
-  private handleInputControlKey(input: InputElement, event: KeyboardEvent): boolean {
+  private handleInputControlKey(input: TextControlElement, event: KeyboardEvent): boolean {
     switch (event.code) {
       case "KeyA":
         if (input instanceof TextAreaElement) {
@@ -1925,13 +1887,18 @@ export class PaintCannon {
   }
 
   private dispatchTransitionEvent(nativeEvent: NativeTransitionEvent): boolean {
+    if (!isTransitionElementEventType(nativeEvent.type)) {
+      return false;
+    }
+
     const target = this.elements.get(nativeEvent.targetId);
     if (target === undefined) {
       return false;
     }
 
+    const type = nativeEvent.type;
     const event = new PaintTransitionEvent({
-      type: nativeEvent.type,
+      type,
       target,
       propertyName: nativeEvent.propertyName,
     });
@@ -1939,9 +1906,7 @@ export class PaintCannon {
     let currentTarget: PaintElement | undefined = target;
     while (currentTarget !== undefined) {
       event.setCurrentTarget(currentTarget);
-      const listeners = Array.from(
-        this.elementEventListeners.get(currentTarget.id)?.[nativeEvent.type] ?? [],
-      );
+      const listeners = Array.from(this.elementEventListeners.get(currentTarget.id)?.[type] ?? []);
       for (const listener of listeners) {
         (listener as TransitionEventListener)(event);
         if (event.propagationStopped) {
@@ -2201,10 +2166,49 @@ export class PaintTransitionEvent {
   }
 }
 
-export class DivElement {
+type ElementEventTarget = {
+  readonly id: number;
+};
+
+type SetNativeStyleProperty = (id: number, property: string, value: string) => void;
+
+abstract class PaintElementEventTarget<
+  TEvents extends ElementEventListenerTuple,
+> implements ElementEventTarget {
   readonly ownerDocument: PaintCannon;
   readonly style: CSSStyleDeclaration;
+  id: number;
 
+  constructor(owner: PaintCannon, id: number, setNativeStyleProperty: SetNativeStyleProperty) {
+    this.ownerDocument = owner;
+    this.id = id;
+    this.style = new CSSStyleDeclaration(() => this.id, setNativeStyleProperty);
+  }
+
+  detach(this: PaintElement): void {
+    this.ownerDocument.detachNode(this);
+  }
+
+  destroy(this: PaintElement): void {
+    this.ownerDocument.destroyNode(this);
+  }
+
+  addEventListener<TType extends ElementEventType>(
+    type: TType,
+    listener: EventListenerForTuple<TEvents, TType>,
+  ): void {
+    this.ownerDocument.addElementEventListener(this, type, listener);
+  }
+
+  removeEventListener<TType extends ElementEventType>(
+    type: TType,
+    listener: EventListenerForTuple<TEvents, TType>,
+  ): void {
+    this.ownerDocument.removeElementEventListener(this, type, listener);
+  }
+}
+
+export class DivElement extends PaintElementEventTarget<ContainerElementEventListenerTuple> {
   constructor(
     owner: PaintCannon,
     id: number,
@@ -2214,14 +2218,10 @@ export class DivElement {
       child: PaintNode,
       before: PaintNode,
     ) => void,
-    setNativeStyleProperty: (id: number, property: string, value: string) => void,
+    setNativeStyleProperty: SetNativeStyleProperty,
   ) {
-    this.ownerDocument = owner;
-    this.id = id;
-    this.style = new CSSStyleDeclaration(() => this.id, setNativeStyleProperty);
+    super(owner, id, setNativeStyleProperty);
   }
-
-  id: number;
 
   appendChild(child: PaintNode): PaintNode {
     assertPaintNode(child);
@@ -2238,14 +2238,6 @@ export class DivElement {
 
   detachChild(child: PaintNode): PaintNode {
     return this.ownerDocument.detachChild(this, child);
-  }
-
-  detach(): void {
-    this.ownerDocument.detachNode(this);
-  }
-
-  destroy(): void {
-    this.ownerDocument.destroyNode(this);
   }
 
   get scrollLeft(): number {
@@ -2278,28 +2270,6 @@ export class DivElement {
 
   get clientHeight(): number {
     return this.ownerDocument.getClientHeight(this);
-  }
-
-  addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
-  addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
-  addEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
-  addEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  addEventListener(type: "scroll", listener: ScrollEventListener): void;
-  addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
-  addEventListener(type: ElementEventType, listener: ElementEventListener): void {
-    this.ownerDocument.addElementEventListener(this, type, listener);
-  }
-
-  removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
-  removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
-  removeEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
-  removeEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  removeEventListener(type: "scroll", listener: ScrollEventListener): void;
-  removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
-  removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
-    this.ownerDocument.removeElementEventListener(this, type, listener);
   }
 }
 
@@ -2323,10 +2293,7 @@ export class ButtonElement extends DivElement {
   }
 }
 
-export class SpanElement {
-  readonly ownerDocument: PaintCannon;
-  readonly style: CSSStyleDeclaration;
-
+export class SpanElement extends PaintElementEventTarget<ContainerElementEventListenerTuple> {
   constructor(
     owner: PaintCannon,
     id: number,
@@ -2336,14 +2303,10 @@ export class SpanElement {
       child: PaintNode,
       before: PaintNode,
     ) => void,
-    setNativeStyleProperty: (id: number, property: string, value: string) => void,
+    setNativeStyleProperty: SetNativeStyleProperty,
   ) {
-    this.ownerDocument = owner;
-    this.id = id;
-    this.style = new CSSStyleDeclaration(() => this.id, setNativeStyleProperty);
+    super(owner, id, setNativeStyleProperty);
   }
-
-  id: number;
 
   appendChild(child: PaintNode): PaintNode {
     assertPaintNode(child);
@@ -2360,14 +2323,6 @@ export class SpanElement {
 
   detachChild(child: PaintNode): PaintNode {
     return this.ownerDocument.detachChild(this, child);
-  }
-
-  detach(): void {
-    this.ownerDocument.detachNode(this);
-  }
-
-  destroy(): void {
-    this.ownerDocument.destroyNode(this);
   }
 
   get scrollLeft(): number {
@@ -2401,45 +2356,18 @@ export class SpanElement {
   get clientHeight(): number {
     return this.ownerDocument.getClientHeight(this);
   }
-
-  addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
-  addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
-  addEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
-  addEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  addEventListener(type: "scroll", listener: ScrollEventListener): void;
-  addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
-  addEventListener(type: ElementEventType, listener: ElementEventListener): void {
-    this.ownerDocument.addElementEventListener(this, type, listener);
-  }
-
-  removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
-  removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
-  removeEventListener(type: FormElementEventType, listener: SubmitEventListener): void;
-  removeEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  removeEventListener(type: "scroll", listener: ScrollEventListener): void;
-  removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
-  removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
-    this.ownerDocument.removeElementEventListener(this, type, listener);
-  }
 }
 
-export class ImageElement {
-  readonly ownerDocument: PaintCannon;
-  readonly style: CSSStyleDeclaration;
-  id: number;
+export class ImageElement extends PaintElementEventTarget<BasicElementEventListenerTuple> {
   private source = "";
 
   constructor(
     owner: PaintCannon,
     id: number,
     private readonly setNativeImageSource: (id: number, src: string) => void,
-    setNativeStyleProperty: (id: number, property: string, value: string) => void,
+    setNativeStyleProperty: SetNativeStyleProperty,
   ) {
-    this.ownerDocument = owner;
-    this.id = id;
-    this.style = new CSSStyleDeclaration(() => this.id, setNativeStyleProperty);
+    super(owner, id, setNativeStyleProperty);
   }
 
   get src(): string {
@@ -2450,38 +2378,11 @@ export class ImageElement {
     this.source = String(value);
     this.setNativeImageSource(this.id, this.source);
   }
-
-  detach(): void {
-    this.ownerDocument.detachNode(this);
-  }
-
-  destroy(): void {
-    this.ownerDocument.destroyNode(this);
-  }
-
-  addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
-  addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
-  addEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
-  addEventListener(type: ElementEventType, listener: ElementEventListener): void {
-    this.ownerDocument.addElementEventListener(this, type, listener);
-  }
-
-  removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
-  removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
-  removeEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
-  removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
-    this.ownerDocument.removeElementEventListener(this, type, listener);
-  }
 }
 
-export class InputElement {
-  readonly ownerDocument: PaintCannon;
-  readonly style: CSSStyleDeclaration;
-  id: number;
+abstract class TextControlElementBase<
+  TEvents extends ElementEventListenerTuple,
+> extends PaintElementEventTarget<TEvents> {
   private inputType = "text";
   private inputValue = "";
   private placeholderValue = "";
@@ -2495,11 +2396,9 @@ export class InputElement {
     private readonly setNativeInputFocused: (id: number, focused: boolean) => void,
     private readonly setNativeInputPlaceholder: (id: number, placeholder: string) => void,
     private readonly setNativeCursorAtPoint: (id: number, x: number, y: number) => number | null,
-    setNativeStyleProperty: (id: number, property: string, value: string) => void,
+    setNativeStyleProperty: SetNativeStyleProperty,
   ) {
-    this.ownerDocument = owner;
-    this.id = id;
-    this.style = new CSSStyleDeclaration(() => this.id, setNativeStyleProperty);
+    super(owner, id, setNativeStyleProperty);
   }
 
   get type(): string {
@@ -2584,14 +2483,6 @@ export class InputElement {
 
   blur(): void {
     this.ownerDocument.blurInput(this);
-  }
-
-  detach(): void {
-    this.ownerDocument.detachNode(this);
-  }
-
-  destroy(): void {
-    this.ownerDocument.destroyNode(this);
   }
 
   insertText(text: string): void {
@@ -2693,30 +2584,14 @@ export class InputElement {
     this.setNativeInputFocused(this.id, focused);
   }
 
-  addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
-  addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
-  addEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  addEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
-  addEventListener(type: ElementEventType, listener: ElementEventListener): void {
-    this.ownerDocument.addElementEventListener(this, type, listener);
-  }
-
-  removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
-  removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
-  removeEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  removeEventListener(type: TransitionElementEventType, listener: TransitionEventListener): void;
-  removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
-    this.ownerDocument.removeElementEventListener(this, type, listener);
-  }
-
   private syncValue(): void {
     this.setNativeInputValue(this.id, this.inputValue, this.cursor);
   }
 }
 
-export class TextAreaElement extends InputElement {
+export class InputElement extends TextControlElementBase<BasicElementEventListenerTuple> {}
+
+export class TextAreaElement extends TextControlElementBase<TextAreaElementEventListenerTuple> {
   constructor(
     owner: PaintCannon,
     id: number,
@@ -2728,7 +2603,7 @@ export class TextAreaElement extends InputElement {
       id: number,
       direction: number,
     ) => number | null,
-    setNativeStyleProperty: (id: number, property: string, value: string) => void,
+    setNativeStyleProperty: SetNativeStyleProperty,
   ) {
     super(
       owner,
@@ -2789,32 +2664,6 @@ export class TextAreaElement extends InputElement {
 
   get clientHeight(): number {
     return this.ownerDocument.getClientHeight(this);
-  }
-
-  override addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  override addEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
-  override addEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
-  override addEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  override addEventListener(type: "scroll", listener: ScrollEventListener): void;
-  override addEventListener(
-    type: TransitionElementEventType,
-    listener: TransitionEventListener,
-  ): void;
-  override addEventListener(type: ElementEventType, listener: ElementEventListener): void {
-    this.ownerDocument.addElementEventListener(this, type, listener);
-  }
-
-  override removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
-  override removeEventListener(type: MouseElementEventType, listener: MouseEventListener): void;
-  override removeEventListener(type: FocusElementEventType, listener: FocusEventListener): void;
-  override removeEventListener(type: ChangeElementEventType, listener: ChangeEventListener): void;
-  override removeEventListener(type: "scroll", listener: ScrollEventListener): void;
-  override removeEventListener(
-    type: TransitionElementEventType,
-    listener: TransitionEventListener,
-  ): void;
-  override removeEventListener(type: ElementEventType, listener: ElementEventListener): void {
-    this.ownerDocument.removeElementEventListener(this, type, listener);
   }
 }
 
@@ -3379,6 +3228,10 @@ function assertPaintNode(value: unknown): asserts value is PaintNode {
   }
 }
 
+function isPaintElementTagName(tagName: string): tagName is PaintElementTagName {
+  return PAINT_ELEMENT_TAG_NAME_SET.has(tagName);
+}
+
 function isPaintElement(value: unknown): value is PaintElement {
   return (
     value instanceof DivElement ||
@@ -3544,24 +3397,5 @@ function fpsToInterval(fps: number): number {
 }
 
 function loadNativeBinding(): NativeBinding {
-  const candidates = [
-    "../paintcannon.node",
-    `../paintcannon.${process.platform}-${process.arch}.node`,
-    `../paintcannon.${process.platform}-${process.arch}-gnu.node`,
-    `../paintcannon.${process.platform}-${process.arch}-musl.node`,
-    "../index.node",
-  ];
-
-  for (const candidate of candidates) {
-    const filename = path.join(packageDirectory, candidate);
-    if (fs.existsSync(filename)) {
-      const nativeModule = { exports: {} } as NodeJS.Module;
-      process.dlopen(nativeModule, filename);
-      return nativeModule.exports as NativeBinding;
-    }
-  }
-
-  throw new Error(
-    `Could not find paintcannon native binding. Run "npm run build:debug" first. Tried: ${candidates.join(", ")}`,
-  );
+  return nativeBinding;
 }

@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DEBUG: napi:*
+  CARGO_INCREMENTAL: "1"
+
+jobs:
+  build-native:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: macos-13
+            target: x86_64-apple-darwin
+            build: npm run build:native --workspace paintcannon -- --target x86_64-apple-darwin
+          - host: macos-latest
+            target: aarch64-apple-darwin
+            build: npm run build:native --workspace paintcannon -- --target aarch64-apple-darwin
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            build: npm run build:native --workspace paintcannon -- --target x86_64-pc-windows-msvc
+          - host: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            build: npm run build:native --workspace paintcannon -- --target aarch64-pc-windows-msvc
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            build: npm run build:native --workspace paintcannon -- --target x86_64-unknown-linux-gnu
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            build: npm run build:native --workspace paintcannon -- --target aarch64-unknown-linux-gnu --use-napi-cross
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            build: npm run build:native --workspace paintcannon -- --target x86_64-unknown-linux-musl -x
+            zig: true
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            build: npm run build:native --workspace paintcannon -- --target aarch64-unknown-linux-musl -x
+            zig: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
+        if: ${{ matrix.zig }}
+        with:
+          version: 0.14.1
+      - uses: taiki-e/install-action@v2
+        if: ${{ matrix.zig }}
+        with:
+          tool: cargo-zigbuild
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.napi-rs
+            target/
+            paintcannon/target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('paintcannon/Cargo.lock') }}
+      - run: npm ci
+      - run: ${{ matrix.build }}
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: |
+            paintcannon/dist/napi/paintcannon.*.node
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    needs: build-native
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org/
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm run create-npm-dirs --workspace paintcannon
+      - uses: actions/download-artifact@v4
+        with:
+          path: paintcannon/artifacts
+      - run: npm run artifacts --workspace paintcannon
+      - run: npm publish --workspace paintcannon --access public --provenance
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --workspace paintcannon-react --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

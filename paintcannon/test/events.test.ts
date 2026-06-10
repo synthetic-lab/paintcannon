@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mock } from "antipattern";
-import { PaintCannon, paintCannonDeps, type PaintElement } from "../index.ts";
+import { PaintCannon, paintCannonDeps, type PaintElement } from "../main.ts";
 import {
   createMockNativeBinding,
   keyDown,
