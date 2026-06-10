@@ -345,7 +345,7 @@ export class PaintCannon {
   private transactionDepth = 0;
   private nextTemporaryId = -1;
   private batchCommands: NativeBatchCommand[] = [];
-  private batchNodes = new Map<number, PaintNode>();
+  private batchNodes = new Map<number, PaintNodeBase>();
   private renderDeferred = false;
   private readonly captureCtrlZ: boolean;
   private readonly captureMouse: boolean;
@@ -765,43 +765,43 @@ export class PaintCannon {
     this.binding.stop();
   }
 
-  private setParent(child: PaintNode, parent: PaintElement): void {
+  private setParent(child: PaintNodeBase, parent: PaintElement): void {
     this.parents.set(child.id, parent);
   }
 
-  getScrollLeft(element: PaintElement): number {
+  getScrollLeft(element: PaintElementBase): number {
     return this.getScrollMetrics(element)?.scrollLeft ?? 0;
   }
 
-  setScrollLeft(element: PaintElement, value: number): void {
+  setScrollLeft(element: PaintElementBase, value: number): void {
     if (this.setScrollOffset(element, value, this.getScrollTop(element)) !== null) {
       this.render();
     }
   }
 
-  getScrollTop(element: PaintElement): number {
+  getScrollTop(element: PaintElementBase): number {
     return this.getScrollMetrics(element)?.scrollTop ?? 0;
   }
 
-  setScrollTop(element: PaintElement, value: number): void {
+  setScrollTop(element: PaintElementBase, value: number): void {
     if (this.setScrollOffset(element, this.getScrollLeft(element), value) !== null) {
       this.render();
     }
   }
 
-  getScrollWidth(element: PaintElement): number {
+  getScrollWidth(element: PaintElementBase): number {
     return this.getScrollMetrics(element)?.scrollWidth ?? 0;
   }
 
-  getScrollHeight(element: PaintElement): number {
+  getScrollHeight(element: PaintElementBase): number {
     return this.getScrollMetrics(element)?.scrollHeight ?? 0;
   }
 
-  getClientWidth(element: PaintElement): number {
+  getClientWidth(element: PaintElementBase): number {
     return this.getScrollMetrics(element)?.clientWidth ?? 0;
   }
 
-  getClientHeight(element: PaintElement): number {
+  getClientHeight(element: PaintElementBase): number {
     return this.getScrollMetrics(element)?.clientHeight ?? 0;
   }
 
@@ -946,7 +946,7 @@ export class PaintCannon {
     this.binding.setRoot(id);
   }
 
-  private appendNativeChild(parent: PaintElement, child: PaintNode): void {
+  private appendNativeChild(parent: PaintElement, child: PaintNodeBase): void {
     if (this.isTransactionActive()) {
       this.batchCommands.push({ type: "appendChild", parent: parent.id, child: child.id });
     } else {
@@ -956,7 +956,11 @@ export class PaintCannon {
     this.setParent(child, parent);
   }
 
-  private insertNativeChildBefore(parent: PaintElement, child: PaintNode, before: PaintNode): void {
+  private insertNativeChildBefore(
+    parent: PaintElement,
+    child: PaintNodeBase,
+    before: PaintNodeBase,
+  ): void {
     if (this.isTransactionActive()) {
       this.batchCommands.push({
         type: "insertChildBefore",
@@ -971,9 +975,7 @@ export class PaintCannon {
     this.setParent(child, parent);
   }
 
-  detachChild(parent: PaintElement, child: PaintNode): PaintNode {
-    assertElement(parent);
-    assertPaintNode(child);
+  detachChild<T extends PaintNodeBase>(parent: PaintElement, child: T): T {
     if (this.parents.get(child.id) !== parent) {
       throw new Error("node is not a child of this parent");
     }
@@ -984,8 +986,7 @@ export class PaintCannon {
     return child;
   }
 
-  detachNode(node: PaintNode): void {
-    assertPaintNode(node);
+  detachNode(node: PaintNodeBase): void {
     if (!this.parents.has(node.id) && !isPaintElement(node)) {
       return;
     }
@@ -995,8 +996,7 @@ export class PaintCannon {
     this.clearDetachedState(node);
   }
 
-  destroyNode(node: PaintNode): void {
-    assertPaintNode(node);
+  destroyNode(node: PaintNodeBase): void {
     this.cleanupDestroyedNode(node);
     this.destroyNativeNode(node.id);
   }
@@ -1019,7 +1019,7 @@ export class PaintCannon {
     this.binding.destroyNode(id);
   }
 
-  private clearDetachedState(node: PaintNode): void {
+  private clearDetachedState(node: PaintNodeBase): void {
     const ids = new Set<number>();
     const collect = (id: number): void => {
       if (ids.has(id)) {
@@ -1046,7 +1046,7 @@ export class PaintCannon {
     }
   }
 
-  private cleanupDestroyedNode(node: PaintNode): void {
+  private cleanupDestroyedNode(node: PaintNodeBase): void {
     const ids = this.collectSubtreeIds(node.id);
 
     for (const id of ids) {
@@ -1117,7 +1117,7 @@ export class PaintCannon {
     return id;
   }
 
-  private registerBatchNode(node: PaintNode): void {
+  private registerBatchNode(node: PaintNodeBase): void {
     if (node.id < 0) {
       this.batchNodes.set(node.id, node);
     }
@@ -1523,7 +1523,7 @@ export class PaintCannon {
     this.registerBatchNode(element);
   }
 
-  private getScrollMetrics(element: PaintElement): NativeScrollMetrics | undefined {
+  private getScrollMetrics(element: PaintElementBase): NativeScrollMetrics | undefined {
     const metrics = this.binding.scrollMetrics(element.id);
     if (metrics !== null) {
       this.scrollMetrics.set(element.id, metrics);
@@ -1533,7 +1533,7 @@ export class PaintCannon {
   }
 
   private setScrollOffset(
-    element: PaintElement,
+    element: PaintElementBase,
     left: number,
     top: number,
   ): NativeScrollMetrics | null {
@@ -2172,25 +2172,74 @@ type ElementEventTarget = {
 
 type SetNativeStyleProperty = (id: number, property: string, value: string) => void;
 
-abstract class PaintElementEventTarget<
-  TEvents extends ElementEventListenerTuple,
-> implements ElementEventTarget {
+abstract class PaintNodeBase implements ElementEventTarget {
   readonly ownerDocument: PaintCannon;
-  readonly style: CSSStyleDeclaration;
   id: number;
 
-  constructor(owner: PaintCannon, id: number, setNativeStyleProperty: SetNativeStyleProperty) {
+  protected constructor(owner: PaintCannon, id: number) {
     this.ownerDocument = owner;
     this.id = id;
-    this.style = new CSSStyleDeclaration(() => this.id, setNativeStyleProperty);
   }
 
-  detach(this: PaintElement): void {
+  detach(): void {
     this.ownerDocument.detachNode(this);
   }
 
-  destroy(this: PaintElement): void {
+  destroy(): void {
     this.ownerDocument.destroyNode(this);
+  }
+}
+
+abstract class PaintElementBase extends PaintNodeBase {
+  readonly style: CSSStyleDeclaration;
+
+  protected constructor(
+    owner: PaintCannon,
+    id: number,
+    setNativeStyleProperty: SetNativeStyleProperty,
+  ) {
+    super(owner, id);
+    this.style = new CSSStyleDeclaration(() => this.id, setNativeStyleProperty);
+  }
+
+  get scrollLeft(): number {
+    return this.ownerDocument.getScrollLeft(this);
+  }
+
+  set scrollLeft(value: number) {
+    this.ownerDocument.setScrollLeft(this, value);
+  }
+
+  get scrollTop(): number {
+    return this.ownerDocument.getScrollTop(this);
+  }
+
+  set scrollTop(value: number) {
+    this.ownerDocument.setScrollTop(this, value);
+  }
+
+  get scrollWidth(): number {
+    return this.ownerDocument.getScrollWidth(this);
+  }
+
+  get scrollHeight(): number {
+    return this.ownerDocument.getScrollHeight(this);
+  }
+
+  get clientWidth(): number {
+    return this.ownerDocument.getClientWidth(this);
+  }
+
+  get clientHeight(): number {
+    return this.ownerDocument.getClientHeight(this);
+  }
+}
+
+abstract class PaintElementEventTarget<
+  TEvents extends ElementEventListenerTuple,
+> extends PaintElementBase {
+  constructor(owner: PaintCannon, id: number, setNativeStyleProperty: SetNativeStyleProperty) {
+    super(owner, id, setNativeStyleProperty);
   }
 
   addEventListener<TType extends ElementEventType>(
@@ -2224,52 +2273,17 @@ export class DivElement extends PaintElementEventTarget<ContainerElementEventLis
   }
 
   appendChild(child: PaintNode): PaintNode {
-    assertPaintNode(child);
     this.appendNativeChild(this, child);
     return child;
   }
 
   insertBefore(child: PaintNode, before: PaintNode): PaintNode {
-    assertPaintNode(child);
-    assertPaintNode(before);
     this.insertNativeChildBefore(this, child, before);
     return child;
   }
 
   detachChild(child: PaintNode): PaintNode {
     return this.ownerDocument.detachChild(this, child);
-  }
-
-  get scrollLeft(): number {
-    return this.ownerDocument.getScrollLeft(this);
-  }
-
-  set scrollLeft(value: number) {
-    this.ownerDocument.setScrollLeft(this, value);
-  }
-
-  get scrollTop(): number {
-    return this.ownerDocument.getScrollTop(this);
-  }
-
-  set scrollTop(value: number) {
-    this.ownerDocument.setScrollTop(this, value);
-  }
-
-  get scrollWidth(): number {
-    return this.ownerDocument.getScrollWidth(this);
-  }
-
-  get scrollHeight(): number {
-    return this.ownerDocument.getScrollHeight(this);
-  }
-
-  get clientWidth(): number {
-    return this.ownerDocument.getClientWidth(this);
-  }
-
-  get clientHeight(): number {
-    return this.ownerDocument.getClientHeight(this);
   }
 }
 
@@ -2309,52 +2323,17 @@ export class SpanElement extends PaintElementEventTarget<ContainerElementEventLi
   }
 
   appendChild(child: PaintNode): PaintNode {
-    assertPaintNode(child);
     this.appendNativeChild(this, child);
     return child;
   }
 
   insertBefore(child: PaintNode, before: PaintNode): PaintNode {
-    assertPaintNode(child);
-    assertPaintNode(before);
     this.insertNativeChildBefore(this, child, before);
     return child;
   }
 
   detachChild(child: PaintNode): PaintNode {
     return this.ownerDocument.detachChild(this, child);
-  }
-
-  get scrollLeft(): number {
-    return this.ownerDocument.getScrollLeft(this);
-  }
-
-  set scrollLeft(value: number) {
-    this.ownerDocument.setScrollLeft(this, value);
-  }
-
-  get scrollTop(): number {
-    return this.ownerDocument.getScrollTop(this);
-  }
-
-  set scrollTop(value: number) {
-    this.ownerDocument.setScrollTop(this, value);
-  }
-
-  get scrollWidth(): number {
-    return this.ownerDocument.getScrollWidth(this);
-  }
-
-  get scrollHeight(): number {
-    return this.ownerDocument.getScrollHeight(this);
-  }
-
-  get clientWidth(): number {
-    return this.ownerDocument.getClientWidth(this);
-  }
-
-  get clientHeight(): number {
-    return this.ownerDocument.getClientHeight(this);
   }
 }
 
@@ -2400,6 +2379,8 @@ abstract class TextControlElementBase<
   ) {
     super(owner, id, setNativeStyleProperty);
   }
+
+  protected abstract textControlNode(): TextControlElement;
 
   get type(): string {
     return this.inputType;
@@ -2478,11 +2459,11 @@ abstract class TextControlElementBase<
   }
 
   focus(): void {
-    this.ownerDocument.focusInput(this);
+    this.ownerDocument.focusInput(this.textControlNode());
   }
 
   blur(): void {
-    this.ownerDocument.blurInput(this);
+    this.ownerDocument.blurInput(this.textControlNode());
   }
 
   insertText(text: string): void {
@@ -2589,7 +2570,11 @@ abstract class TextControlElementBase<
   }
 }
 
-export class InputElement extends TextControlElementBase<BasicElementEventListenerTuple> {}
+export class InputElement extends TextControlElementBase<BasicElementEventListenerTuple> {
+  protected textControlNode(): InputElement {
+    return this;
+  }
+}
 
 export class TextAreaElement extends TextControlElementBase<TextAreaElementEventListenerTuple> {
   constructor(
@@ -2616,6 +2601,10 @@ export class TextAreaElement extends TextControlElementBase<TextAreaElementEvent
     );
   }
 
+  protected textControlNode(): TextAreaElement {
+    return this;
+  }
+
   override get type(): string {
     return "textarea";
   }
@@ -2633,54 +2622,17 @@ export class TextAreaElement extends TextControlElementBase<TextAreaElementEvent
     this.setCursorPositionFromNative(cursor);
     return true;
   }
-
-  get scrollLeft(): number {
-    return this.ownerDocument.getScrollLeft(this);
-  }
-
-  set scrollLeft(value: number) {
-    this.ownerDocument.setScrollLeft(this, value);
-  }
-
-  get scrollTop(): number {
-    return this.ownerDocument.getScrollTop(this);
-  }
-
-  set scrollTop(value: number) {
-    this.ownerDocument.setScrollTop(this, value);
-  }
-
-  get scrollWidth(): number {
-    return this.ownerDocument.getScrollWidth(this);
-  }
-
-  get scrollHeight(): number {
-    return this.ownerDocument.getScrollHeight(this);
-  }
-
-  get clientWidth(): number {
-    return this.ownerDocument.getClientWidth(this);
-  }
-
-  get clientHeight(): number {
-    return this.ownerDocument.getClientHeight(this);
-  }
 }
 
-export class TextNode {
-  readonly ownerDocument: PaintCannon;
-
+export class TextNode extends PaintNodeBase {
   constructor(
     owner: PaintCannon,
     id: number,
     private readonly setNativeTextNodeValue: (id: number, value: string) => void,
     private data: string = "",
   ) {
-    this.ownerDocument = owner;
-    this.id = id;
+    super(owner, id);
   }
-
-  id: number;
 
   get nodeValue(): string {
     return this.data;
@@ -2697,14 +2649,6 @@ export class TextNode {
 
   set textContent(value: string) {
     this.nodeValue = value;
-  }
-
-  detach(): void {
-    this.ownerDocument.detachNode(this);
-  }
-
-  destroy(): void {
-    this.ownerDocument.destroyNode(this);
   }
 }
 
@@ -3219,12 +3163,6 @@ export class CSSStyleDeclaration {
 function assertElement(value: unknown): asserts value is PaintElement {
   if (!isPaintElement(value)) {
     throw new TypeError("expected a paintcannon element");
-  }
-}
-
-function assertPaintNode(value: unknown): asserts value is PaintNode {
-  if (!isPaintElement(value) && !(value instanceof TextNode)) {
-    throw new TypeError("expected a paintcannon node");
   }
 }
 
