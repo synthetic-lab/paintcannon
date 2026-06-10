@@ -72,3 +72,9 @@ and more. If you want even more speed:
 npm run build # release build
 node ./paintcannon-react/dist/examples/todo.js
 ```
+
+## Maintenance
+
+NAPI-RS native targets are declared in `paintcannon/package.json`'s
+`napi.targets`; update that list to add or remove platform builds. CI and
+release jobs read the same target list when building native artifacts.

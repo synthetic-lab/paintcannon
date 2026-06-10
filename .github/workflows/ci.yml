@@ -36,39 +36,23 @@ jobs:
       - run: npm run build --workspaces
       - run: npm run test
 
+  native-targets:
+    name: Native Targets
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: matrix
+        run: echo "matrix=$(node scripts/native-build-matrix.mjs)" >> "$GITHUB_OUTPUT"
+
   build-native:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.host }}
+    needs: native-targets
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - host: macos-13
-            target: x86_64-apple-darwin
-            build: npm run build:native --workspace paintcannon -- --target x86_64-apple-darwin
-          - host: macos-latest
-            target: aarch64-apple-darwin
-            build: npm run build:native --workspace paintcannon -- --target aarch64-apple-darwin
-          - host: windows-latest
-            target: x86_64-pc-windows-msvc
-            build: npm run build:native --workspace paintcannon -- --target x86_64-pc-windows-msvc
-          - host: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            build: npm run build:native --workspace paintcannon -- --target aarch64-pc-windows-msvc
-          - host: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            build: npm run build:native --workspace paintcannon -- --target x86_64-unknown-linux-gnu
-          - host: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            build: npm run build:native --workspace paintcannon -- --target aarch64-unknown-linux-gnu --use-napi-cross
-          - host: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            build: npm run build:native --workspace paintcannon -- --target x86_64-unknown-linux-musl -x
-            zig: true
-          - host: ubuntu-latest
-            target: aarch64-unknown-linux-musl
-            build: npm run build:native --workspace paintcannon -- --target aarch64-unknown-linux-musl -x
-            zig: true
+      matrix: ${{ fromJson(needs.native-targets.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
