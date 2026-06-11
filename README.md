@@ -34,6 +34,7 @@ PaintCannon supports the following HTML elements:
 - `<div>`
 - `<span>`
 - `<input type="text">`
+- `<textarea>`
 - `<button>`
 - `<form>`
 - `<img>` (via ANSI/ASCII rendering)
