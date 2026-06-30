@@ -116,8 +116,10 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org/
+      - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: node scripts/verify-release-tag.mjs paintcannon-react
+      - run: npm run build --workspace paintcannon
       - run: npm run build --workspace paintcannon-react
       - run: npm publish --workspace paintcannon-react --access public --provenance
         env:
