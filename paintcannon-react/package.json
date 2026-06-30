@@ -1,6 +1,6 @@
 {
   "name": "paintcannon-react",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "license": "ISC",
   "repository": {
     "type": "git",
@@ -36,7 +36,7 @@
     "scheduler": "^0.25.0"
   },
   "peerDependencies": {
-    "paintcannon": "^0.0.6",
+    "paintcannon": "^0.0.7",
     "react": "^19.0.0"
   },
   "devDependencies": {
