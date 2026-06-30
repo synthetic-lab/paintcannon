@@ -82,11 +82,11 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
-          cache: npm
+          node-version: 24
           registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: node scripts/verify-release-tag.mjs paintcannon
@@ -95,11 +95,7 @@ jobs:
         with:
           path: paintcannon/artifacts
       - run: npm run artifacts --workspace paintcannon
-      - run: npm publish --workspace paintcannon --access public --provenance
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --workspace paintcannon --access public
 
   publish-paintcannon-react:
     name: Publish paintcannon-react
@@ -111,16 +107,14 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
-          cache: npm
+          node-version: 24
           registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: node scripts/verify-release-tag.mjs paintcannon-react
       - run: npm run build --workspace paintcannon
       - run: npm run build --workspace paintcannon-react
-      - run: npm publish --workspace paintcannon-react --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --workspace paintcannon-react --access public

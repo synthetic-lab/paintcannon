@@ -1,7 +1,12 @@
 {
   "name": "paintcannon-react",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/synthetic-lab/paintcannon.git",
+    "directory": "paintcannon-react"
+  },
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
   "type": "module",
