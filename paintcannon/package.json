@@ -1,6 +1,6 @@
 {
   "name": "paintcannon",
-  "version": "0.0.2",
+  "version": "0.0.4",
   "license": "ISC",
   "main": "dist/main.js",
   "types": "dist/main.d.ts",

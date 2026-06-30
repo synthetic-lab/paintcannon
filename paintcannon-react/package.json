@@ -1,6 +1,6 @@
 {
   "name": "paintcannon-react",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "license": "ISC",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
@@ -31,7 +31,7 @@
     "scheduler": "^0.25.0"
   },
   "peerDependencies": {
-    "paintcannon": "^0.0.2",
+    "paintcannon": "^0.0.4",
     "react": "^19.0.0"
   },
   "devDependencies": {
