@@ -96,8 +96,6 @@ jobs:
           path: paintcannon/artifacts
       - run: npm run artifacts --workspace paintcannon
       - run: npm publish --workspace paintcannon --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-paintcannon-react:
     name: Publish paintcannon-react
