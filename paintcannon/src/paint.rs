@@ -1353,6 +1353,110 @@ mod tests {
     }
 
     #[test]
+    fn inline_span_text_paints_with_span_colors() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Length(6.0), CssDimension::Auto);
+        row_style.background = Background::Blue;
+        row_style.color = Background::White;
+        let row = arena.create_element(row_style);
+
+        let mut span_style = DivStyle::default();
+        span_style.display = LayoutDisplay::Inline;
+        span_style.background = Background::Red;
+        span_style.color = Background::Cyan;
+        let span = arena.create_element(span_style);
+        let text = arena.create_text("hi");
+        arena.append_child(span, text);
+        arena.append_child(row, span);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        let output = paint_arena(&arena, row, 6, 1, false);
+
+        let first = output.frame.cell(0, 0).unwrap();
+        assert_eq!(first.character, 'h');
+        assert_eq!(first.foreground, Background::Cyan);
+        assert_eq!(first.background, Background::Red);
+    }
+
+    #[test]
+    fn inline_div_text_paints_with_inline_div_colors() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Length(6.0), CssDimension::Auto);
+        row_style.background = Background::Blue;
+        row_style.color = Background::White;
+        let row = arena.create_element(row_style);
+
+        let mut inline_div_style = DivStyle::default();
+        inline_div_style.display = LayoutDisplay::Inline;
+        inline_div_style.background = Background::Green;
+        inline_div_style.color = Background::Magenta;
+        let inline_div = arena.create_element(inline_div_style);
+        let text = arena.create_text("hi");
+        arena.append_child(inline_div, text);
+        arena.append_child(row, inline_div);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        let output = paint_arena(&arena, row, 6, 1, false);
+
+        let first = output.frame.cell(0, 0).unwrap();
+        assert_eq!(first.character, 'h');
+        assert_eq!(first.foreground, Background::Magenta);
+        assert_eq!(first.background, Background::Green);
+    }
+
+    #[test]
+    fn nested_inline_span_text_paints_with_inner_span_colors() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Length(6.0), CssDimension::Auto);
+        row_style.background = Background::Blue;
+        row_style.color = Background::White;
+        let row = arena.create_element(row_style);
+
+        let mut outer_style = DivStyle::default();
+        outer_style.display = LayoutDisplay::Inline;
+        outer_style.background = Background::Red;
+        outer_style.color = Background::Yellow;
+        let outer = arena.create_element(outer_style);
+
+        let mut inner_style = DivStyle::default();
+        inner_style.display = LayoutDisplay::Inline;
+        inner_style.background = Background::Magenta;
+        inner_style.color = Background::Cyan;
+        let inner = arena.create_element(inner_style);
+
+        let text = arena.create_text("hi");
+        arena.append_child(inner, text);
+        arena.append_child(outer, inner);
+        arena.append_child(row, outer);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        let output = paint_arena(&arena, row, 6, 1, false);
+
+        let first = output.frame.cell(0, 0).unwrap();
+        assert_eq!(first.character, 'h');
+        assert_eq!(first.foreground, Background::Cyan);
+        assert_eq!(first.background, Background::Magenta);
+    }
+
+    #[test]
     fn inline_span_as_flex_child_is_blockified_and_stretches_by_default() {
         let mut arena = LayoutArena::new();
         let mut root_style = block_style(CssDimension::Length(20.0), CssDimension::Length(5.0));
