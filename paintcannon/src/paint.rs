@@ -388,12 +388,6 @@ impl<'a, 'out> Painter<'a, 'out> {
     }
 
     fn paint_inline_fragments(&mut self, id: NodeId, x: i32, y: i32, state: PaintState) {
-        let glyph_style = GlyphStyle {
-            background: state.background,
-            foreground: state.foreground,
-            selection_background: state.selection_background,
-        };
-
         for fragment in self.arena.inline_fragments(id) {
             let rect = ClipRect::new(
                 state.parent_x + x + fragment.x as i32,
@@ -407,20 +401,66 @@ impl<'a, 'out> Painter<'a, 'out> {
 
             match fragment.kind {
                 InlineFragmentKind::Text { character, .. } => {
+                    let fragment_state = self.inline_fragment_state(id, fragment.node, state);
+                    let glyph_style = GlyphStyle {
+                        background: fragment_state.background,
+                        foreground: fragment_state.foreground,
+                        selection_background: fragment_state.selection_background,
+                    };
                     self.output.frame.write_glyph(
                         rect.left,
                         rect.top,
                         character,
                         fragment.width as usize,
                         glyph_style,
-                        state.clip,
+                        fragment_state.clip,
                     );
                 }
                 InlineFragmentKind::Replaced => {
-                    self.paint_inline_replaced(fragment.node, rect, state);
+                    let fragment_state = self.inline_fragment_state(id, fragment.node, state);
+                    self.paint_inline_replaced(fragment.node, rect, fragment_state);
                 }
             }
         }
+    }
+
+    fn inline_fragment_state(
+        &self,
+        inline_context: NodeId,
+        fragment_node: NodeId,
+        mut state: PaintState,
+    ) -> PaintState {
+        let mut ancestors = Vec::new();
+        let mut current = self.arena.parent(fragment_node);
+        while let Some(node) = current {
+            if node == inline_context {
+                break;
+            }
+            ancestors.push(node);
+            current = self.arena.parent(node);
+        }
+
+        for node in ancestors.into_iter().rev() {
+            if !matches!(self.arena.kind(node), LayoutNodeKind::Element) {
+                continue;
+            }
+            let style = self.arena.style(node);
+            state.background = effective_background(
+                self.paint_color(
+                    node,
+                    ColorTransitionProperty::BackgroundColor,
+                    style.background,
+                ),
+                state.background,
+            );
+            state.foreground = effective_background(
+                self.paint_color(node, ColorTransitionProperty::Color, style.color),
+                state.foreground,
+            );
+            state.selection_background = style.selection_background.or(state.selection_background);
+        }
+
+        state
     }
 
     fn paint_inline_replaced(&mut self, node: NodeId, rect: ClipRect, state: PaintState) {
@@ -1454,6 +1494,44 @@ mod tests {
         assert_eq!(first.character, 'h');
         assert_eq!(first.foreground, Background::Cyan);
         assert_eq!(first.background, Background::Magenta);
+    }
+
+    #[test]
+    fn nested_inline_span_text_inherits_outer_span_colors() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Length(6.0), CssDimension::Auto);
+        row_style.background = Background::Blue;
+        row_style.color = Background::White;
+        let row = arena.create_element(row_style);
+
+        let mut outer_style = DivStyle::default();
+        outer_style.display = LayoutDisplay::Inline;
+        outer_style.background = Background::Red;
+        outer_style.color = Background::Yellow;
+        let outer = arena.create_element(outer_style);
+
+        let mut inner_style = DivStyle::default();
+        inner_style.display = LayoutDisplay::Inline;
+        let inner = arena.create_element(inner_style);
+
+        let text = arena.create_text("hi");
+        arena.append_child(inner, text);
+        arena.append_child(outer, inner);
+        arena.append_child(row, outer);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        let output = paint_arena(&arena, row, 6, 1, false);
+
+        let first = output.frame.cell(0, 0).unwrap();
+        assert_eq!(first.character, 'h');
+        assert_eq!(first.foreground, Background::Yellow);
+        assert_eq!(first.background, Background::Red);
     }
 
     #[test]

@@ -5,10 +5,16 @@ if [ "$state" != "prepared" ]; then
 fi
 
 zero_oid="0000000000000000000000000000000000000000"
+head_oid="$(git rev-parse HEAD)"
 run_release_check=0
 
 while read -r _old_oid new_oid ref_name; do
   if [ "$new_oid" = "$zero_oid" ]; then
+    continue
+  fi
+
+  target_oid="$(git rev-parse "$new_oid^{commit}" 2>/dev/null || true)"
+  if [ "$target_oid" != "$head_oid" ]; then
     continue
   fi
 
