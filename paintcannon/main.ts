@@ -160,6 +160,9 @@ type EventListenerForTuple<
 export type ClickEventListener = MouseEventListener;
 export type ImageRendering = "ascii" | "half-block";
 export type CSSWhiteSpace = "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
+export type CSSFontWeight = "normal" | "bold";
+export type CSSFontStyle = "normal" | "italic";
+export type CSSTextDecoration = "none" | "underline";
 export type CSSStyleValue = string | number;
 export type CSSCursor =
   | "auto"
@@ -3055,6 +3058,38 @@ export class CSSStyleDeclaration {
     this.setProperty("selection-background-color", value);
   }
 
+  get fontWeight(): CSSFontWeight | string {
+    return this.getPropertyValue("font-weight");
+  }
+
+  set fontWeight(value: CSSFontWeight) {
+    this.setProperty("font-weight", value);
+  }
+
+  get fontStyle(): CSSFontStyle | string {
+    return this.getPropertyValue("font-style");
+  }
+
+  set fontStyle(value: CSSFontStyle) {
+    this.setProperty("font-style", value);
+  }
+
+  get textDecoration(): CSSTextDecoration | string {
+    return this.getPropertyValue("text-decoration");
+  }
+
+  set textDecoration(value: CSSTextDecoration) {
+    this.setProperty("text-decoration", value);
+  }
+
+  get textDecorationLine(): CSSTextDecoration | string {
+    return this.getPropertyValue("text-decoration-line");
+  }
+
+  set textDecorationLine(value: CSSTextDecoration) {
+    this.setProperty("text-decoration-line", value);
+  }
+
   get transition(): string {
     return this.getPropertyValue("transition");
   }
@@ -3300,6 +3335,10 @@ export const SUPPORTED_STYLE_PROPERTY_NAMES = [
   "color",
   "placeholder-color",
   "transition",
+  "font-weight",
+  "font-style",
+  "text-decoration",
+  "text-decoration-line",
   "background",
   "background-color",
   "selection-background-color",

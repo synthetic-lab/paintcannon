@@ -50,6 +50,9 @@ pub(crate) struct Cell {
     pub(crate) selection_background: Option<Background>,
     pub(crate) selection_order: Option<usize>,
     pub(crate) reversed: bool,
+    pub(crate) bold: bool,
+    pub(crate) italic: bool,
+    pub(crate) underline: bool,
     pub(crate) wide_continuation: bool,
 }
 
@@ -187,6 +190,9 @@ impl Frame {
                     selection_background,
                     selection_order: None,
                     reversed: false,
+                    bold: false,
+                    italic: false,
+                    underline: false,
                     wide_continuation: false,
                 };
             }
@@ -284,6 +290,9 @@ impl Frame {
         self.cells[index].character = character;
         self.cells[index].foreground = style.foreground;
         self.cells[index].selection_order = Some(selection_order);
+        self.cells[index].bold = style.bold;
+        self.cells[index].italic = style.italic;
+        self.cells[index].underline = style.underline;
         self.cells[index].wide_continuation = false;
         if style.background != Background::Default {
             self.cells[index].background = style.background;
@@ -304,6 +313,9 @@ impl Frame {
             self.cells[continuation_index].character = ' ';
             self.cells[continuation_index].foreground = style.foreground;
             self.cells[continuation_index].selection_order = None;
+            self.cells[continuation_index].bold = style.bold;
+            self.cells[continuation_index].italic = style.italic;
+            self.cells[continuation_index].underline = style.underline;
             self.cells[continuation_index].wide_continuation = true;
             if style.background != Background::Default {
                 self.cells[continuation_index].background = style.background;
@@ -593,6 +605,9 @@ impl Frame {
         let mut current_background = Background::Default;
         let mut current_foreground = Background::Default;
         let mut current_reversed = false;
+        let mut current_bold = false;
+        let mut current_italic = false;
+        let mut current_underline = false;
         for col in start_col..end_col {
             let cell = self.cells[row * self.width + col];
             if cell.wide_continuation {
@@ -606,6 +621,30 @@ impl Frame {
                 }
                 current_reversed = cell.reversed;
             }
+            if cell.bold != current_bold {
+                if cell.bold {
+                    write!(out, "\x1b[1m")?;
+                } else {
+                    write!(out, "\x1b[22m")?;
+                }
+                current_bold = cell.bold;
+            }
+            if cell.italic != current_italic {
+                if cell.italic {
+                    write!(out, "\x1b[3m")?;
+                } else {
+                    write!(out, "\x1b[23m")?;
+                }
+                current_italic = cell.italic;
+            }
+            if cell.underline != current_underline {
+                if cell.underline {
+                    write!(out, "\x1b[4m")?;
+                } else {
+                    write!(out, "\x1b[24m")?;
+                }
+                current_underline = cell.underline;
+            }
             if cell.background != current_background {
                 write!(out, "{}", cell.background.ansi_bg(color_profile))?;
                 current_background = cell.background;
@@ -617,7 +656,7 @@ impl Frame {
             write!(out, "{}", cell.character)?;
         }
 
-        write!(out, "\x1b[27m\x1b[39m\x1b[49m")
+        write!(out, "\x1b[27m\x1b[22m\x1b[23m\x1b[24m\x1b[39m\x1b[49m")
     }
 
     fn trailing_empty_rows_start(&self) -> usize {
@@ -651,6 +690,9 @@ impl Frame {
         self.cells[index].character = character;
         self.cells[index].foreground = foreground;
         self.cells[index].selection_order = None;
+        self.cells[index].bold = false;
+        self.cells[index].italic = false;
+        self.cells[index].underline = false;
         self.cells[index].wide_continuation = false;
         if selection_background.is_some() {
             self.cells[index].selection_background = selection_background;
@@ -692,6 +734,9 @@ pub(crate) struct GlyphStyle {
     pub(crate) background: Background,
     pub(crate) foreground: Background,
     pub(crate) selection_background: Option<Background>,
+    pub(crate) bold: bool,
+    pub(crate) italic: bool,
+    pub(crate) underline: bool,
 }
 
 impl Default for GlyphStyle {
@@ -700,6 +745,9 @@ impl Default for GlyphStyle {
             background: Background::Default,
             foreground: Background::Default,
             selection_background: None,
+            bold: false,
+            italic: false,
+            underline: false,
         }
     }
 }
@@ -713,6 +761,9 @@ impl Default for Cell {
             selection_background: None,
             selection_order: None,
             reversed: false,
+            bold: false,
+            italic: false,
+            underline: false,
             wide_continuation: false,
         }
     }
@@ -1072,6 +1123,60 @@ mod tests {
         assert!(output.contains("\x1b[2;3Hx"));
         assert!(!output.contains("\x1b[H"));
         assert!(!output.contains("\x1b[2J"));
+    }
+
+    #[test]
+    fn full_frame_write_emits_text_attribute_sgr() {
+        let mut frame = Frame::new(2, 1, false);
+        frame.write_glyph(
+            0,
+            0,
+            'a',
+            1,
+            GlyphStyle {
+                bold: true,
+                italic: true,
+                underline: true,
+                ..Default::default()
+            },
+            ClipBounds::unbounded(),
+        );
+        frame.write_glyph(1, 0, 'b', 1, GlyphStyle::default(), ClipBounds::unbounded());
+
+        let mut bytes = Vec::new();
+        frame
+            .write_full_to(&mut bytes, TermProfile::NoColor)
+            .unwrap();
+        let output = String::from_utf8(bytes).unwrap();
+
+        assert!(output.contains("\x1b[1m\x1b[3m\x1b[4ma"));
+        assert!(output.contains("a\x1b[22m\x1b[23m\x1b[24mb"));
+        assert!(output.ends_with("\x1b[27m\x1b[22m\x1b[23m\x1b[24m\x1b[39m\x1b[49m"));
+    }
+
+    #[test]
+    fn diff_writes_cells_when_only_text_attributes_change() {
+        let mut previous = Frame::new(1, 1, false);
+        previous.write_glyph(0, 0, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        let mut next = Frame::new(1, 1, false);
+        next.write_glyph(
+            0,
+            0,
+            'x',
+            1,
+            GlyphStyle {
+                bold: true,
+                ..Default::default()
+            },
+            ClipBounds::unbounded(),
+        );
+
+        let mut bytes = Vec::new();
+        next.write_diff_to(&mut bytes, Some(&previous), TermProfile::NoColor, false)
+            .unwrap();
+        let output = String::from_utf8(bytes).unwrap();
+
+        assert!(output.contains("\x1b[1;1H\x1b[1mx"));
     }
 
     #[test]

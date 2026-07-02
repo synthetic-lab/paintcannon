@@ -46,6 +46,9 @@ pub(crate) struct DivStyle {
     pub(crate) placeholder_color: Background,
     pub(crate) background: Background,
     pub(crate) selection_background: Option<Background>,
+    pub(crate) font_weight: CssFontWeight,
+    pub(crate) font_style: CssFontStyle,
+    pub(crate) text_decoration_line: CssTextDecorationLine,
     pub(crate) border_top: BorderStyle,
     pub(crate) border_right: BorderStyle,
     pub(crate) border_bottom: BorderStyle,
@@ -98,6 +101,9 @@ impl Default for DivStyle {
             placeholder_color: Background::Rgb(100, 116, 139),
             background: Background::Default,
             selection_background: None,
+            font_weight: CssFontWeight::Inherit,
+            font_style: CssFontStyle::Inherit,
+            text_decoration_line: CssTextDecorationLine::Inherit,
             border_top: BorderStyle::None,
             border_right: BorderStyle::None,
             border_bottom: BorderStyle::None,
@@ -140,6 +146,27 @@ pub(crate) enum CssWhiteSpace {
     Pre,
     PreWrap,
     PreLine,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CssFontWeight {
+    Inherit,
+    Normal,
+    Bold,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CssFontStyle {
+    Inherit,
+    Normal,
+    Italic,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CssTextDecorationLine {
+    Inherit,
+    None,
+    Underline,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1125,6 +1152,39 @@ pub(crate) fn parse_white_space(value: &str) -> Result<CssWhiteSpace> {
     }
 }
 
+pub(crate) fn parse_font_weight(value: &str) -> Result<CssFontWeight> {
+    match value.trim() {
+        "" | "inherit" => Ok(CssFontWeight::Inherit),
+        "normal" => Ok(CssFontWeight::Normal),
+        "bold" => Ok(CssFontWeight::Bold),
+        value => Err(Error::from_reason(format!(
+            "unsupported font-weight: {value}"
+        ))),
+    }
+}
+
+pub(crate) fn parse_font_style(value: &str) -> Result<CssFontStyle> {
+    match value.trim() {
+        "" | "inherit" => Ok(CssFontStyle::Inherit),
+        "normal" => Ok(CssFontStyle::Normal),
+        "italic" => Ok(CssFontStyle::Italic),
+        value => Err(Error::from_reason(format!(
+            "unsupported font-style: {value}"
+        ))),
+    }
+}
+
+pub(crate) fn parse_text_decoration_line(value: &str) -> Result<CssTextDecorationLine> {
+    match value.trim() {
+        "" | "inherit" => Ok(CssTextDecorationLine::Inherit),
+        "none" => Ok(CssTextDecorationLine::None),
+        "underline" => Ok(CssTextDecorationLine::Underline),
+        value => Err(Error::from_reason(format!(
+            "unsupported text-decoration: {value}"
+        ))),
+    }
+}
+
 pub(crate) fn parse_grid_template_tracks(value: &str) -> Result<Vec<CssGridTemplateTrack>> {
     parse_grid_auto_tracks(value).map(|tracks| {
         tracks
@@ -1244,4 +1304,48 @@ pub(crate) fn parse_grid_placement(value: &str) -> Result<CssGridPlacement> {
         .parse::<i16>()
         .map_err(|_| Error::from_reason(format!("invalid grid line: {value}")))?;
     Ok(CssGridPlacement::Line(line))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn font_weight_only_accepts_terminal_backed_values() {
+        assert!(matches!(
+            parse_font_weight("bold").unwrap(),
+            CssFontWeight::Bold
+        ));
+        assert!(matches!(
+            parse_font_weight("normal").unwrap(),
+            CssFontWeight::Normal
+        ));
+        assert!(parse_font_weight("700").is_err());
+    }
+
+    #[test]
+    fn font_style_only_accepts_terminal_backed_values() {
+        assert!(matches!(
+            parse_font_style("italic").unwrap(),
+            CssFontStyle::Italic
+        ));
+        assert!(matches!(
+            parse_font_style("normal").unwrap(),
+            CssFontStyle::Normal
+        ));
+        assert!(parse_font_style("oblique").is_err());
+    }
+
+    #[test]
+    fn text_decoration_only_accepts_terminal_backed_values() {
+        assert!(matches!(
+            parse_text_decoration_line("underline").unwrap(),
+            CssTextDecorationLine::Underline
+        ));
+        assert!(matches!(
+            parse_text_decoration_line("none").unwrap(),
+            CssTextDecorationLine::None
+        ));
+        assert!(parse_text_decoration_line("underline dotted").is_err());
+    }
 }
