@@ -63,6 +63,7 @@
     "demo:span-flex": "npm run build:debug && node dist/examples/span-flex.js",
     "demo:spans": "npm run build:debug && node dist/examples/spans.js",
     "demo:textarea": "npm run build:debug && node dist/examples/textarea.js",
+    "demo:text-styles": "npm run build:debug && node dist/examples/text-styles.js",
     "demo:transitions": "npm run build:debug && node dist/examples/transitions.js",
     "test": "npm run build:native:debug && vitest run",
     "prepublishOnly": "npm run build:native:local && npm run build:ts && node scripts/verify-native-artifacts.mjs && npm run napi:prepublish"

@@ -9,8 +9,8 @@ use crate::layout::{
     TextAreaLayoutData,
 };
 use crate::style::{
-    Background, ColorTransitionProperty, DivStyle, ImageRendering, LayoutDisplay,
-    LayoutFlexDirection, LayoutFlexWrap, LayoutOverflow,
+    Background, ColorTransitionProperty, CssFontStyle, CssFontWeight, CssTextDecorationLine,
+    DivStyle, ImageRendering, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap, LayoutOverflow,
 };
 use crate::text_wrap::WrappedText;
 use crate::transition::TransitionState;
@@ -105,6 +105,9 @@ pub(crate) fn paint_arena_with_options(
                 background: Background::Default,
                 selection_background: None,
                 foreground: Background::Default,
+                bold: false,
+                italic: false,
+                underline: false,
                 clip: ClipBounds::unbounded(),
             },
         );
@@ -126,6 +129,9 @@ struct PaintState {
     background: Background,
     selection_background: Option<Background>,
     foreground: Background,
+    bold: bool,
+    italic: bool,
+    underline: bool,
     clip: ClipBounds,
 }
 
@@ -168,6 +174,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             state.foreground,
         );
         let selection_background = style.selection_background.or(state.selection_background);
+        let text_state = apply_text_style(style, state);
 
         push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
         let content = content_box_rect(bounds, layout);
@@ -187,6 +194,9 @@ impl<'a, 'out> Painter<'a, 'out> {
             background,
             selection_background,
             foreground,
+            bold: text_state.bold,
+            italic: text_state.italic,
+            underline: text_state.underline,
             clip: child_clip,
         };
 
@@ -287,6 +297,7 @@ impl<'a, 'out> Painter<'a, 'out> {
         let placeholder_foreground =
             effective_background(style.placeholder_color, state.foreground);
         let selection_background = style.selection_background.or(state.selection_background);
+        let text_state = apply_text_style(style, state);
         let layout = self.arena.layout(id);
         let content = content_box_rect(bounds, layout);
 
@@ -305,6 +316,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             selection_background,
             foreground,
             placeholder_foreground,
+            TextAttributes::from_state(text_state),
             state.clip,
         );
         let border_color =
@@ -341,6 +353,7 @@ impl<'a, 'out> Painter<'a, 'out> {
         let placeholder_foreground =
             effective_background(style.placeholder_color, state.foreground);
         let selection_background = style.selection_background.or(state.selection_background);
+        let text_state = apply_text_style(style, state);
         let layout = self.arena.layout(id);
         let content = content_box_rect(bounds, layout);
         let (_, scroll_top) = self.arena.scroll_offset(id);
@@ -360,6 +373,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             selection_background,
             foreground,
             placeholder_foreground,
+            TextAttributes::from_state(text_state),
             scroll_top as usize,
             state.clip,
         );
@@ -379,6 +393,9 @@ impl<'a, 'out> Painter<'a, 'out> {
             background: state.background,
             foreground: state.foreground,
             selection_background: state.selection_background,
+            bold: state.bold,
+            italic: state.italic,
+            underline: state.underline,
         };
         for (offset, character) in text.chars().enumerate() {
             self.output
@@ -406,6 +423,9 @@ impl<'a, 'out> Painter<'a, 'out> {
                         background: fragment_state.background,
                         foreground: fragment_state.foreground,
                         selection_background: fragment_state.selection_background,
+                        bold: fragment_state.bold,
+                        italic: fragment_state.italic,
+                        underline: fragment_state.underline,
                     };
                     self.output.frame.write_glyph(
                         rect.left,
@@ -458,6 +478,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                 state.foreground,
             );
             state.selection_background = style.selection_background.or(state.selection_background);
+            state = apply_text_style(style, state);
         }
 
         state
@@ -595,6 +616,42 @@ fn effective_background(value: Background, inherited: Background) -> Background 
     }
 }
 
+#[derive(Clone, Copy)]
+struct TextAttributes {
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+impl TextAttributes {
+    fn from_state(state: PaintState) -> Self {
+        Self {
+            bold: state.bold,
+            italic: state.italic,
+            underline: state.underline,
+        }
+    }
+}
+
+fn apply_text_style(style: &DivStyle, mut state: PaintState) -> PaintState {
+    match style.font_weight {
+        CssFontWeight::Inherit => {}
+        CssFontWeight::Normal => state.bold = false,
+        CssFontWeight::Bold => state.bold = true,
+    }
+    match style.font_style {
+        CssFontStyle::Inherit => {}
+        CssFontStyle::Normal => state.italic = false,
+        CssFontStyle::Italic => state.italic = true,
+    }
+    match style.text_decoration_line {
+        CssTextDecorationLine::Inherit => {}
+        CssTextDecorationLine::None => state.underline = false,
+        CssTextDecorationLine::Underline => state.underline = true,
+    }
+    state
+}
+
 fn paint_image(
     frame: &mut Frame,
     image: &ImageLayoutData,
@@ -634,6 +691,7 @@ fn paint_image(
                             background: Background::Default,
                             foreground: Background::Rgb(pixel[0], pixel[1], pixel[2]),
                             selection_background,
+                            ..Default::default()
                         },
                         clip,
                     );
@@ -678,6 +736,7 @@ fn paint_image(
                                 bottom_pixel[2],
                             ),
                             selection_background,
+                            ..Default::default()
                         },
                         clip,
                     );
@@ -695,6 +754,7 @@ fn paint_input(
     selection_background: Option<Background>,
     foreground: Background,
     placeholder_foreground: Background,
+    text_attributes: TextAttributes,
     clip: ClipBounds,
 ) {
     if rect.width() <= 0 || rect.height() <= 0 {
@@ -729,6 +789,9 @@ fn paint_input(
             foreground
         },
         selection_background,
+        bold: text_attributes.bold,
+        italic: text_attributes.italic,
+        underline: text_attributes.underline,
     };
 
     for col in 0..width {
@@ -754,6 +817,9 @@ fn paint_input(
                 background,
                 foreground,
                 selection_background,
+                bold: text_attributes.bold,
+                italic: text_attributes.italic,
+                underline: text_attributes.underline,
             },
             clip,
         );
@@ -769,6 +835,7 @@ fn paint_textarea(
     selection_background: Option<Background>,
     foreground: Background,
     placeholder_foreground: Background,
+    text_attributes: TextAttributes,
     scroll_top: usize,
     clip: ClipBounds,
 ) {
@@ -792,6 +859,9 @@ fn paint_textarea(
             foreground
         },
         selection_background,
+        bold: text_attributes.bold,
+        italic: text_attributes.italic,
+        underline: text_attributes.underline,
     };
     let cursor_position = textarea.focused.then(|| {
         WrappedText::new(&textarea.value, rect.width() as usize)
@@ -843,6 +913,9 @@ fn paint_textarea(
                     background,
                     foreground,
                     selection_background,
+                    bold: text_attributes.bold,
+                    italic: text_attributes.italic,
+                    underline: text_attributes.underline,
                 },
                 clip,
             );
@@ -961,8 +1034,9 @@ mod tests {
     use taffy::{AvailableSpace, Size};
 
     use crate::style::{
-        BorderStyle, CssDimension, CssLengthPercentage, ImageRendering, LayoutAlignItems,
-        LayoutDisplay, LayoutFlexDirection,
+        BorderStyle, CssDimension, CssFontStyle, CssFontWeight, CssLengthPercentage,
+        CssTextDecorationLine, ImageRendering, LayoutAlignItems, LayoutDisplay,
+        LayoutFlexDirection,
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
@@ -1001,6 +1075,67 @@ mod tests {
             output.frame.cell(0, 0).unwrap().foreground,
             Background::White
         );
+    }
+
+    #[test]
+    fn paints_block_text_attributes() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(8.0), CssDimension::Length(1.0));
+        root_style.font_weight = CssFontWeight::Bold;
+        root_style.font_style = CssFontStyle::Italic;
+        root_style.text_decoration_line = CssTextDecorationLine::Underline;
+        let root = arena.create_element(root_style);
+        let text = arena.create_text("hi");
+        arena.append_child(root, text);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 8, 1, false);
+
+        let cell = output.frame.cell(0, 0).unwrap();
+        assert_eq!(cell.character, 'h');
+        assert!(cell.bold);
+        assert!(cell.italic);
+        assert!(cell.underline);
+    }
+
+    #[test]
+    fn child_can_clear_inherited_block_text_attributes() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(8.0), CssDimension::Length(1.0));
+        root_style.font_weight = CssFontWeight::Bold;
+        root_style.font_style = CssFontStyle::Italic;
+        root_style.text_decoration_line = CssTextDecorationLine::Underline;
+        let root = arena.create_element(root_style);
+
+        let mut child_style = block_style(CssDimension::Length(8.0), CssDimension::Length(1.0));
+        child_style.font_weight = CssFontWeight::Normal;
+        child_style.font_style = CssFontStyle::Normal;
+        child_style.text_decoration_line = CssTextDecorationLine::None;
+        let child = arena.create_element(child_style);
+        let text = arena.create_text("hi");
+        arena.append_child(child, text);
+        arena.append_child(root, child);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 8, 1, false);
+
+        let cell = output.frame.cell(0, 0).unwrap();
+        assert_eq!(cell.character, 'h');
+        assert!(!cell.bold);
+        assert!(!cell.italic);
+        assert!(!cell.underline);
     }
 
     #[test]
@@ -1532,6 +1667,83 @@ mod tests {
         assert_eq!(first.character, 'h');
         assert_eq!(first.foreground, Background::Yellow);
         assert_eq!(first.background, Background::Red);
+    }
+
+    #[test]
+    fn nested_inline_span_text_inherits_outer_text_attributes() {
+        let mut arena = LayoutArena::new();
+        let row = arena.create_element(block_style(CssDimension::Length(6.0), CssDimension::Auto));
+
+        let mut outer_style = DivStyle::default();
+        outer_style.display = LayoutDisplay::Inline;
+        outer_style.font_weight = CssFontWeight::Bold;
+        outer_style.font_style = CssFontStyle::Italic;
+        outer_style.text_decoration_line = CssTextDecorationLine::Underline;
+        let outer = arena.create_element(outer_style);
+
+        let mut inner_style = DivStyle::default();
+        inner_style.display = LayoutDisplay::Inline;
+        let inner = arena.create_element(inner_style);
+
+        let text = arena.create_text("hi");
+        arena.append_child(inner, text);
+        arena.append_child(outer, inner);
+        arena.append_child(row, outer);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        let output = paint_arena(&arena, row, 6, 1, false);
+
+        let first = output.frame.cell(0, 0).unwrap();
+        assert_eq!(first.character, 'h');
+        assert!(first.bold);
+        assert!(first.italic);
+        assert!(first.underline);
+    }
+
+    #[test]
+    fn nested_inline_span_text_can_clear_inherited_text_attributes() {
+        let mut arena = LayoutArena::new();
+        let row = arena.create_element(block_style(CssDimension::Length(6.0), CssDimension::Auto));
+
+        let mut outer_style = DivStyle::default();
+        outer_style.display = LayoutDisplay::Inline;
+        outer_style.font_weight = CssFontWeight::Bold;
+        outer_style.font_style = CssFontStyle::Italic;
+        outer_style.text_decoration_line = CssTextDecorationLine::Underline;
+        let outer = arena.create_element(outer_style);
+
+        let mut inner_style = DivStyle::default();
+        inner_style.display = LayoutDisplay::Inline;
+        inner_style.font_weight = CssFontWeight::Normal;
+        inner_style.font_style = CssFontStyle::Normal;
+        inner_style.text_decoration_line = CssTextDecorationLine::None;
+        let inner = arena.create_element(inner_style);
+
+        let text = arena.create_text("hi");
+        arena.append_child(inner, text);
+        arena.append_child(outer, inner);
+        arena.append_child(row, outer);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        let output = paint_arena(&arena, row, 6, 1, false);
+
+        let first = output.frame.cell(0, 0).unwrap();
+        assert_eq!(first.character, 'h');
+        assert!(!first.bold);
+        assert!(!first.italic);
+        assert!(!first.underline);
     }
 
     #[test]

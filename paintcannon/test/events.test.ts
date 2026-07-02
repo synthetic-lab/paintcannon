@@ -301,6 +301,29 @@ describe("core style validation", () => {
     paintCannon.stop();
   });
 
+  it("supports terminal text attribute style properties", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+
+    root.style.fontWeight = "bold";
+    root.style.fontStyle = "italic";
+    root.style.textDecoration = "underline";
+    root.style.textDecorationLine = "none";
+
+    expect(root.style.fontWeight).toBe("bold");
+    expect(root.style.fontStyle).toBe("italic");
+    expect(root.style.textDecoration).toBe("underline");
+    expect(root.style.textDecorationLine).toBe("none");
+    expect(mockNative.styleMutations).toEqual(
+      expect.arrayContaining([
+        { id: root.id, property: "font-weight", value: "bold" },
+        { id: root.id, property: "font-style", value: "italic" },
+        { id: root.id, property: "text-decoration", value: "underline" },
+        { id: root.id, property: "text-decoration-line", value: "none" },
+      ]),
+    );
+    paintCannon.stop();
+  });
+
   it("removes style properties by sending an empty native value", () => {
     const { paintCannon, mockNative, root } = createPaintTree();
 

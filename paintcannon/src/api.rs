@@ -22,10 +22,11 @@ use crate::layout::ArenaScrollMetrics;
 use crate::style::{
     parse_align_items, parse_border_style, parse_box_lengths, parse_cursor, parse_dimension,
     parse_display, parse_flex_direction, parse_flex_flow, parse_flex_shorthand, parse_flex_wrap,
-    parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks, parse_grid_line, parse_grid_placement,
-    parse_grid_template_tracks, parse_image_rendering, parse_justify_content,
-    parse_length_percentage, parse_length_percentage_auto, parse_margin_lengths,
-    parse_non_negative_number, parse_overflow, parse_transition, parse_white_space, Background,
+    parse_font_style, parse_font_weight, parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks,
+    parse_grid_line, parse_grid_placement, parse_grid_template_tracks, parse_image_rendering,
+    parse_justify_content, parse_length_percentage, parse_length_percentage_auto,
+    parse_margin_lengths, parse_non_negative_number, parse_overflow, parse_text_decoration_line,
+    parse_transition, parse_white_space, Background,
 };
 use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
@@ -1042,6 +1043,11 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
             })?;
             StyleMutation::SelectionBackground(background)
         }
+        "font-weight" | "fontWeight" => StyleMutation::FontWeight(parse_font_weight(value)?),
+        "font-style" | "fontStyle" => StyleMutation::FontStyle(parse_font_style(value)?),
+        "text-decoration" | "textDecoration" | "text-decoration-line" | "textDecorationLine" => {
+            StyleMutation::TextDecorationLine(parse_text_decoration_line(value)?)
+        }
         "cursor" => StyleMutation::Cursor(parse_cursor(value)?),
         "grid-template-columns" | "gridTemplateColumns" => {
             StyleMutation::GridTemplateColumns(parse_grid_template_tracks(value)?)
@@ -1129,6 +1135,11 @@ fn style_reset(property: &str) -> Result<StyleReset> {
         "background" | "background-color" | "backgroundColor" => StyleReset::Background,
         "selection-background-color" | "selectionBackgroundColor" => {
             StyleReset::SelectionBackground
+        }
+        "font-weight" | "fontWeight" => StyleReset::FontWeight,
+        "font-style" | "fontStyle" => StyleReset::FontStyle,
+        "text-decoration" | "textDecoration" | "text-decoration-line" | "textDecorationLine" => {
+            StyleReset::TextDecorationLine
         }
         "cursor" => StyleReset::Cursor,
         "grid-template-columns" | "gridTemplateColumns" => StyleReset::GridTemplateColumns,

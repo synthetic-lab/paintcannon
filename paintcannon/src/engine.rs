@@ -17,11 +17,11 @@ use crate::layout::{ArenaScrollMetrics, LayoutArena};
 use crate::paint::{paint_arena_with_options, HitRegion, PaintOptions};
 use crate::selection::{SelectionAction, SelectionMouseEvent, SelectionState};
 use crate::style::{
-    Background, BorderStyle, ColorTransitionProperty, CssDimension, CssGridLine, CssGridPlacement,
-    CssGridTemplateTrack, CssLengthPercentage, CssLengthPercentageAuto, CssTrackSizing,
-    CssWhiteSpace, CursorStyle, DivStyle, ImageRendering, LayoutAlignItems, LayoutDisplay,
-    LayoutFlexDirection, LayoutFlexWrap, LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow,
-    TransitionSpec,
+    Background, BorderStyle, ColorTransitionProperty, CssDimension, CssFontStyle, CssFontWeight,
+    CssGridLine, CssGridPlacement, CssGridTemplateTrack, CssLengthPercentage,
+    CssLengthPercentageAuto, CssTextDecorationLine, CssTrackSizing, CssWhiteSpace, CursorStyle,
+    DivStyle, ImageRendering, LayoutAlignItems, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap,
+    LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, TransitionSpec,
 };
 use crate::terminal::{copy_text_to_clipboard, query_terminal_size, write_pointer_shape};
 use crate::transition::{TransitionEvent, TransitionEventType, TransitionState};
@@ -127,6 +127,9 @@ pub(crate) enum StyleMutation {
     PlaceholderColor(Background),
     Background(Background),
     SelectionBackground(Background),
+    FontWeight(CssFontWeight),
+    FontStyle(CssFontStyle),
+    TextDecorationLine(CssTextDecorationLine),
     Cursor(CursorStyle),
     GridTemplateColumns(Vec<CssGridTemplateTrack>),
     GridTemplateRows(Vec<CssGridTemplateTrack>),
@@ -188,6 +191,9 @@ pub(crate) enum StyleReset {
     PlaceholderColor,
     Background,
     SelectionBackground,
+    FontWeight,
+    FontStyle,
+    TextDecorationLine,
     Cursor,
     GridTemplateColumns,
     GridTemplateRows,
@@ -1291,6 +1297,11 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
         StyleMutation::SelectionBackground(background) => {
             style.selection_background = Some(background);
         }
+        StyleMutation::FontWeight(font_weight) => style.font_weight = font_weight,
+        StyleMutation::FontStyle(font_style) => style.font_style = font_style,
+        StyleMutation::TextDecorationLine(text_decoration_line) => {
+            style.text_decoration_line = text_decoration_line;
+        }
         StyleMutation::Cursor(cursor) => style.cursor = cursor,
         StyleMutation::GridTemplateColumns(tracks) => style.grid_template_columns = tracks,
         StyleMutation::GridTemplateRows(tracks) => style.grid_template_rows = tracks,
@@ -1385,6 +1396,9 @@ fn reset_style_property(style: &mut DivStyle, reset: StyleReset) {
         StyleReset::SelectionBackground => {
             style.selection_background = default.selection_background
         }
+        StyleReset::FontWeight => style.font_weight = default.font_weight,
+        StyleReset::FontStyle => style.font_style = default.font_style,
+        StyleReset::TextDecorationLine => style.text_decoration_line = default.text_decoration_line,
         StyleReset::Cursor => style.cursor = default.cursor,
         StyleReset::GridTemplateColumns => {
             style.grid_template_columns = default.grid_template_columns
@@ -1686,8 +1700,8 @@ mod tests {
 
     use crate::selection::{SelectionMouseEvent, SelectionMouseEventType};
     use crate::style::{
-        Background, ColorTransitionProperty, CssDimension, LayoutFlexDirection, LayoutOverflow,
-        TransitionSpec,
+        Background, ColorTransitionProperty, CssDimension, CssFontWeight, LayoutFlexDirection,
+        LayoutOverflow, TransitionSpec,
     };
     use crate::transition::TransitionEventType;
 
@@ -2169,6 +2183,26 @@ mod tests {
         let second = String::from_utf8(second).unwrap();
 
         assert!(second.contains("\x1b[H"));
+    }
+
+    #[test]
+    fn text_attribute_change_paints_without_recomputing_layout() {
+        let mut engine = PaintEngine::new();
+        let root = engine.create_element(block_style(
+            CssDimension::Length(4.0),
+            CssDimension::Length(1.0),
+        ));
+        let text = engine.create_text("ok");
+        engine.append_child(root, text);
+        engine.set_root(root);
+
+        engine.render_frame(4, 1).unwrap();
+        let passes = engine.layout_passes();
+        assert!(engine.mutate_style(root, StyleMutation::FontWeight(CssFontWeight::Bold)));
+        let frame = engine.render_frame(4, 1).unwrap();
+
+        assert_eq!(engine.layout_passes(), passes);
+        assert!(frame.cell(0, 0).unwrap().bold);
     }
 
     #[test]
