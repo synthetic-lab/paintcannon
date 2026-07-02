@@ -456,6 +456,10 @@ impl LayoutArena {
         &self.nodes[node_index(node)].children
     }
 
+    pub(crate) fn parent(&self, node: NodeId) -> Option<NodeId> {
+        self.nodes[node_index(node)].parent
+    }
+
     pub(crate) fn scroll_offset(&self, node: NodeId) -> (u32, u32) {
         let item = &self.nodes[node_index(node)];
         if let LayoutNodeKind::TextArea(textarea) = &item.kind {
