@@ -981,6 +981,16 @@ impl PaintEngine {
     }
 
     fn render_frame_at(&mut self, width: usize, height: usize, now: Instant) -> Option<Frame> {
+        self.render_frame_at_with_selection_capture(width, height, now, false)
+    }
+
+    fn render_frame_at_with_selection_capture(
+        &mut self,
+        width: usize,
+        height: usize,
+        now: Instant,
+        force_capture_hidden_selection_units: bool,
+    ) -> Option<Frame> {
         let root = self.root.and_then(|root| self.node_for(root))?;
         let total_start = Instant::now();
         let layout_start = Instant::now();
@@ -1026,7 +1036,8 @@ impl PaintEngine {
             ],
         );
 
-        let capture_hidden_selection_units = self.selection.active_selection().is_some();
+        let capture_hidden_selection_units =
+            force_capture_hidden_selection_units || self.selection.active_selection().is_some();
         let paint_start = Instant::now();
         let mut output = paint_arena_with_options(
             &self.arena,
@@ -1112,6 +1123,16 @@ impl PaintEngine {
     }
 
     pub(crate) fn handle_selection_event(&mut self, event: SelectionMouseEvent) -> SelectionAction {
+        if event.event_type == SelectionMouseEventType::Down {
+            if let Some((width, height)) = self
+                .current_frame
+                .as_ref()
+                .map(|frame| (frame.width(), frame.height()))
+            {
+                self.render_frame_at_with_selection_capture(width, height, Instant::now(), true);
+            }
+        }
+
         self.selection
             .handle_event(event, self.current_frame.as_ref())
     }
@@ -1962,6 +1983,82 @@ mod tests {
                 button: 0,
             },
         ));
+    }
+
+    #[test]
+    fn selection_in_later_scroll_pane_does_not_capture_hidden_text_from_earlier_pane() {
+        let mut engine = PaintEngine::new();
+        let mut root_style = block_style(CssDimension::Length(20.0), CssDimension::Length(2.0));
+        root_style.display = crate::style::LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Row;
+        let root = engine.create_element(root_style);
+
+        let mut left_style = block_style(CssDimension::Length(10.0), CssDimension::Length(2.0));
+        left_style.overflow_y = LayoutOverflow::Scroll;
+        let left = engine.create_element(left_style);
+        let mut left_content_style = block_style(CssDimension::Length(10.0), CssDimension::Auto);
+        left_content_style.display = crate::style::LayoutDisplay::Flex;
+        left_content_style.flex_direction = LayoutFlexDirection::Column;
+        let left_content = engine.create_element(left_content_style);
+        for index in 0..8 {
+            let row = engine.create_element(block_style(
+                CssDimension::Length(10.0),
+                CssDimension::Length(1.0),
+            ));
+            let text = engine.create_text(format!("left-{index}"));
+            engine.append_child(row, text);
+            engine.append_child(left_content, row);
+        }
+        engine.append_child(left, left_content);
+
+        let mut right_style = block_style(CssDimension::Length(10.0), CssDimension::Length(2.0));
+        right_style.overflow_y = LayoutOverflow::Scroll;
+        let right = engine.create_element(right_style);
+        let mut right_content_style = block_style(CssDimension::Length(10.0), CssDimension::Auto);
+        right_content_style.display = crate::style::LayoutDisplay::Flex;
+        right_content_style.flex_direction = LayoutFlexDirection::Column;
+        let right_content = engine.create_element(right_content_style);
+        for text in ["RIGHT-0", "RIGHT-1"] {
+            let row = engine.create_element(block_style(
+                CssDimension::Length(10.0),
+                CssDimension::Length(1.0),
+            ));
+            let text = engine.create_text(text);
+            engine.append_child(row, text);
+            engine.append_child(right_content, row);
+        }
+        engine.append_child(right, right_content);
+
+        engine.append_child(root, left);
+        engine.append_child(root, right);
+        engine.set_root(root);
+
+        engine.render_frame(20, 2).unwrap();
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Down,
+            x: 10,
+            y: 0,
+            button: 0,
+        });
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Drag,
+            x: 16,
+            y: 0,
+            button: 0,
+        });
+        engine.render_frame(20, 2).unwrap();
+
+        let action = engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Up,
+            x: 16,
+            y: 0,
+            button: 0,
+        });
+
+        assert_eq!(
+            action,
+            SelectionAction::CopyToClipboard("RIGHT-0".to_string())
+        );
     }
 
     #[test]

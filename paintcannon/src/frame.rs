@@ -147,12 +147,10 @@ impl Frame {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn width(&self) -> usize {
         self.width
     }
 
-    #[cfg(test)]
     pub(crate) fn height(&self) -> usize {
         self.height
     }
