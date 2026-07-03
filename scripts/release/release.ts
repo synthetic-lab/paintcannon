@@ -26,16 +26,7 @@ const paintcannonPath = "paintcannon/package.json";
 const reactPath = "paintcannon-react/package.json";
 const lockPath = "package-lock.json";
 
-const paintcannonPackage = readPackage(paintcannonPath);
-const reactPackage = readPackage(reactPath);
-
-if (paintcannonPackage.version !== reactPackage.version) {
-  fail(
-    `Workspace versions must match before release: paintcannon is ${paintcannonPackage.version}, paintcannon-react is ${reactPackage.version}`,
-  );
-}
-
-const version = resolveVersion(versionArg, paintcannonPackage.version);
+const version = parseVersion(versionArg);
 const paintcannonTag = `paintcannon@${version}`;
 const reactTag = `paintcannon-react@${version}`;
 
@@ -50,6 +41,9 @@ if (commandOutput("git", ["status", "--porcelain"]) !== "") {
 
 ensureTagDoesNotExist(paintcannonTag);
 ensureTagDoesNotExist(reactTag);
+
+const paintcannonPackage = readPackage(paintcannonPath);
+const reactPackage = readPackage(reactPath);
 
 paintcannonPackage.version = version;
 reactPackage.version = version;
@@ -79,40 +73,12 @@ function writePackage(path: string, contents: PackageJson): void {
   writeFileSync(resolve(root, path), `${JSON.stringify(contents, null, 2)}\n`);
 }
 
-function resolveVersion(version: string, currentVersion: string): string {
-  if (version === "patch" || version === "minor" || version === "major") {
-    return bumpVersion(currentVersion, version);
-  }
-
+function parseVersion(version: string): string {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
     fail(`Invalid version: ${version}`);
   }
 
   return version;
-}
-
-function bumpVersion(currentVersion: string, bump: "patch" | "minor" | "major"): string {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(currentVersion);
-  if (match === null) {
-    fail(`Cannot ${bump} bump non-stable current version: ${currentVersion}`);
-  }
-
-  let major = Number(match[1]);
-  let minor = Number(match[2]);
-  let patch = Number(match[3]);
-
-  if (bump === "major") {
-    major += 1;
-    minor = 0;
-    patch = 0;
-  } else if (bump === "minor") {
-    minor += 1;
-    patch = 0;
-  } else {
-    patch += 1;
-  }
-
-  return `${major}.${minor}.${patch}`;
 }
 
 function ensureTagDoesNotExist(tag: string): void {
@@ -158,9 +124,8 @@ function fail(message: string): never {
 }
 
 function printUsage(): void {
-  console.log(`Usage: npm run release -- <version|patch|minor|major>
+  console.log(`Usage: npm run release -- <version>
 
 Examples:
-  npm run release -- patch
   npm run release -- 0.0.13`);
 }
