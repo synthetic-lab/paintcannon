@@ -13,6 +13,7 @@ PaintCannon supports the following CSS:
 - Inline
 - Margins and padding, including auto margins
 - Overflow hidden and scroll, with native mouse scrolling
+- `scrollbar-color` and `scrollbar-gutter` styling
 - 24-bit RGB background, border, text, placeholder, and selection coloring with
   256-color and 16-color fallbacks
 - CSS transitions for all color properties
