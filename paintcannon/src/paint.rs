@@ -218,6 +218,7 @@ impl<'a, 'out> Painter<'a, 'out> {
         }
 
         self.paint_vertical_scrollbar(id, bounds, layout, background, state.clip);
+        self.paint_horizontal_scrollbar(id, bounds, layout, background, state.clip);
 
         let border_color =
             self.paint_color(id, ColorTransitionProperty::BorderColor, style.border_color);
@@ -275,6 +276,69 @@ impl<'a, 'out> Painter<'a, 'out> {
             self.output.frame.write_decoration_glyph(
                 rail.left,
                 rail.top + row as i32,
+                if is_thumb { '█' } else { ' ' },
+                GlyphStyle {
+                    background,
+                    foreground: if is_thumb {
+                        thumb_color
+                    } else {
+                        Background::Default
+                    },
+                    selection_background: None,
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                },
+                clip,
+            );
+        }
+    }
+
+    fn paint_horizontal_scrollbar(
+        &mut self,
+        id: NodeId,
+        bounds: ClipRect,
+        layout: Layout,
+        background: Background,
+        clip: ClipBounds,
+    ) {
+        let style = self.arena.style(id);
+        if style.overflow_x != LayoutOverflow::Scroll || layout.scrollbar_size.height < 0.5 {
+            return;
+        }
+
+        let Some(rail) = horizontal_scrollbar_rect(bounds, layout) else {
+            return;
+        };
+        let Some(metrics) = self.arena.scroll_metrics_snapshot(id) else {
+            return;
+        };
+        if metrics.client_width == 0 {
+            return;
+        }
+
+        let rail_width = rail.width().max(0) as u32;
+        if rail_width == 0 {
+            return;
+        }
+
+        let (thumb_color, _) = style.scrollbar_color.resolve();
+        let max_scroll = metrics.scroll_width.saturating_sub(metrics.client_width);
+        let thumb_width = horizontal_scrollbar_thumb_width(rail_width, &metrics);
+        let max_thumb_left = rail_width.saturating_sub(thumb_width);
+        let thumb_left = if max_scroll == 0 || max_thumb_left == 0 {
+            0
+        } else {
+            (((metrics.scroll_left as f32 / max_scroll as f32) * max_thumb_left as f32).round()
+                as u32)
+                .min(max_thumb_left)
+        };
+
+        for column in 0..rail_width {
+            let is_thumb = column >= thumb_left && column < thumb_left + thumb_width;
+            self.output.frame.write_decoration_glyph(
+                rail.left + column as i32,
+                rail.top,
                 if is_thumb { '█' } else { ' ' },
                 GlyphStyle {
                     background,
@@ -1092,12 +1156,13 @@ fn vertical_scrollbar_rect(bounds: ClipRect, layout: Layout) -> Option<ClipRect>
     }
 
     let padding = padding_box_rect(bounds, layout);
-    let left = padding.right - width;
-    (left < padding.right && padding.top < padding.bottom).then_some(ClipRect {
+    let left = (padding.right - width).max(padding.left);
+    let bottom = (padding.bottom - layout.scrollbar_size.height.round() as i32).max(padding.top);
+    (left < padding.right && padding.top < bottom).then_some(ClipRect {
         left,
         top: padding.top,
         right: padding.right,
-        bottom: padding.bottom,
+        bottom,
     })
 }
 
@@ -1109,6 +1174,33 @@ fn vertical_scrollbar_thumb_height(rail_height: u32, metrics: &ArenaScrollMetric
     (((metrics.client_height as f32 / metrics.scroll_height.max(1) as f32) * rail_height as f32)
         .floor() as u32)
         .clamp(1, rail_height.max(1))
+}
+
+fn horizontal_scrollbar_rect(bounds: ClipRect, layout: Layout) -> Option<ClipRect> {
+    let height = layout.scrollbar_size.height.round() as i32;
+    if height <= 0 {
+        return None;
+    }
+
+    let padding = padding_box_rect(bounds, layout);
+    let top = (padding.bottom - height).max(padding.top);
+    let right = (padding.right - layout.scrollbar_size.width.round() as i32).max(padding.left);
+    (padding.left < right && top < padding.bottom).then_some(ClipRect {
+        left: padding.left,
+        top,
+        right,
+        bottom: padding.bottom,
+    })
+}
+
+fn horizontal_scrollbar_thumb_width(rail_width: u32, metrics: &ArenaScrollMetrics) -> u32 {
+    if metrics.scroll_width <= metrics.client_width {
+        return rail_width.max(1);
+    }
+
+    (((metrics.client_width as f32 / metrics.scroll_width.max(1) as f32) * rail_width as f32)
+        .floor() as u32)
+        .clamp(1, rail_width.max(1))
 }
 
 fn scroll_offset_cells(overflow: LayoutOverflow, value: u32) -> i32 {
@@ -1385,6 +1477,201 @@ mod tests {
             Background::Black
         );
         assert_eq!(output.frame.cell(5, 2).unwrap().selection_order, None);
+    }
+
+    #[test]
+    fn paints_horizontal_scrollbar_in_reserved_gutter() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
+        viewport_style.overflow_x = LayoutOverflow::Scroll;
+        viewport_style.background = Background::Black;
+        viewport_style.scrollbar_color = crate::style::ScrollbarColor::Colors {
+            thumb: Background::Red,
+            track: Background::Green,
+        };
+        let viewport = arena.create_element(viewport_style);
+
+        let mut child_style = block_style(CssDimension::Length(12.0), CssDimension::Percent(1.0));
+        child_style.background = Background::Blue;
+        let child = arena.create_element(child_style);
+        arena.append_child(viewport, child);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+        arena.set_scroll_offset(viewport, 6, 0);
+        let output = paint_arena(&arena, viewport, 6, 3, false);
+
+        assert_eq!(arena.layout(child).size.height, 2.0);
+        assert_eq!(
+            output.frame.cell(0, 1).unwrap().background,
+            Background::Blue
+        );
+        assert_eq!(output.frame.cell(0, 2).unwrap().character, ' ');
+        assert_eq!(
+            output.frame.cell(0, 2).unwrap().background,
+            Background::Black
+        );
+        assert_eq!(
+            output.frame.cell(0, 2).unwrap().foreground,
+            Background::Default
+        );
+        assert_eq!(output.frame.cell(5, 2).unwrap().character, '█');
+        assert_eq!(output.frame.cell(5, 2).unwrap().foreground, Background::Red);
+        assert_eq!(
+            output.frame.cell(5, 2).unwrap().background,
+            Background::Black
+        );
+        assert_eq!(output.frame.cell(5, 2).unwrap().selection_order, None);
+    }
+
+    #[test]
+    fn scrollbars_do_not_paint_over_shared_corner() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(4.0));
+        viewport_style.overflow_x = LayoutOverflow::Scroll;
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.background = Background::Black;
+        viewport_style.scrollbar_color = crate::style::ScrollbarColor::Colors {
+            thumb: Background::Red,
+            track: Background::Green,
+        };
+        let viewport = arena.create_element(viewport_style);
+
+        let mut child_style = block_style(CssDimension::Length(12.0), CssDimension::Length(8.0));
+        child_style.background = Background::Blue;
+        let child = arena.create_element(child_style);
+        arena.append_child(viewport, child);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::Definite(4.0),
+            },
+        );
+        arena.set_scroll_offset(viewport, 7, 5);
+        let output = paint_arena(&arena, viewport, 6, 4, false);
+
+        let metrics = arena.scroll_metrics(viewport).unwrap();
+        assert_eq!(metrics.client_width, 5);
+        assert_eq!(metrics.client_height, 3);
+        assert_eq!(output.frame.cell(5, 2).unwrap().character, '█');
+        assert_eq!(output.frame.cell(4, 3).unwrap().character, '█');
+        assert_eq!(output.frame.cell(5, 3).unwrap().character, ' ');
+        assert_eq!(
+            output.frame.cell(5, 3).unwrap().background,
+            Background::Black
+        );
+        assert_eq!(
+            output.frame.cell(5, 3).unwrap().foreground,
+            Background::Default
+        );
+    }
+
+    #[test]
+    fn both_axis_scroll_container_paints_visible_child_text() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(12.0), CssDimension::Length(4.0));
+        viewport_style.overflow_x = LayoutOverflow::Scroll;
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.background = Background::Blue;
+        viewport_style.color = Background::White;
+        let viewport = arena.create_element(viewport_style);
+
+        let mut content_style = block_style(CssDimension::Length(24.0), CssDimension::Length(6.0));
+        content_style.display = LayoutDisplay::Flex;
+        content_style.flex_direction = LayoutFlexDirection::Column;
+        let content = arena.create_element(content_style);
+        let line = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(1.0),
+        ));
+        let text = arena.create_text("row 01 visible text");
+        arena.append_child(line, text);
+        arena.append_child(content, line);
+        arena.append_child(viewport, content);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(12.0),
+                height: AvailableSpace::Definite(4.0),
+            },
+        );
+        let output = paint_arena(&arena, viewport, 12, 4, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'r');
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, 'o');
+        assert_eq!(output.frame.cell(2, 0).unwrap().character, 'w');
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().foreground,
+            Background::White
+        );
+    }
+
+    #[test]
+    fn scroll_demo_shape_paints_text_inside_both_axis_viewport() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(80.0), CssDimension::Length(24.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        root_style.row_gap = CssLengthPercentage::Length(1.0);
+        root_style.background = Background::Black;
+        let root = arena.create_element(root_style);
+
+        let status = arena.create_text("status");
+        arena.append_child(root, status);
+
+        let mut row_style = block_style(CssDimension::Length(52.0), CssDimension::Length(9.0));
+        row_style.display = LayoutDisplay::Flex;
+        row_style.flex_direction = LayoutFlexDirection::Row;
+        row_style.column_gap = CssLengthPercentage::Length(1.0);
+        let row = arena.create_element(row_style);
+        arena.append_child(root, row);
+
+        let mut viewport_style =
+            block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
+        viewport_style.overflow_x = LayoutOverflow::Scroll;
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.background = Background::Blue;
+        viewport_style.color = Background::White;
+        let viewport = arena.create_element(viewport_style);
+        arena.append_child(row, viewport);
+
+        let mut content_style = block_style(CssDimension::Length(96.0), CssDimension::Length(24.0));
+        content_style.display = LayoutDisplay::Flex;
+        content_style.flex_direction = LayoutFlexDirection::Column;
+        let content = arena.create_element(content_style);
+        arena.append_child(viewport, content);
+
+        for index in 1..=24 {
+            let line = arena.create_element(block_style(
+                CssDimension::Percent(1.0),
+                CssDimension::Length(1.0),
+            ));
+            let text = arena.create_text(format!("row {index:02} - native horizontal text"));
+            arena.append_child(line, text);
+            arena.append_child(content, line);
+        }
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(80.0),
+                height: AvailableSpace::Definite(24.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 80, 24, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 's');
+        assert_eq!(output.frame.cell(0, 2).unwrap().character, 'r');
+        assert_eq!(output.frame.cell(1, 2).unwrap().character, 'o');
+        assert_eq!(output.frame.cell(2, 2).unwrap().character, 'w');
     }
 
     #[test]

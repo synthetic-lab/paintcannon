@@ -81,6 +81,8 @@ struct LayoutNode {
     parent: Option<NodeId>,
     layout: Layout,
     cache: Cache,
+    layout_dirty: bool,
+    fragments_dirty: bool,
     scroll_left: u32,
     scroll_top: u32,
     fragments: Vec<InlineFragment>,
@@ -438,6 +440,7 @@ impl LayoutArena {
         self.profile = LayoutProfileStats::default();
         self.clear_measure_caches();
         compute_root_layout(self, root, available);
+        self.ensure_dirty_descendants_are_laid_out(root);
     }
 
     pub(crate) fn layout(&self, node: NodeId) -> Layout {
@@ -506,6 +509,8 @@ impl LayoutArena {
             parent: None,
             layout: Layout::new(),
             cache: Cache::new(),
+            layout_dirty: true,
+            fragments_dirty: true,
             scroll_left: 0,
             scroll_top: 0,
             fragments: Vec::new(),
@@ -857,6 +862,8 @@ impl LayoutArena {
         while let Some(node_id) = current {
             let item = &mut self.nodes[node_index(node_id)];
             item.cache.clear();
+            item.layout_dirty = true;
+            item.fragments_dirty = true;
             current = item.parent;
         }
     }
@@ -869,6 +876,8 @@ impl LayoutArena {
     fn clear_cache_subtree(&mut self, node: NodeId) {
         let index = node_index(node);
         self.nodes[index].cache.clear();
+        self.nodes[index].layout_dirty = true;
+        self.nodes[index].fragments_dirty = true;
         let child_count = self.nodes[index].children.len();
         for child_index in 0..child_count {
             let child = self.nodes[index].children[child_index];
@@ -888,6 +897,63 @@ impl LayoutArena {
             .layout_mode_stack
             .iter()
             .any(|mode| *mode == RunMode::ComputeSize)
+    }
+
+    fn ensure_dirty_descendants_are_laid_out(&mut self, node: NodeId) {
+        if self.inline_fragments_need_layout(node) {
+            self.compute_inline_fragments_for_stored_layout(node);
+        }
+
+        if self.has_dirty_child_layout(node) {
+            self.compute_subtree_layout(node);
+        }
+
+        let child_count = self.nodes[node_index(node)].children.len();
+        for child_index in 0..child_count {
+            let child = self.nodes[node_index(node)].children[child_index];
+            self.ensure_dirty_descendants_are_laid_out(child);
+        }
+    }
+
+    fn has_dirty_child_layout(&self, node: NodeId) -> bool {
+        if self.is_inline_context(node) {
+            return false;
+        }
+
+        self.nodes[node_index(node)]
+            .children
+            .iter()
+            .any(|child| self.nodes[node_index(*child)].layout_dirty)
+    }
+
+    fn inline_fragments_need_layout(&self, node: NodeId) -> bool {
+        self.is_inline_context(node) && self.nodes[node_index(node)].fragments_dirty
+    }
+
+    fn compute_inline_fragments_for_stored_layout(&mut self, node: NodeId) {
+        let index = node_index(node);
+        let width = scroll_content_box_size(self.nodes[index].layout)
+            .width
+            .max(1.0)
+            .round() as u32;
+        let white_space = self.nodes[index].style.white_space;
+        self.compute_inline_fragments(node, white_space, width);
+        self.mark_inline_descendants_clean(node);
+    }
+
+    fn compute_subtree_layout(&mut self, node: NodeId) {
+        let saved_layout = self.nodes[node_index(node)].layout;
+        compute_root_layout(
+            self,
+            node,
+            Size {
+                width: AvailableSpace::Definite(saved_layout.size.width),
+                height: AvailableSpace::Definite(saved_layout.size.height),
+            },
+        );
+        let item = &mut self.nodes[node_index(node)];
+        item.layout = saved_layout;
+        item.layout_dirty = false;
     }
 
     fn is_inline_context(&self, node: NodeId) -> bool {
@@ -1060,6 +1126,7 @@ impl LayoutArena {
                 paint_style.white_space,
                 content_width.max(1.0).round() as u32,
             );
+            self.mark_inline_descendants_clean(node_id);
             self.profile.inline_fragment_calls += 1;
             self.profile.inline_fragment_ns += inline_fragment_start.elapsed().as_nanos();
         }
@@ -1240,6 +1307,19 @@ impl LayoutArena {
             self.layout_inline_node(child, white_space, None, &mut cursor);
         }
         self.nodes[index].fragments = cursor.fragments;
+        self.nodes[index].fragments_dirty = false;
+    }
+
+    fn mark_inline_descendants_clean(&mut self, node: NodeId) {
+        let child_count = self.nodes[node_index(node)].children.len();
+        for child_index in 0..child_count {
+            let child = self.nodes[node_index(node)].children[child_index];
+            self.nodes[node_index(child)].layout_dirty = false;
+            self.nodes[node_index(child)].fragments_dirty = false;
+            if matches!(self.nodes[node_index(child)].kind, LayoutNodeKind::Element) {
+                self.mark_inline_descendants_clean(child);
+            }
+        }
     }
 
     fn layout_inline_node(
@@ -1381,7 +1461,9 @@ impl LayoutPartialTree for LayoutArena {
 
     fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
         if self.should_store_layout() {
-            self.nodes[node_index(node_id)].layout = *layout;
+            let item = &mut self.nodes[node_index(node_id)];
+            item.layout = *layout;
+            item.layout_dirty = false;
         }
     }
 
@@ -1993,7 +2075,7 @@ mod tests {
     use crate::style::{
         BorderStyle, CssDimension, CssGridTemplateTrack, CssLengthPercentage,
         CssLengthPercentageAuto, CssTrackSizing, CssWhiteSpace, LayoutAlignItems,
-        LayoutFlexDirection, LayoutJustifyContent, LayoutOverflow,
+        LayoutFlexDirection, LayoutJustifyContent, LayoutOverflow, ScrollbarGutter,
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
@@ -2585,6 +2667,98 @@ mod tests {
         assert_eq!(metrics.client_width, 5);
         assert_eq!(metrics.client_height, 3);
         assert_eq!(metrics.scroll_height, 5);
+    }
+
+    #[test]
+    fn horizontal_scrollbar_reserves_one_cell_for_child_layout_and_metrics() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
+        viewport_style.overflow_x = LayoutOverflow::Scroll;
+        let viewport = arena.create_element(viewport_style);
+
+        let child = arena.create_element(block_style(
+            CssDimension::Length(10.0),
+            CssDimension::Percent(1.0),
+        ));
+        arena.append_child(viewport, child);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        let viewport_layout = arena.layout(viewport);
+        let metrics = arena.scroll_metrics(viewport).unwrap();
+        assert_eq!(viewport_layout.scrollbar_size.height, 1.0);
+        assert_eq!(arena.layout(child).size.height, 2.0);
+        assert_eq!(metrics.client_width, 6);
+        assert_eq!(metrics.client_height, 2);
+        assert_eq!(metrics.scroll_width, 10);
+    }
+
+    #[test]
+    fn stable_gutter_reserves_vertical_space_for_hidden_overflow_without_scrolling() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
+        viewport_style.overflow_y = LayoutOverflow::Hidden;
+        viewport_style.scrollbar_gutter = ScrollbarGutter::Stable;
+        let viewport = arena.create_element(viewport_style);
+
+        let child = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(5.0),
+        ));
+        arena.append_child(viewport, child);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        let viewport_layout = arena.layout(viewport);
+        let metrics = arena.scroll_metrics(viewport).unwrap();
+        assert_eq!(viewport_layout.scrollbar_size.width, 1.0);
+        assert_eq!(arena.layout(child).size.width, 5.0);
+        assert_eq!(metrics.client_width, 5);
+        assert_eq!(metrics.scroll_left, 0);
+        assert_eq!(metrics.scroll_top, 0);
+    }
+
+    #[test]
+    fn stable_gutter_reserves_horizontal_space_for_hidden_overflow_without_scrolling() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
+        viewport_style.overflow_x = LayoutOverflow::Hidden;
+        viewport_style.scrollbar_gutter = ScrollbarGutter::Stable;
+        let viewport = arena.create_element(viewport_style);
+
+        let child = arena.create_element(block_style(
+            CssDimension::Length(10.0),
+            CssDimension::Percent(1.0),
+        ));
+        arena.append_child(viewport, child);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        let viewport_layout = arena.layout(viewport);
+        let metrics = arena.scroll_metrics(viewport).unwrap();
+        assert_eq!(viewport_layout.scrollbar_size.height, 1.0);
+        assert_eq!(arena.layout(child).size.height, 2.0);
+        assert_eq!(metrics.client_height, 2);
+        assert_eq!(metrics.scroll_left, 0);
+        assert_eq!(metrics.scroll_top, 0);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { PaintCannon } from "../main.ts";
+import { PaintCannon, type KeyboardEvent } from "../main.ts";
 
 const pc = new PaintCannon({
   alternateScreen: true,
@@ -16,7 +16,9 @@ root.style.height = "100%";
 root.style.backgroundColor = "black";
 pc.setRoot(root);
 
-const status = pc.createTextNode("Wheel over the blue panel. Ctrl-C exits.");
+const status = pc.createTextNode(
+  "Wheel/trackpad over the blue panel. Arrow keys scroll. Ctrl-C exits.",
+);
 
 const row = pc.createElement("div");
 row.style.display = "flex";
@@ -29,14 +31,14 @@ const viewport = pc.createElement("div");
 viewport.style.width = "100%";
 viewport.style.height = "100%";
 viewport.style.overflowY = "scroll";
-viewport.style.overflowX = "hidden";
+viewport.style.overflowX = "scroll";
 viewport.style.backgroundColor = "blue";
 viewport.style.scrollbarColor = "white black";
 
 const content = pc.createElement("div");
 content.style.display = "flex";
 content.style.flexDirection = "column";
-content.style.width = "100%";
+content.style.width = "96px";
 content.style.height = "24px";
 
 for (let index = 1; index <= 24; index += 1) {
@@ -44,7 +46,9 @@ for (let index = 1; index <= 24; index += 1) {
   line.style.width = "100%";
   line.style.height = "1px";
   line.appendChild(
-    pc.createTextNode(`row ${String(index).padStart(2, "0")} - native scrollbar rail`),
+    pc.createTextNode(
+      `row ${String(index).padStart(2, "0")} - native horizontal and vertical scrollbar rail - ${"wide ".repeat(8)}`,
+    ),
   );
   content.appendChild(line);
 }
@@ -56,6 +60,35 @@ viewport.addEventListener("scroll", event => {
 });
 
 pc.addEventListener("resize", () => {
+  updateStatus(
+    viewport.scrollTop,
+    viewport.scrollHeight,
+    viewport.scrollLeft,
+    viewport.scrollWidth,
+  );
+});
+
+pc.addEventListener("keydown", (event: KeyboardEvent) => {
+  switch (event.key) {
+    case "ArrowDown":
+      event.preventDefault();
+      viewport.scrollTop += 1;
+      break;
+    case "ArrowUp":
+      event.preventDefault();
+      viewport.scrollTop -= 1;
+      break;
+    case "ArrowRight":
+      event.preventDefault();
+      viewport.scrollLeft += 4;
+      break;
+    case "ArrowLeft":
+      event.preventDefault();
+      viewport.scrollLeft -= 4;
+      break;
+    default:
+      return;
+  }
   updateStatus(
     viewport.scrollTop,
     viewport.scrollHeight,

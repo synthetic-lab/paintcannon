@@ -703,30 +703,34 @@ impl DivStyle {
             grid_column: self.grid_column.to_taffy(),
             grid_row: self.grid_row.to_taffy(),
             overflow: Point {
-                x: match self.overflow_x {
-                    LayoutOverflow::Visible => Overflow::Visible,
-                    LayoutOverflow::Hidden => Overflow::Hidden,
-                    LayoutOverflow::Scroll => Overflow::Scroll,
-                },
-                y: match self.overflow_y {
-                    LayoutOverflow::Visible => Overflow::Visible,
-                    LayoutOverflow::Hidden => Overflow::Hidden,
-                    LayoutOverflow::Scroll => Overflow::Scroll,
-                },
+                x: self.taffy_overflow_for_axis(self.overflow_x),
+                y: self.taffy_overflow_for_axis(self.overflow_y),
             },
-            scrollbar_width: if self.reserves_vertical_scrollbar() {
-                1.0
-            } else {
-                0.0
-            },
+            scrollbar_width: if self.reserves_scrollbar() { 1.0 } else { 0.0 },
             ..Default::default()
         }
     }
 
-    fn reserves_vertical_scrollbar(&self) -> bool {
-        self.overflow_y == LayoutOverflow::Scroll
+    fn reserves_scrollbar(&self) -> bool {
+        self.reserves_scrollbar_for_axis(self.overflow_x)
+            || self.reserves_scrollbar_for_axis(self.overflow_y)
+    }
+
+    fn reserves_scrollbar_for_axis(&self, overflow: LayoutOverflow) -> bool {
+        overflow == LayoutOverflow::Scroll
             || (self.scrollbar_gutter == ScrollbarGutter::Stable
-                && self.overflow_y == LayoutOverflow::Hidden)
+                && overflow == LayoutOverflow::Hidden)
+    }
+
+    fn taffy_overflow_for_axis(&self, overflow: LayoutOverflow) -> Overflow {
+        match overflow {
+            LayoutOverflow::Visible => Overflow::Visible,
+            LayoutOverflow::Hidden if self.reserves_scrollbar_for_axis(overflow) => {
+                Overflow::Scroll
+            }
+            LayoutOverflow::Hidden => Overflow::Hidden,
+            LayoutOverflow::Scroll => Overflow::Scroll,
+        }
     }
 }
 
