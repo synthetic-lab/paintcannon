@@ -8,6 +8,7 @@ mod paint;
 mod selection;
 mod style;
 mod terminal;
+mod text;
 mod text_wrap;
 mod transition;
 

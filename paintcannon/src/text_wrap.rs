@@ -1,4 +1,5 @@
-use unicode_width::UnicodeWidthChar;
+use crate::style::CssWhiteSpace;
+use crate::text::{character_cell_width, parse_text_for_white_space};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WrappedText {
@@ -18,7 +19,7 @@ pub(crate) struct TextGlyph {
 impl WrappedText {
     pub(crate) fn new(text: &str, wrap_width: usize) -> Self {
         let wrap_width = wrap_width.max(1);
-        let chars = text.chars().collect::<Vec<_>>();
+        let chars = parse_text_for_white_space(text, CssWhiteSpace::PreWrap);
         let mut glyphs = Vec::new();
         let mut cursor_positions = Vec::with_capacity(chars.len() + 1);
         let mut row = 0;
@@ -132,14 +133,6 @@ fn text_width(chars: &[char]) -> usize {
         .iter()
         .map(|character| character_cell_width(*character))
         .sum()
-}
-
-fn character_cell_width(character: char) -> usize {
-    if character == '\t' {
-        return 4;
-    }
-
-    UnicodeWidthChar::width(character).unwrap_or(0)
 }
 
 #[cfg(test)]

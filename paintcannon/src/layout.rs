@@ -7,11 +7,11 @@ use taffy::{
     MaybeResolve, NodeId, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, Style,
     TraversePartialTree, TraverseTree,
 };
-use unicode_width::UnicodeWidthChar;
 
 use crate::style::{
     BorderStyle, CssDimension, CssWhiteSpace, DivStyle, LayoutDisplay, LayoutOverflow,
 };
+use crate::text::{character_cell_width, parse_text_for_single_line, parse_text_for_white_space};
 use crate::text_wrap::WrappedText;
 
 #[derive(Clone)]
@@ -1513,7 +1513,7 @@ fn image_natural_size(image: &ImageLayoutData) -> Size<f32> {
 
 fn input_natural_size(input: &InputLayoutData) -> Size<f32> {
     Size {
-        width: input.value.chars().count().max(1) as f32,
+        width: parse_text_for_single_line(&input.value).len().max(1) as f32,
         height: 1.0,
     }
 }
@@ -1668,7 +1668,7 @@ fn axis_max_scroll(overflow: LayoutOverflow, max_scroll: u32) -> u32 {
 }
 
 fn text_content_widths(text: &str, white_space: CssWhiteSpace) -> ContentWidths {
-    let chars = normalize_text_for_white_space(text, white_space);
+    let chars = parse_text_for_white_space(text, white_space);
     if !white_space_allows_wrapping(white_space) {
         let width = max_line_width(&chars, white_space_preserves_newlines(white_space));
         return ContentWidths {
@@ -1707,7 +1707,7 @@ fn text_content_widths(text: &str, white_space: CssWhiteSpace) -> ContentWidths 
 }
 
 fn measure_inline_text(text: &str, white_space: CssWhiteSpace, cursor: &mut InlineMeasureCursor) {
-    let chars = normalize_text_for_white_space(text, white_space);
+    let chars = parse_text_for_white_space(text, white_space);
     let wrap = white_space_allows_wrapping(white_space);
     let preserve_newlines = white_space_preserves_newlines(white_space);
     let mut index = 0;
@@ -1741,7 +1741,7 @@ fn measure_inline_text(text: &str, white_space: CssWhiteSpace, cursor: &mut Inli
             cursor.max_col = cursor.max_col.max(cursor.col);
             cursor.row += 1;
             cursor.col = 0;
-            if character == ' ' || character == '\t' {
+            if character == ' ' {
                 index += 1;
                 continue;
             }
@@ -1759,7 +1759,7 @@ fn layout_inline_text(
     white_space: CssWhiteSpace,
     cursor: &mut InlineLayoutCursor,
 ) {
-    let chars = normalize_text_for_white_space(text, white_space);
+    let chars = parse_text_for_white_space(text, white_space);
     let wrap = white_space_allows_wrapping(white_space);
     let preserve_newlines = white_space_preserves_newlines(white_space);
     let mut index = 0;
@@ -1793,7 +1793,7 @@ fn layout_inline_text(
             cursor.max_col = cursor.max_col.max(cursor.col);
             cursor.row += 1;
             cursor.col = 0;
-            if character == ' ' || character == '\t' {
+            if character == ' ' {
                 index += 1;
                 continue;
             }
@@ -1818,39 +1818,6 @@ fn layout_inline_text(
         cursor.max_col = cursor.max_col.max(cursor.col);
         index += 1;
     }
-}
-
-fn normalize_text_for_white_space(text: &str, white_space: CssWhiteSpace) -> Vec<char> {
-    match white_space {
-        CssWhiteSpace::Pre | CssWhiteSpace::PreWrap => text.chars().collect(),
-        CssWhiteSpace::Normal | CssWhiteSpace::NoWrap => collapse_whitespace(text, false),
-        CssWhiteSpace::PreLine => collapse_whitespace(text, true),
-    }
-}
-
-fn collapse_whitespace(text: &str, preserve_newlines: bool) -> Vec<char> {
-    let mut chars = Vec::new();
-    let mut pending_space = false;
-    for character in text.chars() {
-        if character == '\r' {
-            continue;
-        }
-        if preserve_newlines && character == '\n' {
-            chars.push('\n');
-            pending_space = false;
-            continue;
-        }
-        if matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{000c}') {
-            if !pending_space {
-                chars.push(' ');
-                pending_space = true;
-            }
-            continue;
-        }
-        chars.push(character);
-        pending_space = false;
-    }
-    chars
 }
 
 fn white_space_allows_wrapping(white_space: CssWhiteSpace) -> bool {
@@ -1901,13 +1868,6 @@ fn text_width(chars: &[char]) -> u32 {
         .iter()
         .map(|character| character_cell_width(*character) as u32)
         .sum()
-}
-
-fn character_cell_width(character: char) -> usize {
-    if character == '\t' {
-        return 4;
-    }
-    UnicodeWidthChar::width(character).unwrap_or(0)
 }
 
 fn effective_white_space(inherited: CssWhiteSpace, own: CssWhiteSpace) -> CssWhiteSpace {
