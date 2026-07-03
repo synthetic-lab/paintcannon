@@ -431,6 +431,21 @@ impl LayoutArena {
         None
     }
 
+    pub(crate) fn scrollport_absolute_rect(&self, node: NodeId) -> Option<AbsoluteRect> {
+        let index = node_index(node);
+        if !matches!(
+            self.nodes[index].kind,
+            LayoutNodeKind::Element | LayoutNodeKind::TextArea(_)
+        ) {
+            return None;
+        }
+
+        Some(absolute_scrollport_rect(
+            self.absolute_border_rect(node),
+            self.layout(node),
+        ))
+    }
+
     pub(crate) fn append_child(&mut self, parent: NodeId, child: NodeId) {
         if let Some(previous_parent) = self.nodes[node_index(child)].parent {
             let children = &mut self.nodes[node_index(previous_parent)].children;
@@ -1714,11 +1729,11 @@ struct AbsoluteContentRect {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct AbsoluteRect {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
+pub(crate) struct AbsoluteRect {
+    pub(crate) left: i32,
+    pub(crate) top: i32,
+    pub(crate) right: i32,
+    pub(crate) bottom: i32,
 }
 
 impl AbsoluteRect {
@@ -1731,7 +1746,7 @@ impl AbsoluteRect {
         }
     }
 
-    fn contains(self, x: i32, y: i32) -> bool {
+    pub(crate) fn contains(self, x: i32, y: i32) -> bool {
         x >= self.left && x < self.right && y >= self.top && y < self.bottom
     }
 
@@ -1914,6 +1929,16 @@ fn absolute_padding_box_rect(bounds: AbsoluteRect, layout: Layout) -> AbsoluteRe
         bounds.top + layout.border.top.round() as i32,
         bounds.right - layout.border.right.round() as i32,
         bounds.bottom - layout.border.bottom.round() as i32,
+    )
+}
+
+fn absolute_scrollport_rect(bounds: AbsoluteRect, layout: Layout) -> AbsoluteRect {
+    let padding = absolute_padding_box_rect(bounds, layout);
+    AbsoluteRect::from_edges(
+        padding.left,
+        padding.top,
+        (padding.right - layout.scrollbar_size.width.round() as i32).max(padding.left),
+        (padding.bottom - layout.scrollbar_size.height.round() as i32).max(padding.top),
     )
 }
 

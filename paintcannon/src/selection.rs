@@ -43,6 +43,10 @@ struct ActiveSelection {
 }
 
 impl SelectionState {
+    pub(crate) fn is_selecting(&self) -> bool {
+        self.selection.is_some_and(|selection| selection.selecting)
+    }
+
     pub(crate) fn active_selection(&self) -> Option<Selection> {
         self.selection
             .filter(|selection| selection.moved)
