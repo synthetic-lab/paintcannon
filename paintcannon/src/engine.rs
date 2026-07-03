@@ -13,9 +13,11 @@ use termprofile::{DetectorSettings, TermProfile};
 
 use crate::frame::Frame;
 use crate::image::load_png_image;
-use crate::layout::{ArenaScrollMetrics, LayoutArena};
+use crate::layout::{ArenaScrollMetrics, ArenaScrollbarHit, LayoutArena, ScrollbarAxis};
 use crate::paint::{paint_arena_with_options, HitRegion, PaintOptions};
-use crate::selection::{SelectionAction, SelectionMouseEvent, SelectionState};
+use crate::selection::{
+    SelectionAction, SelectionMouseEvent, SelectionMouseEventType, SelectionState,
+};
 use crate::style::{
     Background, BorderStyle, ColorTransitionProperty, CssDimension, CssFontStyle, CssFontWeight,
     CssGridLine, CssGridPlacement, CssGridTemplateTrack, CssLengthPercentage,
@@ -58,6 +60,20 @@ pub(crate) struct ClickEvent {
     pub(crate) alt_key: bool,
     pub(crate) meta_key: bool,
     pub(crate) shift_key: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ScrollbarHit {
+    pub(crate) target_id: DomId,
+    pub(crate) axis: ScrollbarAxis,
+    pub(crate) rail_start: u32,
+    pub(crate) rail_length: u32,
+    pub(crate) thumb_start: u32,
+    pub(crate) thumb_length: u32,
+    pub(crate) scroll_offset: u32,
+    pub(crate) max_scroll: u32,
+    pub(crate) client_length: u32,
+    pub(crate) scroll_length: u32,
 }
 
 pub(crate) enum StyleMutation {
@@ -351,6 +367,11 @@ pub(crate) enum EngineCommand {
         click: MouseClick,
         response: Sender<Option<ClickEvent>>,
     },
+    HitTestScrollbar {
+        x: u32,
+        y: u32,
+        response: Sender<Option<ScrollbarHit>>,
+    },
     HandleSelection {
         event: SelectionMouseEvent,
         response: Sender<SelectionAction>,
@@ -407,6 +428,7 @@ pub(crate) struct PaintEngine {
     truecolor_enabled: bool,
     current_pointer_shape: Option<&'static str>,
     last_pointer_position: Option<(u32, u32)>,
+    scrollbar_selection_suppressed: bool,
 }
 
 impl PaintEngine {
@@ -429,6 +451,7 @@ impl PaintEngine {
             truecolor_enabled: true,
             current_pointer_shape: None,
             last_pointer_position: None,
+            scrollbar_selection_suppressed: false,
         }
     }
 
@@ -1067,6 +1090,22 @@ impl PaintEngine {
         })
     }
 
+    pub(crate) fn scrollbar_hit_at(&self, x: u32, y: u32) -> Option<ScrollbarHit> {
+        let x_i32 = x.min(i32::MAX as u32) as i32;
+        let y_i32 = y.min(i32::MAX as u32) as i32;
+        self.hit_regions
+            .iter()
+            .rev()
+            .filter(|region| {
+                x_i32 >= region.left
+                    && x_i32 < region.right
+                    && y_i32 >= region.top
+                    && y_i32 < region.bottom
+            })
+            .find_map(|region| self.arena.scrollbar_hit_for_point(region.id, x, y))
+            .and_then(|hit| self.scrollbar_hit_for_dom(hit))
+    }
+
     pub(crate) fn handle_pointer_move(&mut self, x: u32, y: u32) {
         self.last_pointer_position = Some((x, y));
         self.refresh_pointer_shape();
@@ -1139,6 +1178,21 @@ impl PaintEngine {
 
     fn dom_for(&self, node: NodeId) -> Option<DomId> {
         self.node_to_dom.get(&node).copied()
+    }
+
+    fn scrollbar_hit_for_dom(&self, hit: ArenaScrollbarHit) -> Option<ScrollbarHit> {
+        Some(ScrollbarHit {
+            target_id: self.dom_for(hit.node)?,
+            axis: hit.axis,
+            rail_start: hit.rail_start,
+            rail_length: hit.rail_length,
+            thumb_start: hit.thumb_start,
+            thumb_length: hit.thumb_length,
+            scroll_offset: hit.scroll_offset,
+            max_scroll: hit.max_scroll,
+            client_length: hit.client_length,
+            scroll_length: hit.scroll_length,
+        })
     }
 
     fn style_for(&self, id: DomId) -> Option<&DivStyle> {
@@ -1613,7 +1667,14 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         EngineCommand::HitTestClick { click, response } => {
             let _ = response.send(engine.click_event_for(click));
         }
+        EngineCommand::HitTestScrollbar { x, y, response } => {
+            let _ = response.send(engine.scrollbar_hit_at(x, y));
+        }
         EngineCommand::HandleSelection { event, response } => {
+            if scrollbar_suppresses_selection(engine, event) {
+                let _ = response.send(SelectionAction::None);
+                return true;
+            }
             let action = engine.handle_selection_event(event);
             if let SelectionAction::CopyToClipboard(text) = &action {
                 copy_text_to_clipboard(text);
@@ -1683,6 +1744,23 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
     }
 
     true
+}
+
+fn scrollbar_suppresses_selection(engine: &mut PaintEngine, event: SelectionMouseEvent) -> bool {
+    match event.event_type {
+        SelectionMouseEventType::Down if engine.scrollbar_hit_at(event.x, event.y).is_some() => {
+            engine.scrollbar_selection_suppressed = true;
+            true
+        }
+        SelectionMouseEventType::Drag | SelectionMouseEventType::Scroll => {
+            engine.scrollbar_selection_suppressed
+        }
+        SelectionMouseEventType::Up if engine.scrollbar_selection_suppressed => {
+            engine.scrollbar_selection_suppressed = false;
+            true
+        }
+        SelectionMouseEventType::Down | SelectionMouseEventType::Up => false,
+    }
 }
 
 fn profile_log(label: &str, duration: std::time::Duration, fields: &[(&str, String)]) {
@@ -1835,6 +1913,55 @@ mod tests {
         assert_eq!(rail_metrics.client_height, 22);
         assert_eq!(viewport_metrics.client_height, 22);
         assert_eq!(engine.layout_passes(), 1);
+    }
+
+    #[test]
+    fn scrollbar_hit_testing_uses_rendered_regions_and_suppresses_selection() {
+        let mut engine = PaintEngine::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
+        viewport_style.overflow_x = LayoutOverflow::Scroll;
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = engine.create_element(viewport_style);
+        let child = engine.create_element(block_style(
+            CssDimension::Length(10.0),
+            CssDimension::Length(5.0),
+        ));
+        engine.append_child(viewport, child);
+        engine.set_root(viewport);
+
+        engine.render_frame(6, 3).unwrap();
+
+        let hit = engine.scrollbar_hit_at(5, 1).unwrap();
+        assert_eq!(hit.target_id, viewport);
+        assert_eq!(hit.axis, ScrollbarAxis::Vertical);
+
+        assert!(scrollbar_suppresses_selection(
+            &mut engine,
+            SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Down,
+                x: 5,
+                y: 1,
+                button: 0,
+            },
+        ));
+        assert!(scrollbar_suppresses_selection(
+            &mut engine,
+            SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Drag,
+                x: 5,
+                y: 0,
+                button: 0,
+            },
+        ));
+        assert!(scrollbar_suppresses_selection(
+            &mut engine,
+            SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Up,
+                x: 5,
+                y: 0,
+                button: 0,
+            },
+        ));
     }
 
     #[test]

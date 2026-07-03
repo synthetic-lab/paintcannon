@@ -262,6 +262,89 @@ describe("core mouse events", () => {
   });
 });
 
+describe("core native scrollbar events", () => {
+  it("drags vertical scrollbar thumbs by mapping rail position to scroll offset", () => {
+    const { paintCannon, mockNative, child } = createPaintTree({ captureMouse: true });
+    const scrollTops: number[] = [];
+    child.style.overflowY = "scroll";
+    mockNative.scrollMetricsById.set(child.id, {
+      scrollLeft: 0,
+      scrollTop: 0,
+      scrollWidth: 10,
+      scrollHeight: 100,
+      clientWidth: 10,
+      clientHeight: 10,
+    });
+    mockNative.scrollbarHitAtPoint = {
+      targetId: child.id,
+      axis: "y",
+      railStart: 0,
+      railLength: 10,
+      thumbStart: 0,
+      thumbLength: 1,
+      scrollOffset: 0,
+      maxScroll: 90,
+      clientLength: 10,
+      scrollLength: 100,
+    };
+    child.addEventListener("scroll", event => {
+      scrollTops.push(event.scrollTop);
+    });
+
+    mockNative.mouseEvents.push(
+      mouseEvent("mousedown", { y: 0 }),
+      mouseEvent("mousedrag", { y: 5 }),
+    );
+    runKeyboardEventPump(paintCannon);
+    paintCannon.stop();
+
+    expect(mockNative.scrollMetrics(child.id)?.scrollTop).toBe(50);
+    expect(scrollTops).toEqual([50]);
+  });
+
+  it("pages the scrollbar on rail clicks and suppresses the generated click event", () => {
+    const { paintCannon, mockNative, child } = createPaintTree({ captureMouse: true });
+    let clicks = 0;
+    const scrollTops: number[] = [];
+    child.style.overflowY = "scroll";
+    mockNative.targetIdAtPoint = child.id;
+    mockNative.scrollMetricsById.set(child.id, {
+      scrollLeft: 0,
+      scrollTop: 0,
+      scrollWidth: 10,
+      scrollHeight: 100,
+      clientWidth: 10,
+      clientHeight: 10,
+    });
+    mockNative.scrollbarHitAtPoint = {
+      targetId: child.id,
+      axis: "y",
+      railStart: 0,
+      railLength: 10,
+      thumbStart: 0,
+      thumbLength: 1,
+      scrollOffset: 0,
+      maxScroll: 90,
+      clientLength: 10,
+      scrollLength: 100,
+    };
+    child.addEventListener("click", () => {
+      clicks += 1;
+    });
+    child.addEventListener("scroll", event => {
+      scrollTops.push(event.scrollTop);
+    });
+
+    mockNative.mouseEvents.push(mouseEvent("mousedown", { y: 5 }), mouseEvent("click", { y: 5 }));
+    runKeyboardEventPump(paintCannon);
+    paintCannon.stop();
+
+    expect(mockNative.scrollMetrics(child.id)?.scrollTop).toBe(10);
+    expect(scrollTops).toEqual([10]);
+    expect(clicks).toBe(0);
+  });
+});
+
 describe("core resize events", () => {
   it("dispatches the latest resize and uses the normal render path", () => {
     const paintCannon = new PaintCannon({ fps: 120 });
