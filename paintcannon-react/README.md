@@ -125,6 +125,8 @@ All host components accept these event props:
 both supported:
 
 - `display`
+- `visibility` (accepts `"visible"` or `"hidden"`; hidden elements keep their
+  layout space but do not paint or receive hit tests)
 - `overflow`
 - `overflow-x` / `overflowX`
 - `overflow-y` / `overflowY`

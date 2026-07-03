@@ -10,6 +10,7 @@ use termprofile::{
 #[derive(Clone)]
 pub(crate) struct DivStyle {
     pub(crate) display: LayoutDisplay,
+    pub(crate) visibility: CssVisibility,
     pub(crate) flex_direction: LayoutFlexDirection,
     pub(crate) flex_wrap: LayoutFlexWrap,
     pub(crate) flex_basis: CssDimension,
@@ -67,6 +68,7 @@ impl Default for DivStyle {
     fn default() -> Self {
         Self {
             display: LayoutDisplay::Block,
+            visibility: CssVisibility::Inherit,
             flex_direction: LayoutFlexDirection::Row,
             flex_wrap: LayoutFlexWrap::NoWrap,
             flex_basis: CssDimension::Auto,
@@ -128,6 +130,13 @@ pub(crate) enum LayoutDisplay {
     Block,
     Flex,
     Grid,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CssVisibility {
+    Inherit,
+    Visible,
+    Hidden,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -757,6 +766,17 @@ pub(crate) fn parse_display(value: &str) -> Result<LayoutDisplay> {
         "flex" | "flexbox" => Ok(LayoutDisplay::Flex),
         "grid" => Ok(LayoutDisplay::Grid),
         value => Err(Error::from_reason(format!("unsupported display: {value}"))),
+    }
+}
+
+pub(crate) fn parse_visibility(value: &str) -> Result<CssVisibility> {
+    match value.trim() {
+        "" | "inherit" => Ok(CssVisibility::Inherit),
+        "visible" => Ok(CssVisibility::Visible),
+        "hidden" => Ok(CssVisibility::Hidden),
+        value => Err(Error::from_reason(format!(
+            "unsupported visibility: {value}"
+        ))),
     }
 }
 

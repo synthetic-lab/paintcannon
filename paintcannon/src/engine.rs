@@ -23,10 +23,10 @@ use crate::selection::{
 use crate::style::{
     Background, BorderStyle, ColorTransitionProperty, CssDimension, CssFontStyle, CssFontWeight,
     CssGridLine, CssGridPlacement, CssGridTemplateTrack, CssLengthPercentage,
-    CssLengthPercentageAuto, CssTextDecorationLine, CssTrackSizing, CssWhiteSpace, CursorStyle,
-    DivStyle, ImageRendering, LayoutAlignItems, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap,
-    LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, ScrollbarColor, ScrollbarGutter,
-    TransitionSpec,
+    CssLengthPercentageAuto, CssTextDecorationLine, CssTrackSizing, CssVisibility, CssWhiteSpace,
+    CursorStyle, DivStyle, ImageRendering, LayoutAlignItems, LayoutDisplay, LayoutFlexDirection,
+    LayoutFlexWrap, LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, ScrollbarColor,
+    ScrollbarGutter, TransitionSpec,
 };
 use crate::terminal::{copy_text_to_clipboard, query_terminal_size, write_pointer_shape};
 use crate::transition::{TransitionEvent, TransitionEventType, TransitionState};
@@ -81,6 +81,7 @@ pub(crate) struct ScrollbarHit {
 pub(crate) enum StyleMutation {
     Reset(StyleReset),
     Display(LayoutDisplay),
+    Visibility(CssVisibility),
     Overflow(LayoutOverflow),
     OverflowX(LayoutOverflow),
     OverflowY(LayoutOverflow),
@@ -167,6 +168,7 @@ pub(crate) enum StyleMutation {
 
 pub(crate) enum StyleReset {
     Display,
+    Visibility,
     Overflow,
     OverflowX,
     OverflowY,
@@ -1421,6 +1423,7 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
     match mutation {
         StyleMutation::Reset(reset) => reset_style_property(style, reset),
         StyleMutation::Display(display) => style.display = display,
+        StyleMutation::Visibility(visibility) => style.visibility = visibility,
         StyleMutation::Overflow(overflow) => {
             style.overflow_x = overflow;
             style.overflow_y = overflow;
@@ -1548,6 +1551,7 @@ fn reset_style_property(style: &mut DivStyle, reset: StyleReset) {
     let default = DivStyle::default();
     match reset {
         StyleReset::Display => style.display = default.display,
+        StyleReset::Visibility => style.visibility = default.visibility,
         StyleReset::Overflow => {
             style.overflow_x = default.overflow_x;
             style.overflow_y = default.overflow_y;
