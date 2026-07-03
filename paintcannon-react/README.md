@@ -186,6 +186,9 @@ both supported:
 - `grid-column-end` / `gridColumnEnd`
 - `grid-row-start` / `gridRowStart`
 - `grid-row-end` / `gridRowEnd`
+- `font-style`/`fontStyle` (accepts `"italic"` or `"normal"`)
+- `font-weight`/`fontWeight` (accepts `"bold"` or `"normal"`)
+- `text-decoration`/`textDecoration` (accepts `"underline"` or `"none"`)
 
 ### Per-component props:
 
