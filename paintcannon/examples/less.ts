@@ -31,9 +31,10 @@ body.style.width = "100%";
 body.style.flexGrow = 1;
 body.style.flexShrink = 1;
 body.style.flexBasis = 0;
+body.style.minHeight = 0;
 
 const viewport = pc.createElement("div");
-viewport.style.width = "92%";
+viewport.style.width = "100%";
 viewport.style.height = "100%";
 viewport.style.overflowY = "scroll";
 viewport.style.overflowX = "hidden";
@@ -42,6 +43,7 @@ viewport.style.color = "#e5e7eb";
 viewport.style.border = "rounded";
 viewport.style.borderColor = "#475569";
 viewport.style.selectionBackgroundColor = "#334155";
+viewport.style.scrollbarColor = "#93c5fd #334155";
 
 const text = pc.createElement("span");
 text.style.display = "inline";
@@ -49,17 +51,6 @@ text.style.color = "#e5e7eb";
 text.style.whiteSpace = "pre-wrap";
 text.appendChild(pc.createTextNode(makeLoremDocument()));
 viewport.appendChild(text);
-
-const rail = pc.createElement("div");
-rail.style.width = "8%";
-rail.style.height = "100%";
-rail.style.backgroundColor = "#111827";
-rail.style.color = "#93c5fd";
-rail.style.borderLeft = "solid";
-rail.style.borderColor = "#334155";
-rail.style.whiteSpace = "pre";
-const scrollbar = pc.createTextNode("");
-rail.appendChild(scrollbar);
 
 const footer = pc.createElement("div");
 footer.style.width = "100%";
@@ -70,7 +61,6 @@ const status = pc.createTextNode("");
 footer.appendChild(status);
 
 body.appendChild(viewport);
-body.appendChild(rail);
 root.appendChild(header);
 root.appendChild(body);
 root.appendChild(footer);
@@ -131,35 +121,6 @@ updateStatus();
 function updateStatus(): void {
   const max = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
   status.nodeValue = `row ${Math.min(viewport.scrollTop, max)}/${max}  ${viewport.clientWidth}x${viewport.clientHeight}`;
-  scrollbar.nodeValue = scrollbarText(
-    viewport.scrollTop,
-    viewport.scrollHeight,
-    viewport.clientHeight,
-    rail.clientHeight,
-  );
-}
-
-function scrollbarText(
-  scrollTop: number,
-  scrollHeight: number,
-  clientHeight: number,
-  railHeight: number,
-): string {
-  const height = Math.max(1, railHeight);
-  const max = Math.max(1, scrollHeight - clientHeight);
-  const thumbHeight = Math.max(1, Math.floor((clientHeight / Math.max(scrollHeight, 1)) * height));
-  const thumbTop = Math.min(
-    height - thumbHeight,
-    Math.floor((scrollTop / max) * (height - thumbHeight)),
-  );
-  let text = "";
-  for (let row = 0; row < height; row += 1) {
-    text += row >= thumbTop && row < thumbTop + thumbHeight ? "#" : "|";
-    if (row < height - 1) {
-      text += "\n";
-    }
-  }
-  return text;
 }
 
 function makeLoremDocument(): string {

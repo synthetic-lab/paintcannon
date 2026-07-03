@@ -326,6 +326,36 @@ impl Frame {
         }
     }
 
+    pub(crate) fn write_decoration_glyph(
+        &mut self,
+        x: i32,
+        y: i32,
+        character: char,
+        style: GlyphStyle,
+        clip: ClipBounds,
+    ) {
+        let Some(index) = self.cell_index(x, y) else {
+            return;
+        };
+        if !clip.contains(x, y) {
+            return;
+        }
+
+        self.cells[index].character = character;
+        self.cells[index].foreground = style.foreground;
+        self.cells[index].selection_order = None;
+        self.cells[index].bold = style.bold;
+        self.cells[index].italic = style.italic;
+        self.cells[index].underline = style.underline;
+        self.cells[index].wide_continuation = false;
+        if style.background != Background::Default {
+            self.cells[index].background = style.background;
+        }
+        if style.selection_background.is_some() {
+            self.cells[index].selection_background = style.selection_background;
+        }
+    }
+
     pub(crate) fn stroke_border(
         &mut self,
         rect: ClipRect,

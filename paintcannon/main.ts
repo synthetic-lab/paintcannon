@@ -2722,6 +2722,22 @@ export class CSSStyleDeclaration {
     this.setProperty("overflow-y", value);
   }
 
+  get scrollbarColor(): string {
+    return this.getPropertyValue("scrollbar-color");
+  }
+
+  set scrollbarColor(value: string) {
+    this.setProperty("scrollbar-color", value);
+  }
+
+  get scrollbarGutter(): "auto" | "stable" | string {
+    return this.getPropertyValue("scrollbar-gutter");
+  }
+
+  set scrollbarGutter(value: "auto" | "stable" | string) {
+    this.setProperty("scrollbar-gutter", value);
+  }
+
   get flexDirection(): "row" | "column" | string {
     return this.getPropertyValue("flex-direction");
   }
@@ -3294,6 +3310,8 @@ export const SUPPORTED_STYLE_PROPERTY_NAMES = [
   "overflow",
   "overflow-x",
   "overflow-y",
+  "scrollbar-color",
+  "scrollbar-gutter",
   "image-rendering",
   "flex-direction",
   "flex-wrap",

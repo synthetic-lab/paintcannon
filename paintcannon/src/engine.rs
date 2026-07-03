@@ -21,7 +21,8 @@ use crate::style::{
     CssGridLine, CssGridPlacement, CssGridTemplateTrack, CssLengthPercentage,
     CssLengthPercentageAuto, CssTextDecorationLine, CssTrackSizing, CssWhiteSpace, CursorStyle,
     DivStyle, ImageRendering, LayoutAlignItems, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap,
-    LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, TransitionSpec,
+    LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, ScrollbarColor, ScrollbarGutter,
+    TransitionSpec,
 };
 use crate::terminal::{copy_text_to_clipboard, query_terminal_size, write_pointer_shape};
 use crate::transition::{TransitionEvent, TransitionEventType, TransitionState};
@@ -65,6 +66,8 @@ pub(crate) enum StyleMutation {
     Overflow(LayoutOverflow),
     OverflowX(LayoutOverflow),
     OverflowY(LayoutOverflow),
+    ScrollbarColor(ScrollbarColor),
+    ScrollbarGutter(ScrollbarGutter),
     ImageRendering(ImageRendering),
     WhiteSpace(CssWhiteSpace),
     FlexDirection(LayoutFlexDirection),
@@ -149,6 +152,8 @@ pub(crate) enum StyleReset {
     Overflow,
     OverflowX,
     OverflowY,
+    ScrollbarColor,
+    ScrollbarGutter,
     ImageRendering,
     WhiteSpace,
     FlexDirection,
@@ -1206,6 +1211,12 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
         }
         StyleMutation::OverflowX(overflow) => style.overflow_x = overflow,
         StyleMutation::OverflowY(overflow) => style.overflow_y = overflow,
+        StyleMutation::ScrollbarColor(scrollbar_color) => {
+            style.scrollbar_color = scrollbar_color;
+        }
+        StyleMutation::ScrollbarGutter(scrollbar_gutter) => {
+            style.scrollbar_gutter = scrollbar_gutter;
+        }
         StyleMutation::ImageRendering(image_rendering) => style.image_rendering = image_rendering,
         StyleMutation::WhiteSpace(white_space) => style.white_space = white_space,
         StyleMutation::FlexDirection(direction) => style.flex_direction = direction,
@@ -1327,6 +1338,8 @@ fn reset_style_property(style: &mut DivStyle, reset: StyleReset) {
         }
         StyleReset::OverflowX => style.overflow_x = default.overflow_x,
         StyleReset::OverflowY => style.overflow_y = default.overflow_y,
+        StyleReset::ScrollbarColor => style.scrollbar_color = default.scrollbar_color,
+        StyleReset::ScrollbarGutter => style.scrollbar_gutter = default.scrollbar_gutter,
         StyleReset::ImageRendering => style.image_rendering = default.image_rendering,
         StyleReset::WhiteSpace => style.white_space = default.white_space,
         StyleReset::FlexDirection => style.flex_direction = default.flex_direction,
@@ -1714,7 +1727,7 @@ mod tests {
 
     fn scroll_engine() -> (PaintEngine, DomId) {
         let mut engine = PaintEngine::new();
-        let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Length(1.0));
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(1.0));
         viewport_style.overflow_y = LayoutOverflow::Scroll;
         let viewport = engine.create_element(viewport_style);
         let mut content_style = block_style(CssDimension::Length(5.0), CssDimension::Auto);
@@ -1848,18 +1861,11 @@ mod tests {
         let body = engine.create_element(body_style);
 
         let mut viewport_style =
-            block_style(CssDimension::Percent(0.85), CssDimension::Percent(1.0));
+            block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
         viewport_style.overflow_y = LayoutOverflow::Scroll;
         viewport_style.overflow_x = LayoutOverflow::Hidden;
         viewport_style.background = Background::Blue;
         let viewport = engine.create_element(viewport_style);
-
-        let mut rail_style = block_style(CssDimension::Percent(0.15), CssDimension::Percent(1.0));
-        rail_style.background = Background::Magenta;
-        rail_style.white_space = CssWhiteSpace::Pre;
-        let rail = engine.create_element(rail_style);
-        let scrollbar = engine.create_text("|");
-        engine.append_child(rail, scrollbar);
 
         let mut content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
         content_style.display = crate::style::LayoutDisplay::Flex;
@@ -1879,23 +1885,18 @@ mod tests {
 
         engine.append_child(viewport, content);
         engine.append_child(body, viewport);
-        engine.append_child(body, rail);
         engine.append_child(root, header);
         engine.append_child(root, body);
         engine.set_root(root);
 
         engine.render_frame(80, 24).unwrap();
         let viewport_node = engine.node_for(viewport).unwrap();
-        let rail_node = engine.node_for(rail).unwrap();
         let first_row_node = engine.node_for(row_ids[0]).unwrap();
         let fourth_row_node = engine.node_for(row_ids[3]).unwrap();
         let before_viewport = engine.arena.layout(viewport_node);
-        let before_rail = engine.arena.layout(rail_node);
-        assert_eq!(before_viewport.size.width, 68.0);
-        assert_eq!(before_rail.location.x, 68.0);
-        assert_eq!(before_rail.size.width, 12.0);
-        assert_eq!(engine.arena.layout(first_row_node).size.width, 68.0);
-        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 68.0);
+        assert_eq!(before_viewport.size.width, 80.0);
+        assert_eq!(engine.arena.layout(first_row_node).size.width, 79.0);
+        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 79.0);
 
         let metrics = engine
             .set_scroll_offset_for_size(viewport, 0, 3, 80, 24)
@@ -1907,24 +1908,16 @@ mod tests {
                 metrics.scroll_top, metrics.scroll_height, metrics.client_height
             ),
         );
-        engine.set_text(
-            scrollbar,
-            "|\n|\n#\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|",
-        );
 
         let frame = engine.render_frame(80, 24).unwrap();
         let after_viewport = engine.arena.layout(viewport_node);
-        let after_rail = engine.arena.layout(rail_node);
 
-        assert_eq!(after_viewport.size.width, 68.0);
-        assert_eq!(after_rail.location.x, 68.0);
-        assert_eq!(after_rail.size.width, 12.0);
-        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 68.0);
+        assert_eq!(after_viewport.size.width, 80.0);
+        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 79.0);
         let visible_row_prefix: String = (0..11)
             .map(|x| frame.cell(x, 2).unwrap().character)
             .collect();
         assert_eq!(visible_row_prefix, "percent row");
-        assert_eq!(frame.cell(68, 2).unwrap().background, Background::Magenta);
     }
 
     #[test]

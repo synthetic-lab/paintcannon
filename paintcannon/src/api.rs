@@ -25,8 +25,9 @@ use crate::style::{
     parse_font_style, parse_font_weight, parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks,
     parse_grid_line, parse_grid_placement, parse_grid_template_tracks, parse_image_rendering,
     parse_justify_content, parse_length_percentage, parse_length_percentage_auto,
-    parse_margin_lengths, parse_non_negative_number, parse_overflow, parse_text_decoration_line,
-    parse_transition, parse_white_space, Background,
+    parse_margin_lengths, parse_non_negative_number, parse_overflow, parse_scrollbar_color,
+    parse_scrollbar_gutter, parse_text_decoration_line, parse_transition, parse_white_space,
+    Background,
 };
 use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
@@ -912,6 +913,12 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
         "overflow" => StyleMutation::Overflow(parse_overflow(value)?),
         "overflow-x" | "overflowX" => StyleMutation::OverflowX(parse_overflow(value)?),
         "overflow-y" | "overflowY" => StyleMutation::OverflowY(parse_overflow(value)?),
+        "scrollbar-color" | "scrollbarColor" => {
+            StyleMutation::ScrollbarColor(parse_scrollbar_color(value)?)
+        }
+        "scrollbar-gutter" | "scrollbarGutter" => {
+            StyleMutation::ScrollbarGutter(parse_scrollbar_gutter(value)?)
+        }
         "image-rendering" | "imageRendering" => {
             StyleMutation::ImageRendering(parse_image_rendering(value)?)
         }
@@ -1092,6 +1099,8 @@ fn style_reset(property: &str) -> Result<StyleReset> {
         "overflow" => StyleReset::Overflow,
         "overflow-x" | "overflowX" => StyleReset::OverflowX,
         "overflow-y" | "overflowY" => StyleReset::OverflowY,
+        "scrollbar-color" | "scrollbarColor" => StyleReset::ScrollbarColor,
+        "scrollbar-gutter" | "scrollbarGutter" => StyleReset::ScrollbarGutter,
         "image-rendering" | "imageRendering" => StyleReset::ImageRendering,
         "white-space" | "whiteSpace" => StyleReset::WhiteSpace,
         "flex-direction" | "flexDirection" => StyleReset::FlexDirection,

@@ -41,7 +41,7 @@ body.style.minHeight = 0;
 body.style.gap = 1;
 
 const viewport = pc.createElement("div");
-viewport.style.width = "80%";
+viewport.style.width = "100%";
 viewport.style.height = "100%";
 viewport.style.minHeight = 0;
 viewport.style.overflowY = "scroll";
@@ -49,6 +49,7 @@ viewport.style.overflowX = "hidden";
 viewport.style.backgroundColor = "#111827";
 viewport.style.border = "rounded";
 viewport.style.borderColor = "#94a3b8";
+viewport.style.scrollbarColor = "#e5e7eb #475569";
 
 const content = pc.createElement("div");
 content.style.display = "flex";
@@ -76,33 +77,17 @@ pc.transaction(() => {
   }
 });
 
-const rail = pc.createElement("div");
-rail.style.width = "20%";
-rail.style.height = "100%";
-rail.style.backgroundColor = "#020617";
-rail.style.color = "#cbd5e1";
-rail.style.whiteSpace = "pre";
-
-const scrollbar = pc.createTextNode(scrollbarText(0, 1, 1));
-rail.appendChild(scrollbar);
-
 viewport.appendChild(content);
 body.appendChild(viewport);
-body.appendChild(rail);
 root.appendChild(header);
 root.appendChild(body);
 
 viewport.addEventListener("scroll", event => {
-  updateScrollbar(event.scrollTop, event.scrollHeight, viewport.clientHeight, rail.clientHeight);
+  updateStatus(event.scrollTop, event.scrollHeight, viewport.clientHeight);
 });
 
 pc.addEventListener("resize", () => {
-  updateScrollbar(
-    viewport.scrollTop,
-    viewport.scrollHeight,
-    viewport.clientHeight,
-    rail.clientHeight,
-  );
+  updateStatus(viewport.scrollTop, viewport.scrollHeight, viewport.clientHeight);
 });
 
 pc.addEventListener("keydown", event => {
@@ -112,12 +97,7 @@ pc.addEventListener("keydown", event => {
   }
 });
 
-updateScrollbar(
-  viewport.scrollTop,
-  viewport.scrollHeight,
-  viewport.clientHeight,
-  rail.clientHeight,
-);
+updateStatus(viewport.scrollTop, viewport.scrollHeight, viewport.clientHeight);
 pc.render();
 
 function row(text: string) {
@@ -151,28 +131,8 @@ function imageBlock(label: string) {
   return block;
 }
 
-function updateScrollbar(
-  scrollTop: number,
-  scrollHeight: number,
-  clientHeight: number,
-  railHeight: number,
-): void {
+function updateStatus(scrollTop: number, scrollHeight: number, clientHeight: number): void {
   status.nodeValue = `scrollTop=${scrollTop}/${scrollHeight}, clientHeight=${clientHeight}`;
-  scrollbar.nodeValue = scrollbarText(scrollTop, scrollHeight, railHeight);
-}
-
-function scrollbarText(scrollTop: number, scrollHeight: number, clientHeight: number): string {
-  const height = Math.max(1, clientHeight);
-  const max = Math.max(1, scrollHeight - clientHeight);
-  const thumb = Math.min(height - 1, Math.floor((scrollTop / max) * (height - 1)));
-  let text = "";
-  for (let rowIndex = 0; rowIndex < height; rowIndex += 1) {
-    text += rowIndex === thumb ? "#" : "|";
-    if (rowIndex < height - 1) {
-      text += "\n";
-    }
-  }
-  return text;
 }
 
 function tick() {

@@ -262,7 +262,7 @@ mod tests {
 
     fn scroll_text_arena() -> (LayoutArena, taffy::NodeId) {
         let mut arena = LayoutArena::new();
-        let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Length(1.0));
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(1.0));
         viewport_style.overflow_y = LayoutOverflow::Scroll;
         let viewport = arena.create_element(viewport_style);
         let mut content_style = block_style(CssDimension::Length(5.0), CssDimension::Auto);
@@ -281,7 +281,7 @@ mod tests {
         arena.compute_layout(
             viewport,
             Size {
-                width: AvailableSpace::Definite(5.0),
+                width: AvailableSpace::Definite(6.0),
                 height: AvailableSpace::Definite(1.0),
             },
         );

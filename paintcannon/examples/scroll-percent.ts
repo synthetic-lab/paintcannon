@@ -32,18 +32,13 @@ body.style.width = "100%";
 body.style.height = "90%";
 
 const viewport = pc.createElement("div");
-viewport.style.width = "85%";
+viewport.style.width = "100%";
 viewport.style.height = "100%";
 viewport.style.overflowY = "scroll";
 viewport.style.overflowX = "hidden";
 viewport.style.backgroundColor = "blue";
 viewport.style.selectionBackgroundColor = "yellow";
-
-const rail = pc.createElement("div");
-rail.style.width = "15%";
-rail.style.height = "100%";
-rail.style.backgroundColor = "magenta";
-rail.style.whiteSpace = "pre";
+viewport.style.scrollbarColor = "white black";
 
 const content = pc.createElement("div");
 content.style.display = "flex";
@@ -64,40 +59,21 @@ pc.transaction(() => {
   }
 });
 
-const scrollbar = pc.createTextNode(scrollbarText(0, rowCount, 1));
-rail.appendChild(scrollbar);
-
 viewport.appendChild(content);
 body.appendChild(viewport);
-body.appendChild(rail);
 root.appendChild(header);
 root.appendChild(body);
 
 viewport.addEventListener("scroll", event => {
-  updateScrollbar(event.scrollTop, event.scrollHeight, viewport.clientHeight);
+  updateStatus(event.scrollTop, event.scrollHeight, viewport.clientHeight);
 });
 
 pc.addEventListener("resize", () => {
-  updateScrollbar(viewport.scrollTop, viewport.scrollHeight, viewport.clientHeight);
+  updateStatus(viewport.scrollTop, viewport.scrollHeight, viewport.clientHeight);
 });
 
-function updateScrollbar(scrollTop: number, scrollHeight: number, clientHeight: number): void {
+function updateStatus(scrollTop: number, scrollHeight: number, clientHeight: number): void {
   status.nodeValue = `scrollTop=${scrollTop}/${scrollHeight}, clientHeight=${clientHeight}`;
-  scrollbar.nodeValue = scrollbarText(scrollTop, scrollHeight, clientHeight);
-}
-
-function scrollbarText(scrollTop: number, scrollHeight: number, clientHeight: number): string {
-  const height = Math.max(1, clientHeight);
-  const max = Math.max(1, scrollHeight - clientHeight);
-  const thumb = Math.min(height - 1, Math.floor((scrollTop / max) * (height - 1)));
-  let text = "";
-  for (let row = 0; row < height; row += 1) {
-    text += row === thumb ? "#" : "|";
-    if (row < height - 1) {
-      text += "\n";
-    }
-  }
-  return text;
 }
 
 function tick() {

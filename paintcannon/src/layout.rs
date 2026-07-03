@@ -4,7 +4,7 @@ use taffy::{
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
     compute_hidden_layout, compute_leaf_layout, compute_root_layout, AvailableSpace, Cache,
     CacheTree, CoreStyle, Layout, LayoutInput, LayoutOutput, LayoutPartialTree, MaybeMath,
-    MaybeResolve, NodeId, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, Style,
+    MaybeResolve, NodeId, Point, Rect, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, Style,
     TraversePartialTree, TraverseTree,
 };
 
@@ -600,6 +600,77 @@ impl LayoutArena {
         self.scroll_metrics_for_node(node)
     }
 
+    pub(crate) fn scroll_metrics_snapshot(&self, node_id: NodeId) -> Option<ArenaScrollMetrics> {
+        let index = node_index(node_id);
+        if matches!(self.nodes[index].kind, LayoutNodeKind::TextArea(_)) {
+            return Some(self.textarea_scroll_metrics_for_node(node_id));
+        }
+        if !matches!(self.nodes[index].kind, LayoutNodeKind::Element) {
+            return None;
+        }
+
+        let layout = self.layout(node_id);
+        let overflow_x = self.nodes[index].style.overflow_x;
+        let overflow_y = self.nodes[index].style.overflow_y;
+        let scroll_left = self.nodes[index].scroll_left;
+        let scroll_top = self.nodes[index].scroll_top;
+        let padding_size = scrollport_size(layout);
+        let padding_origin = Point {
+            x: layout.border.left,
+            y: layout.border.top,
+        };
+        let client_width = float_to_cells(padding_size.width);
+        let client_height = float_to_cells(padding_size.height);
+        let mut scroll_width = client_width;
+        let mut scroll_height = client_height;
+
+        if self.is_inline_context(node_id) {
+            for fragment in &self.nodes[index].fragments {
+                scroll_width = scroll_width.max(
+                    float_to_cells(layout.padding.left)
+                        .saturating_add(fragment.x)
+                        .saturating_add(fragment.width)
+                        .saturating_add(float_to_cells(layout.padding.right)),
+                );
+                scroll_height = scroll_height.max(
+                    float_to_cells(layout.padding.top)
+                        .saturating_add(fragment.y)
+                        .saturating_add(fragment.height)
+                        .saturating_add(float_to_cells(layout.padding.bottom)),
+                );
+            }
+        } else {
+            let child_count = self.nodes[index].children.len();
+            for child_index in 0..child_count {
+                let child = self.nodes[index].children[child_index];
+                let child_layout = self.layout(child);
+                scroll_width = scroll_width.max(float_to_cells(
+                    child_layout.location.x + child_layout.size.width - padding_origin.x
+                        + layout.padding.right,
+                ));
+                scroll_height = scroll_height.max(float_to_cells(
+                    child_layout.location.y + child_layout.size.height - padding_origin.y
+                        + layout.padding.bottom,
+                ));
+            }
+        }
+
+        Some(ArenaScrollMetrics {
+            scroll_left: scroll_left.min(axis_max_scroll(
+                overflow_x,
+                scroll_width.saturating_sub(client_width),
+            )),
+            scroll_top: scroll_top.min(axis_max_scroll(
+                overflow_y,
+                scroll_height.saturating_sub(client_height),
+            )),
+            scroll_width,
+            scroll_height,
+            client_width,
+            client_height,
+        })
+    }
+
     pub(crate) fn set_scroll_offset(
         &mut self,
         node: NodeId,
@@ -660,7 +731,7 @@ impl LayoutArena {
         let overflow_y = self.nodes[index].style.overflow_y;
         let scroll_left = self.nodes[index].scroll_left;
         let scroll_top = self.nodes[index].scroll_top;
-        let padding_size = padding_box_size(layout);
+        let padding_size = scrollport_size(layout);
         let padding_origin = Point {
             x: layout.border.left,
             y: layout.border.top,
@@ -672,7 +743,7 @@ impl LayoutArena {
 
         if self.is_inline_context(node_id) {
             let widths = self.inline_content_widths(node_id, white_space);
-            let content_width = float_to_cells(layout.content_box_size().width).max(1);
+            let content_width = float_to_cells(scroll_content_box_size(layout).width).max(1);
             let height = self.inline_content_height(node_id, white_space, content_width);
             scroll_width = scroll_width.max(float_to_cells(
                 layout.padding.left + widths.max + layout.padding.right,
@@ -712,7 +783,7 @@ impl LayoutArena {
         })
     }
 
-    fn textarea_scroll_metrics_for_node(&mut self, node_id: NodeId) -> ArenaScrollMetrics {
+    fn textarea_scroll_metrics_for_node(&self, node_id: NodeId) -> ArenaScrollMetrics {
         let index = node_index(node_id);
         let layout = self.layout(node_id);
         let content_size = layout.content_box_size();
@@ -925,7 +996,7 @@ impl LayoutArena {
             }
         }
 
-        let content_box_inset = padding_border;
+        let content_box_inset = padding_border + scrollbar_gutter_for_style(&style);
         let content_available = Size {
             width: known_dimensions
                 .width
@@ -1613,6 +1684,44 @@ fn padding_box_size(layout: Layout) -> Size<f32> {
     }
 }
 
+fn scrollport_size(layout: Layout) -> Size<f32> {
+    let padding = padding_box_size(layout);
+    Size {
+        width: (padding.width - layout.scrollbar_size.width).max(0.0),
+        height: (padding.height - layout.scrollbar_size.height).max(0.0),
+    }
+}
+
+fn scroll_content_box_size(layout: Layout) -> Size<f32> {
+    let content = layout.content_box_size();
+    Size {
+        width: (content.width - layout.scrollbar_size.width).max(0.0),
+        height: (content.height - layout.scrollbar_size.height).max(0.0),
+    }
+}
+
+fn scrollbar_gutter_for_style(style: &Style) -> Rect<f32> {
+    let offsets = style.overflow().transpose().map(|overflow| match overflow {
+        taffy::style::Overflow::Scroll => style.scrollbar_width(),
+        _ => 0.0,
+    });
+
+    match style.direction() {
+        taffy::style::Direction::Ltr => Rect {
+            top: 0.0,
+            left: 0.0,
+            right: offsets.x,
+            bottom: offsets.y,
+        },
+        taffy::style::Direction::Rtl => Rect {
+            top: 0.0,
+            left: offsets.x,
+            right: 0.0,
+            bottom: offsets.y,
+        },
+    }
+}
+
 fn measure_inline_replaced(size: Size<f32>, cursor: &mut InlineMeasureCursor) {
     let width = float_to_cells(size.width).max(1);
     let height = float_to_cells(size.height).max(1);
@@ -1883,8 +1992,8 @@ mod tests {
     use super::*;
     use crate::style::{
         BorderStyle, CssDimension, CssGridTemplateTrack, CssLengthPercentage,
-        CssLengthPercentageAuto, CssTrackSizing, LayoutAlignItems, LayoutFlexDirection,
-        LayoutJustifyContent, LayoutOverflow,
+        CssLengthPercentageAuto, CssTrackSizing, CssWhiteSpace, LayoutAlignItems,
+        LayoutFlexDirection, LayoutJustifyContent, LayoutOverflow,
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
@@ -2340,6 +2449,166 @@ mod tests {
         assert_eq!(arena.layout(viewport).size.height, 5.0);
         assert_eq!(metrics.client_height, 5);
         assert_eq!(metrics.scroll_height, 10);
+    }
+
+    #[test]
+    fn less_demo_inline_viewport_scrolls_inside_flex_column() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = arena.create_element(root_style);
+
+        let header = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(1.0),
+        ));
+        arena.append_child(root, header);
+
+        let mut body_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        body_style.display = LayoutDisplay::Flex;
+        body_style.flex_direction = LayoutFlexDirection::Row;
+        body_style.flex_grow = 1.0;
+        body_style.flex_shrink = 1.0;
+        body_style.flex_basis = CssDimension::Length(0.0);
+        body_style.min_height = CssDimension::Length(0.0);
+        let body = arena.create_element(body_style);
+        arena.append_child(root, body);
+
+        let mut viewport_style =
+            block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.overflow_x = LayoutOverflow::Hidden;
+        viewport_style.border_top = BorderStyle::Rounded;
+        viewport_style.border_right = BorderStyle::Rounded;
+        viewport_style.border_bottom = BorderStyle::Rounded;
+        viewport_style.border_left = BorderStyle::Rounded;
+        let viewport = arena.create_element(viewport_style);
+        arena.append_child(body, viewport);
+
+        let mut span_style = block_style(CssDimension::Auto, CssDimension::Auto);
+        span_style.display = LayoutDisplay::Inline;
+        span_style.white_space = CssWhiteSpace::PreWrap;
+        let span = arena.create_element(span_style);
+        let text = arena.create_text("long line wraps here\n\n".repeat(80));
+        arena.append_child(span, text);
+        arena.append_child(viewport, span);
+
+        let footer = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(1.0),
+        ));
+        arena.append_child(root, footer);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(80.0),
+                height: AvailableSpace::Definite(24.0),
+            },
+        );
+
+        let metrics = arena.scroll_metrics(viewport).unwrap();
+        assert_eq!(arena.layout(body).size.height, 22.0);
+        assert_eq!(arena.layout(viewport).size.height, 22.0);
+        assert_eq!(metrics.client_height, 20);
+        assert!(metrics.scroll_height > metrics.client_height);
+    }
+
+    #[test]
+    fn scroll_flex_item_auto_min_height_is_zero() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(10.0), CssDimension::Length(6.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = arena.create_element(root_style);
+
+        let header = arena.create_element(block_style(
+            CssDimension::Length(10.0),
+            CssDimension::Length(2.0),
+        ));
+        arena.append_child(root, header);
+
+        let mut viewport_style = block_style(CssDimension::Length(10.0), CssDimension::Auto);
+        viewport_style.flex_grow = 1.0;
+        viewport_style.flex_shrink = 1.0;
+        viewport_style.flex_basis = CssDimension::Length(0.0);
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = arena.create_element(viewport_style);
+        arena.append_child(root, viewport);
+
+        let content = arena.create_element(block_style(
+            CssDimension::Length(10.0),
+            CssDimension::Length(20.0),
+        ));
+        arena.append_child(viewport, content);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(6.0),
+            },
+        );
+
+        let metrics = arena.scroll_metrics(viewport).unwrap();
+        assert_eq!(arena.layout(viewport).size.height, 4.0);
+        assert_eq!(metrics.client_height, 4);
+        assert_eq!(metrics.scroll_height, 20);
+    }
+
+    #[test]
+    fn vertical_scrollbar_reserves_one_cell_for_child_layout_and_metrics() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = arena.create_element(viewport_style);
+
+        let child = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(5.0),
+        ));
+        arena.append_child(viewport, child);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        let viewport_layout = arena.layout(viewport);
+        let metrics = arena.scroll_metrics(viewport).unwrap();
+        assert_eq!(viewport_layout.scrollbar_size.width, 1.0);
+        assert_eq!(arena.layout(child).size.width, 5.0);
+        assert_eq!(metrics.client_width, 5);
+        assert_eq!(metrics.client_height, 3);
+        assert_eq!(metrics.scroll_height, 5);
+    }
+
+    #[test]
+    fn vertical_scrollbar_reduces_inline_wrap_width() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Length(3.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = arena.create_element(viewport_style);
+        let text = arena.create_text("abcde");
+        arena.append_child(viewport, text);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        let fragments = arena.inline_fragments(viewport);
+        assert_eq!(fragments[3].x, 3);
+        assert_eq!(fragments[3].y, 0);
+        assert_eq!(fragments[4].x, 0);
+        assert_eq!(fragments[4].y, 1);
     }
 
     #[test]
@@ -2897,7 +3166,7 @@ mod tests {
         );
 
         let metrics = arena.scroll_metrics(viewport).unwrap();
-        assert_eq!(metrics.client_width, 10);
+        assert_eq!(metrics.client_width, 9);
         assert_eq!(metrics.client_height, 5);
         assert_eq!(metrics.scroll_height, 8);
     }
@@ -2928,7 +3197,7 @@ mod tests {
         );
 
         let metrics = arena.scroll_metrics(viewport).unwrap();
-        assert_eq!(metrics.client_width, 8);
+        assert_eq!(metrics.client_width, 7);
         assert_eq!(metrics.client_height, 4);
         assert_eq!(metrics.scroll_width, 8);
         assert_eq!(metrics.scroll_height, 10);
