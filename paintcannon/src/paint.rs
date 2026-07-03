@@ -12,6 +12,7 @@ use crate::style::{
     Background, ColorTransitionProperty, CssFontStyle, CssFontWeight, CssTextDecorationLine,
     DivStyle, ImageRendering, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap, LayoutOverflow,
 };
+use crate::text::parse_text_for_single_line;
 use crate::text_wrap::WrappedText;
 use crate::transition::TransitionState;
 
@@ -769,7 +770,7 @@ fn paint_input(
     } else {
         input.value.as_str()
     };
-    let chars = visible_text.chars().collect::<Vec<_>>();
+    let chars = parse_text_for_single_line(visible_text);
     let cursor = (input.cursor as usize).min(chars.len());
     let start = if input.focused && !input.value.is_empty() && cursor >= width {
         cursor + 1 - width
@@ -1497,6 +1498,61 @@ mod tests {
         assert_eq!(output.frame.cell(0, 0).unwrap().character, 't');
         assert_eq!(output.frame.cell(0, 1).unwrap().character, 'm');
         assert_eq!(output.frame.cell(0, 2).unwrap().character, 'b');
+    }
+
+    #[test]
+    fn text_node_expands_tabs_before_painting_frame_cells() {
+        let mut arena = LayoutArena::new();
+        let mut panel_style = block_style(CssDimension::Length(8.0), CssDimension::Length(1.0));
+        panel_style.white_space = crate::style::CssWhiteSpace::Pre;
+        let panel = arena.create_element(panel_style);
+        let text = arena.create_text("a\tEND");
+        arena.append_child(panel, text);
+
+        arena.compute_layout(
+            panel,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, panel, 8, 1, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'a');
+        for col in 1..=4 {
+            assert_eq!(output.frame.cell(col, 0).unwrap().character, ' ');
+        }
+        assert_eq!(output.frame.cell(5, 0).unwrap().character, 'E');
+        assert_eq!(output.frame.cell(6, 0).unwrap().character, 'N');
+        assert_eq!(output.frame.cell(7, 0).unwrap().character, 'D');
+    }
+
+    #[test]
+    fn text_node_renders_osc_controls_as_visible_frame_cells() {
+        let mut arena = LayoutArena::new();
+        let mut panel_style = block_style(CssDimension::Length(8.0), CssDimension::Length(1.0));
+        panel_style.white_space = crate::style::CssWhiteSpace::Pre;
+        let panel = arena.create_element(panel_style);
+        let text = arena.create_text("\x1b]2;END\x07");
+        arena.append_child(panel, text);
+
+        arena.compute_layout(
+            panel,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, panel, 8, 1, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, '\u{241b}');
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, ']');
+        assert_eq!(output.frame.cell(2, 0).unwrap().character, '2');
+        assert_eq!(output.frame.cell(3, 0).unwrap().character, ';');
+        assert_eq!(output.frame.cell(4, 0).unwrap().character, 'E');
+        assert_eq!(output.frame.cell(5, 0).unwrap().character, 'N');
+        assert_eq!(output.frame.cell(6, 0).unwrap().character, 'D');
+        assert_eq!(output.frame.cell(7, 0).unwrap().character, '\u{2407}');
     }
 
     #[test]
