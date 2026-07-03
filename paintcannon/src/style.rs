@@ -57,6 +57,8 @@ pub(crate) struct DivStyle {
     pub(crate) cursor: CursorStyle,
     pub(crate) overflow_x: LayoutOverflow,
     pub(crate) overflow_y: LayoutOverflow,
+    pub(crate) scrollbar_color: ScrollbarColor,
+    pub(crate) scrollbar_gutter: ScrollbarGutter,
     pub(crate) image_rendering: ImageRendering,
     pub(crate) white_space: CssWhiteSpace,
 }
@@ -112,6 +114,8 @@ impl Default for DivStyle {
             cursor: CursorStyle::Auto,
             overflow_x: LayoutOverflow::Visible,
             overflow_y: LayoutOverflow::Visible,
+            scrollbar_color: ScrollbarColor::Auto,
+            scrollbar_gutter: ScrollbarGutter::Auto,
             image_rendering: ImageRendering::HalfBlock,
             white_space: CssWhiteSpace::Normal,
         }
@@ -131,6 +135,30 @@ pub(crate) enum LayoutOverflow {
     Visible,
     Hidden,
     Scroll,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScrollbarGutter {
+    Auto,
+    Stable,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScrollbarColor {
+    Auto,
+    Colors {
+        thumb: Background,
+        track: Background,
+    },
+}
+
+impl ScrollbarColor {
+    pub(crate) fn resolve(self) -> (Background, Background) {
+        match self {
+            Self::Auto => (Background::White, Background::Default),
+            Self::Colors { thumb, track } => (thumb, track),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -675,18 +703,33 @@ impl DivStyle {
             grid_column: self.grid_column.to_taffy(),
             grid_row: self.grid_row.to_taffy(),
             overflow: Point {
-                x: match self.overflow_x {
-                    LayoutOverflow::Visible => Overflow::Visible,
-                    LayoutOverflow::Hidden => Overflow::Hidden,
-                    LayoutOverflow::Scroll => Overflow::Scroll,
-                },
-                y: match self.overflow_y {
-                    LayoutOverflow::Visible => Overflow::Visible,
-                    LayoutOverflow::Hidden => Overflow::Hidden,
-                    LayoutOverflow::Scroll => Overflow::Scroll,
-                },
+                x: self.taffy_overflow_for_axis(self.overflow_x),
+                y: self.taffy_overflow_for_axis(self.overflow_y),
             },
+            scrollbar_width: if self.reserves_scrollbar() { 1.0 } else { 0.0 },
             ..Default::default()
+        }
+    }
+
+    fn reserves_scrollbar(&self) -> bool {
+        self.reserves_scrollbar_for_axis(self.overflow_x)
+            || self.reserves_scrollbar_for_axis(self.overflow_y)
+    }
+
+    fn reserves_scrollbar_for_axis(&self, overflow: LayoutOverflow) -> bool {
+        overflow == LayoutOverflow::Scroll
+            || (self.scrollbar_gutter == ScrollbarGutter::Stable
+                && overflow == LayoutOverflow::Hidden)
+    }
+
+    fn taffy_overflow_for_axis(&self, overflow: LayoutOverflow) -> Overflow {
+        match overflow {
+            LayoutOverflow::Visible => Overflow::Visible,
+            LayoutOverflow::Hidden if self.reserves_scrollbar_for_axis(overflow) => {
+                Overflow::Scroll
+            }
+            LayoutOverflow::Hidden => Overflow::Hidden,
+            LayoutOverflow::Scroll => Overflow::Scroll,
         }
     }
 }
@@ -723,6 +766,38 @@ pub(crate) fn parse_overflow(value: &str) -> Result<LayoutOverflow> {
         "hidden" => Ok(LayoutOverflow::Hidden),
         "scroll" => Ok(LayoutOverflow::Scroll),
         value => Err(Error::from_reason(format!("unsupported overflow: {value}"))),
+    }
+}
+
+pub(crate) fn parse_scrollbar_color(value: &str) -> Result<ScrollbarColor> {
+    let value = value.trim();
+    if value == "auto" {
+        return Ok(ScrollbarColor::Auto);
+    }
+
+    let parts = value.split_whitespace().collect::<Vec<_>>();
+    if parts.len() != 2 {
+        return Err(Error::from_reason(format!(
+            "unsupported scrollbar-color: {value}"
+        )));
+    }
+
+    let thumb = Background::parse(parts[0]).ok_or_else(|| {
+        Error::from_reason(format!("unsupported scrollbar thumb color: {}", parts[0]))
+    })?;
+    let track = Background::parse(parts[1]).ok_or_else(|| {
+        Error::from_reason(format!("unsupported scrollbar track color: {}", parts[1]))
+    })?;
+    Ok(ScrollbarColor::Colors { thumb, track })
+}
+
+pub(crate) fn parse_scrollbar_gutter(value: &str) -> Result<ScrollbarGutter> {
+    match value.trim() {
+        "auto" => Ok(ScrollbarGutter::Auto),
+        "stable" => Ok(ScrollbarGutter::Stable),
+        value => Err(Error::from_reason(format!(
+            "unsupported scrollbar-gutter: {value}"
+        ))),
     }
 }
 
@@ -1347,5 +1422,34 @@ mod tests {
             CssTextDecorationLine::None
         ));
         assert!(parse_text_decoration_line("underline dotted").is_err());
+    }
+
+    #[test]
+    fn scrollbar_color_accepts_auto_or_two_terminal_colors() {
+        assert!(matches!(
+            parse_scrollbar_color("auto").unwrap(),
+            ScrollbarColor::Auto
+        ));
+        assert!(matches!(
+            parse_scrollbar_color("#38bdf8 #334155").unwrap(),
+            ScrollbarColor::Colors {
+                thumb: Background::Rgb(56, 189, 248),
+                track: Background::Rgb(51, 65, 85)
+            }
+        ));
+        assert!(parse_scrollbar_color("#38bdf8").is_err());
+    }
+
+    #[test]
+    fn scrollbar_gutter_accepts_supported_values() {
+        assert!(matches!(
+            parse_scrollbar_gutter("auto").unwrap(),
+            ScrollbarGutter::Auto
+        ));
+        assert!(matches!(
+            parse_scrollbar_gutter("stable").unwrap(),
+            ScrollbarGutter::Stable
+        ));
+        assert!(parse_scrollbar_gutter("stable both-edges").is_err());
     }
 }

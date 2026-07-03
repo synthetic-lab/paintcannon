@@ -128,6 +128,8 @@ both supported:
 - `overflow`
 - `overflow-x` / `overflowX`
 - `overflow-y` / `overflowY`
+- `scrollbar-color` / `scrollbarColor`
+- `scrollbar-gutter` / `scrollbarGutter`
 - `image-rendering` / `imageRendering`
 - `flex-direction` / `flexDirection`
 - `flex-wrap` / `flexWrap`

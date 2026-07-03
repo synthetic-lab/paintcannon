@@ -4,6 +4,7 @@ import type {
   NativeBinding,
   NativeKeyboardEvent,
   NativePaintCannon,
+  NativeScrollbarHit,
   NativeScrollMetrics,
   NativeTransitionEvent,
   TerminalMouseEvent,
@@ -50,6 +51,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
   suspendProcessGroupCalls = 0;
   interruptProcessGroupCalls = 0;
   targetIdAtPoint: number | null = null;
+  scrollbarHitAtPoint: NativeScrollbarHit | null = null;
   cursorAtPoint: number | null = null;
   keyboardEvents: NativeKeyboardEvent[] = [];
   mouseEvents: TerminalMouseEvent[] = [];
@@ -209,6 +211,10 @@ export class MockNativePaintCannon implements NativePaintCannon {
 
   targetIdForPoint(): number | null {
     return this.targetIdAtPoint;
+  }
+
+  scrollbarHitForPoint(): NativeScrollbarHit | null {
+    return this.scrollbarHitAtPoint;
   }
 
   setScrollOffset(id: number, scrollLeft: number, scrollTop: number): NativeScrollMetrics {

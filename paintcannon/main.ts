@@ -6,6 +6,7 @@ import type {
   BatchIdMapping as NativeBatchIdMapping,
   KeyboardEvent as NativeKeyboardEvent,
   PaintCannon as NativePaintCannon,
+  ScrollbarHit as NativeScrollbarHit,
   ScrollMetrics as NativeScrollMetrics,
   TerminalMouseEvent,
   TerminalResizeEvent,
@@ -19,6 +20,7 @@ export type {
   ClickEvent as NativeClickEvent,
   KeyboardEvent as NativeKeyboardEvent,
   PaintCannon as NativePaintCannon,
+  ScrollbarHit as NativeScrollbarHit,
   ScrollMetrics as NativeScrollMetrics,
   TerminalMouseEvent,
   TerminalResizeEvent,
@@ -250,6 +252,16 @@ export type NativeBinding = {
 };
 
 type TextControlElement = InputElement | TextAreaElement;
+type ScrollbarAxis = "x" | "y";
+type ActiveScrollbarDrag = {
+  target: PaintElement;
+  axis: ScrollbarAxis;
+  dragOffset: number;
+  railStart: number;
+  railLength: number;
+  thumbLength: number;
+  maxScroll: number;
+};
 export const PAINT_ELEMENT_TAG_NAMES = [
   "div",
   "span",
@@ -367,6 +379,8 @@ export class PaintCannon {
     Partial<Record<ElementEventType, Set<ElementEventListener>>>
   >();
   private readonly scrollMetrics = new Map<number, NativeScrollMetrics>();
+  private scrollbarDrag: ActiveScrollbarDrag | undefined;
+  private suppressNextScrollbarClick = false;
   private readonly elementFactories: {
     [Tag in PaintElementTagName]: () => PaintElementByTagName[Tag];
   } = {
@@ -1569,6 +1583,23 @@ export class PaintCannon {
       return this.handleWheelEvent(input);
     }
 
+    if (input.type === "mousedown" && this.handleScrollbarMouseDown(input)) {
+      return true;
+    }
+
+    if (input.type === "mousedrag" && this.handleScrollbarMouseDrag(input)) {
+      return true;
+    }
+
+    if (input.type === "mouseup" && this.handleScrollbarMouseUp()) {
+      return true;
+    }
+
+    if (input.type === "click" && this.suppressNextScrollbarClick) {
+      this.suppressNextScrollbarClick = false;
+      return true;
+    }
+
     const hasMouseEnter = this.hasElementEventListeners("mouseenter");
     const hasMouseLeave = this.hasElementEventListeners("mouseleave");
     const hasMouseMove = this.hasElementEventListeners("mousemove");
@@ -1620,6 +1651,95 @@ export class PaintCannon {
     }
 
     return false;
+  }
+
+  private handleScrollbarMouseDown(input: TerminalMouseEvent): boolean {
+    if (input.button !== 0) {
+      return false;
+    }
+
+    const hit: NativeScrollbarHit | null = this.binding.scrollbarHitForPoint(input.x, input.y);
+    if (hit === null) {
+      return false;
+    }
+
+    const axis = parseScrollbarAxis(hit.axis);
+    this.suppressNextScrollbarClick = true;
+    const target = this.elements.get(hit.targetId);
+    if (target === undefined) {
+      return true;
+    }
+
+    const coordinate = scrollbarCoordinate(input, axis);
+    const thumbEnd = hit.thumbStart + hit.thumbLength;
+    if (coordinate >= hit.thumbStart && coordinate < thumbEnd) {
+      this.scrollbarDrag = {
+        target,
+        axis,
+        dragOffset: coordinate - hit.thumbStart,
+        railStart: hit.railStart,
+        railLength: hit.railLength,
+        thumbLength: hit.thumbLength,
+        maxScroll: hit.maxScroll,
+      };
+      return true;
+    }
+
+    const direction = coordinate < hit.thumbStart ? -1 : 1;
+    const nextOffset = hit.scrollOffset + direction * hit.clientLength;
+    const metrics = this.setScrollbarAxisOffset(target, axis, nextOffset);
+    if (metrics !== null) {
+      this.dispatchScrollEvent(target, input, metrics);
+    }
+    return true;
+  }
+
+  private handleScrollbarMouseDrag(input: TerminalMouseEvent): boolean {
+    const drag = this.scrollbarDrag;
+    if (drag === undefined) {
+      return false;
+    }
+
+    const movableLength = Math.max(0, drag.railLength - drag.thumbLength);
+    const nextThumbStart =
+      movableLength === 0
+        ? drag.railStart
+        : clamp(
+            scrollbarCoordinate(input, drag.axis) - drag.dragOffset,
+            drag.railStart,
+            drag.railStart + movableLength,
+          );
+    const nextOffset =
+      movableLength === 0
+        ? 0
+        : Math.round(((nextThumbStart - drag.railStart) / movableLength) * drag.maxScroll);
+    const metrics = this.setScrollbarAxisOffset(drag.target, drag.axis, nextOffset);
+    if (metrics !== null) {
+      this.dispatchScrollEvent(drag.target, input, metrics);
+    }
+    return true;
+  }
+
+  private handleScrollbarMouseUp(): boolean {
+    if (this.scrollbarDrag === undefined) {
+      return false;
+    }
+
+    this.scrollbarDrag = undefined;
+    this.suppressNextScrollbarClick = true;
+    return true;
+  }
+
+  private setScrollbarAxisOffset(
+    target: PaintElement,
+    axis: ScrollbarAxis,
+    offset: number,
+  ): NativeScrollMetrics | null {
+    if (axis === "x") {
+      return this.setScrollOffset(target, offset, this.getScrollTop(target));
+    }
+
+    return this.setScrollOffset(target, this.getScrollLeft(target), offset);
   }
 
   private handleWheelEvent(input: TerminalMouseEvent): boolean {
@@ -2722,6 +2842,22 @@ export class CSSStyleDeclaration {
     this.setProperty("overflow-y", value);
   }
 
+  get scrollbarColor(): string {
+    return this.getPropertyValue("scrollbar-color");
+  }
+
+  set scrollbarColor(value: string) {
+    this.setProperty("scrollbar-color", value);
+  }
+
+  get scrollbarGutter(): "auto" | "stable" | string {
+    return this.getPropertyValue("scrollbar-gutter");
+  }
+
+  set scrollbarGutter(value: "auto" | "stable" | string) {
+    this.setProperty("scrollbar-gutter", value);
+  }
+
   get flexDirection(): "row" | "column" | string {
     return this.getPropertyValue("flex-direction");
   }
@@ -3255,7 +3391,7 @@ function isAxisScrollable(value: string): boolean {
   return value === "scroll";
 }
 
-function isElementAxisScrollable(element: PaintElement, axis: "x" | "y"): boolean {
+function isElementAxisScrollable(element: PaintElement, axis: ScrollbarAxis): boolean {
   const overflow =
     axis === "x"
       ? element.style.overflowX || element.style.overflow
@@ -3265,6 +3401,21 @@ function isElementAxisScrollable(element: PaintElement, axis: "x" | "y"): boolea
   }
 
   return element instanceof TextAreaElement && axis === "y" && overflow !== "hidden";
+}
+
+function scrollbarCoordinate(input: TerminalMouseEvent, axis: ScrollbarAxis): number {
+  return axis === "x" ? input.x : input.y;
+}
+
+function parseScrollbarAxis(axis: string): ScrollbarAxis {
+  if (axis === "x" || axis === "y") {
+    return axis;
+  }
+  throw new Error(`unsupported native scrollbar axis: ${axis}`);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function normalizeScrollOffset(value: number): number {
@@ -3294,6 +3445,8 @@ export const SUPPORTED_STYLE_PROPERTY_NAMES = [
   "overflow",
   "overflow-x",
   "overflow-y",
+  "scrollbar-color",
+  "scrollbar-gutter",
   "image-rendering",
   "flex-direction",
   "flex-wrap",

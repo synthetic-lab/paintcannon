@@ -13,15 +13,20 @@ use termprofile::{DetectorSettings, TermProfile};
 
 use crate::frame::Frame;
 use crate::image::load_png_image;
-use crate::layout::{ArenaScrollMetrics, LayoutArena};
+use crate::layout::{
+    ArenaScrollMetrics, ArenaScrollbarHit, LayoutArena, LayoutNodeKind, ScrollbarAxis,
+};
 use crate::paint::{paint_arena_with_options, HitRegion, PaintOptions};
-use crate::selection::{SelectionAction, SelectionMouseEvent, SelectionState};
+use crate::selection::{
+    SelectionAction, SelectionMouseEvent, SelectionMouseEventType, SelectionState,
+};
 use crate::style::{
     Background, BorderStyle, ColorTransitionProperty, CssDimension, CssFontStyle, CssFontWeight,
     CssGridLine, CssGridPlacement, CssGridTemplateTrack, CssLengthPercentage,
     CssLengthPercentageAuto, CssTextDecorationLine, CssTrackSizing, CssWhiteSpace, CursorStyle,
     DivStyle, ImageRendering, LayoutAlignItems, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap,
-    LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, TransitionSpec,
+    LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, ScrollbarColor, ScrollbarGutter,
+    TransitionSpec,
 };
 use crate::terminal::{copy_text_to_clipboard, query_terminal_size, write_pointer_shape};
 use crate::transition::{TransitionEvent, TransitionEventType, TransitionState};
@@ -59,12 +64,28 @@ pub(crate) struct ClickEvent {
     pub(crate) shift_key: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ScrollbarHit {
+    pub(crate) target_id: DomId,
+    pub(crate) axis: ScrollbarAxis,
+    pub(crate) rail_start: u32,
+    pub(crate) rail_length: u32,
+    pub(crate) thumb_start: u32,
+    pub(crate) thumb_length: u32,
+    pub(crate) scroll_offset: u32,
+    pub(crate) max_scroll: u32,
+    pub(crate) client_length: u32,
+    pub(crate) scroll_length: u32,
+}
+
 pub(crate) enum StyleMutation {
     Reset(StyleReset),
     Display(LayoutDisplay),
     Overflow(LayoutOverflow),
     OverflowX(LayoutOverflow),
     OverflowY(LayoutOverflow),
+    ScrollbarColor(ScrollbarColor),
+    ScrollbarGutter(ScrollbarGutter),
     ImageRendering(ImageRendering),
     WhiteSpace(CssWhiteSpace),
     FlexDirection(LayoutFlexDirection),
@@ -149,6 +170,8 @@ pub(crate) enum StyleReset {
     Overflow,
     OverflowX,
     OverflowY,
+    ScrollbarColor,
+    ScrollbarGutter,
     ImageRendering,
     WhiteSpace,
     FlexDirection,
@@ -346,6 +369,11 @@ pub(crate) enum EngineCommand {
         click: MouseClick,
         response: Sender<Option<ClickEvent>>,
     },
+    HitTestScrollbar {
+        x: u32,
+        y: u32,
+        response: Sender<Option<ScrollbarHit>>,
+    },
     HandleSelection {
         event: SelectionMouseEvent,
         response: Sender<SelectionAction>,
@@ -402,6 +430,8 @@ pub(crate) struct PaintEngine {
     truecolor_enabled: bool,
     current_pointer_shape: Option<&'static str>,
     last_pointer_position: Option<(u32, u32)>,
+    scrollbar_selection_suppressed: bool,
+    selection_scroll_node: Option<NodeId>,
 }
 
 impl PaintEngine {
@@ -424,6 +454,8 @@ impl PaintEngine {
             truecolor_enabled: true,
             current_pointer_shape: None,
             last_pointer_position: None,
+            scrollbar_selection_suppressed: false,
+            selection_scroll_node: None,
         }
     }
 
@@ -953,6 +985,16 @@ impl PaintEngine {
     }
 
     fn render_frame_at(&mut self, width: usize, height: usize, now: Instant) -> Option<Frame> {
+        self.render_frame_at_with_selection_capture(width, height, now, false)
+    }
+
+    fn render_frame_at_with_selection_capture(
+        &mut self,
+        width: usize,
+        height: usize,
+        now: Instant,
+        force_capture_hidden_selection_units: bool,
+    ) -> Option<Frame> {
         let root = self.root.and_then(|root| self.node_for(root))?;
         let total_start = Instant::now();
         let layout_start = Instant::now();
@@ -998,7 +1040,8 @@ impl PaintEngine {
             ],
         );
 
-        let capture_hidden_selection_units = self.selection.active_selection().is_some();
+        let capture_hidden_selection_units =
+            force_capture_hidden_selection_units || self.selection.active_selection().is_some();
         let paint_start = Instant::now();
         let mut output = paint_arena_with_options(
             &self.arena,
@@ -1062,14 +1105,177 @@ impl PaintEngine {
         })
     }
 
+    pub(crate) fn scrollbar_hit_at(&self, x: u32, y: u32) -> Option<ScrollbarHit> {
+        let x_i32 = x.min(i32::MAX as u32) as i32;
+        let y_i32 = y.min(i32::MAX as u32) as i32;
+        self.hit_regions
+            .iter()
+            .rev()
+            .filter(|region| {
+                x_i32 >= region.left
+                    && x_i32 < region.right
+                    && y_i32 >= region.top
+                    && y_i32 < region.bottom
+            })
+            .find_map(|region| self.arena.scrollbar_hit_for_point(region.id, x, y))
+            .and_then(|hit| self.scrollbar_hit_for_dom(hit))
+    }
+
     pub(crate) fn handle_pointer_move(&mut self, x: u32, y: u32) {
         self.last_pointer_position = Some((x, y));
         self.refresh_pointer_shape();
     }
 
     pub(crate) fn handle_selection_event(&mut self, event: SelectionMouseEvent) -> SelectionAction {
-        self.selection
-            .handle_event(event, self.current_frame.as_ref())
+        match event.event_type {
+            SelectionMouseEventType::Down => self.handle_selection_down(event),
+            SelectionMouseEventType::Drag => {
+                let (event, autoscrolled) = self.autoscroll_selection_event(event);
+                let action = self
+                    .selection
+                    .handle_event(event, self.current_frame.as_ref());
+                if autoscrolled && matches!(action, SelectionAction::None) {
+                    SelectionAction::Redraw
+                } else {
+                    action
+                }
+            }
+            SelectionMouseEventType::Up => {
+                let (event, _) = self.autoscroll_selection_event(event);
+                let action = self
+                    .selection
+                    .handle_event(event, self.current_frame.as_ref());
+                self.selection_scroll_node = None;
+                action
+            }
+            SelectionMouseEventType::Scroll => self
+                .selection
+                .handle_event(event, self.current_frame.as_ref()),
+        }
+    }
+
+    fn handle_selection_down(&mut self, event: SelectionMouseEvent) -> SelectionAction {
+        self.repaint_current_frame_with_selection_capture();
+        let selection_scroll_node = self.selection_scroll_node_at(event.x, event.y);
+        let action = self
+            .selection
+            .handle_event(event, self.current_frame.as_ref());
+        self.selection_scroll_node = self
+            .selection
+            .is_selecting()
+            .then_some(selection_scroll_node)
+            .flatten();
+        action
+    }
+
+    fn autoscroll_selection_event(
+        &mut self,
+        event: SelectionMouseEvent,
+    ) -> (SelectionMouseEvent, bool) {
+        let Some(node) = self.selection_scroll_node else {
+            return (event, false);
+        };
+        let Some(rect) = self.arena.scrollport_absolute_rect(node) else {
+            return (event, false);
+        };
+        if rect.left >= rect.right || rect.top >= rect.bottom {
+            return (event, false);
+        }
+        let Some(metrics) = self.arena.scroll_metrics_snapshot(node) else {
+            return (event, false);
+        };
+
+        let x = event.x.min(i32::MAX as u32) as i32;
+        let y = event.y.min(i32::MAX as u32) as i32;
+        let mut next_left = metrics.scroll_left;
+        let mut next_top = metrics.scroll_top;
+
+        if x < rect.left {
+            next_left = next_left.saturating_sub((rect.left - x) as u32);
+        } else if x >= rect.right {
+            next_left = next_left.saturating_add((x - rect.right + 1) as u32);
+        }
+
+        if y < rect.top {
+            next_top = next_top.saturating_sub((rect.top - y) as u32);
+        } else if y >= rect.bottom {
+            next_top = next_top.saturating_add((y - rect.bottom + 1) as u32);
+        }
+
+        let Some(next_metrics) = self.arena.set_scroll_offset(node, next_left, next_top) else {
+            return (event, false);
+        };
+        if next_metrics.scroll_left == metrics.scroll_left
+            && next_metrics.scroll_top == metrics.scroll_top
+        {
+            return (event, false);
+        }
+
+        self.repaint_current_frame_with_selection_capture();
+        (
+            SelectionMouseEvent {
+                x: clamp_pointer_to_rect_axis(x, rect.left, rect.right),
+                y: clamp_pointer_to_rect_axis(y, rect.top, rect.bottom),
+                ..event
+            },
+            true,
+        )
+    }
+
+    fn repaint_current_frame_with_selection_capture(&mut self) {
+        if let Some((width, height)) = self
+            .current_frame
+            .as_ref()
+            .map(|frame| (frame.width(), frame.height()))
+        {
+            self.render_frame_at_with_selection_capture(width, height, Instant::now(), true);
+        }
+    }
+
+    fn selection_scroll_node_at(&self, x: u32, y: u32) -> Option<NodeId> {
+        let x = x.min(i32::MAX as u32) as i32;
+        let y = y.min(i32::MAX as u32) as i32;
+        let mut current = self
+            .hit_regions
+            .iter()
+            .rev()
+            .find(|region| {
+                x >= region.left && x < region.right && y >= region.top && y < region.bottom
+            })
+            .map(|region| region.id);
+
+        while let Some(node) = current {
+            if self.is_selection_scroll_node(node)
+                && self
+                    .arena
+                    .scrollport_absolute_rect(node)
+                    .is_some_and(|rect| rect.contains(x, y))
+            {
+                return Some(node);
+            }
+            current = self.arena.parent(node);
+        }
+
+        None
+    }
+
+    fn is_selection_scroll_node(&self, node: NodeId) -> bool {
+        let Some(metrics) = self.arena.scroll_metrics_snapshot(node) else {
+            return false;
+        };
+
+        match self.arena.kind(node) {
+            LayoutNodeKind::Element => {
+                let style = self.arena.style(node);
+                let can_scroll_x = style.overflow_x == LayoutOverflow::Scroll
+                    && metrics.scroll_width > metrics.client_width;
+                let can_scroll_y = style.overflow_y == LayoutOverflow::Scroll
+                    && metrics.scroll_height > metrics.client_height;
+                can_scroll_x || can_scroll_y
+            }
+            LayoutNodeKind::TextArea(_) => metrics.scroll_height > metrics.client_height,
+            LayoutNodeKind::Text(_) | LayoutNodeKind::Image(_) | LayoutNodeKind::Input(_) => false,
+        }
     }
 
     pub(crate) fn layout_passes(&self) -> u64 {
@@ -1134,6 +1340,21 @@ impl PaintEngine {
 
     fn dom_for(&self, node: NodeId) -> Option<DomId> {
         self.node_to_dom.get(&node).copied()
+    }
+
+    fn scrollbar_hit_for_dom(&self, hit: ArenaScrollbarHit) -> Option<ScrollbarHit> {
+        Some(ScrollbarHit {
+            target_id: self.dom_for(hit.node)?,
+            axis: hit.axis,
+            rail_start: hit.rail_start,
+            rail_length: hit.rail_length,
+            thumb_start: hit.thumb_start,
+            thumb_length: hit.thumb_length,
+            scroll_offset: hit.scroll_offset,
+            max_scroll: hit.max_scroll,
+            client_length: hit.client_length,
+            scroll_length: hit.scroll_length,
+        })
     }
 
     fn style_for(&self, id: DomId) -> Option<&DivStyle> {
@@ -1206,6 +1427,12 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
         }
         StyleMutation::OverflowX(overflow) => style.overflow_x = overflow,
         StyleMutation::OverflowY(overflow) => style.overflow_y = overflow,
+        StyleMutation::ScrollbarColor(scrollbar_color) => {
+            style.scrollbar_color = scrollbar_color;
+        }
+        StyleMutation::ScrollbarGutter(scrollbar_gutter) => {
+            style.scrollbar_gutter = scrollbar_gutter;
+        }
         StyleMutation::ImageRendering(image_rendering) => style.image_rendering = image_rendering,
         StyleMutation::WhiteSpace(white_space) => style.white_space = white_space,
         StyleMutation::FlexDirection(direction) => style.flex_direction = direction,
@@ -1327,6 +1554,8 @@ fn reset_style_property(style: &mut DivStyle, reset: StyleReset) {
         }
         StyleReset::OverflowX => style.overflow_x = default.overflow_x,
         StyleReset::OverflowY => style.overflow_y = default.overflow_y,
+        StyleReset::ScrollbarColor => style.scrollbar_color = default.scrollbar_color,
+        StyleReset::ScrollbarGutter => style.scrollbar_gutter = default.scrollbar_gutter,
         StyleReset::ImageRendering => style.image_rendering = default.image_rendering,
         StyleReset::WhiteSpace => style.white_space = default.white_space,
         StyleReset::FlexDirection => style.flex_direction = default.flex_direction,
@@ -1600,7 +1829,14 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         EngineCommand::HitTestClick { click, response } => {
             let _ = response.send(engine.click_event_for(click));
         }
+        EngineCommand::HitTestScrollbar { x, y, response } => {
+            let _ = response.send(engine.scrollbar_hit_at(x, y));
+        }
         EngineCommand::HandleSelection { event, response } => {
+            if scrollbar_suppresses_selection(engine, event) {
+                let _ = response.send(SelectionAction::None);
+                return true;
+            }
             let action = engine.handle_selection_event(event);
             if let SelectionAction::CopyToClipboard(text) = &action {
                 copy_text_to_clipboard(text);
@@ -1672,6 +1908,31 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
     true
 }
 
+fn scrollbar_suppresses_selection(engine: &mut PaintEngine, event: SelectionMouseEvent) -> bool {
+    match event.event_type {
+        SelectionMouseEventType::Down if engine.scrollbar_hit_at(event.x, event.y).is_some() => {
+            engine.scrollbar_selection_suppressed = true;
+            true
+        }
+        SelectionMouseEventType::Drag | SelectionMouseEventType::Scroll => {
+            engine.scrollbar_selection_suppressed
+        }
+        SelectionMouseEventType::Up if engine.scrollbar_selection_suppressed => {
+            engine.scrollbar_selection_suppressed = false;
+            true
+        }
+        SelectionMouseEventType::Down | SelectionMouseEventType::Up => false,
+    }
+}
+
+fn clamp_pointer_to_rect_axis(value: i32, start: i32, end: i32) -> u32 {
+    if end <= start {
+        return start.max(0) as u32;
+    }
+
+    value.clamp(start, end - 1).max(0) as u32
+}
+
 fn profile_log(label: &str, duration: std::time::Duration, fields: &[(&str, String)]) {
     if std::env::var_os("PAINTCANNON_PROFILE").is_none() {
         return;
@@ -1714,7 +1975,7 @@ mod tests {
 
     fn scroll_engine() -> (PaintEngine, DomId) {
         let mut engine = PaintEngine::new();
-        let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Length(1.0));
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(1.0));
         viewport_style.overflow_y = LayoutOverflow::Scroll;
         let viewport = engine.create_element(viewport_style);
         let mut content_style = block_style(CssDimension::Length(5.0), CssDimension::Auto);
@@ -1825,6 +2086,252 @@ mod tests {
     }
 
     #[test]
+    fn scrollbar_hit_testing_uses_rendered_regions_and_suppresses_selection() {
+        let mut engine = PaintEngine::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
+        viewport_style.overflow_x = LayoutOverflow::Scroll;
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = engine.create_element(viewport_style);
+        let child = engine.create_element(block_style(
+            CssDimension::Length(10.0),
+            CssDimension::Length(5.0),
+        ));
+        engine.append_child(viewport, child);
+        engine.set_root(viewport);
+
+        engine.render_frame(6, 3).unwrap();
+
+        let hit = engine.scrollbar_hit_at(5, 1).unwrap();
+        assert_eq!(hit.target_id, viewport);
+        assert_eq!(hit.axis, ScrollbarAxis::Vertical);
+
+        assert!(scrollbar_suppresses_selection(
+            &mut engine,
+            SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Down,
+                x: 5,
+                y: 1,
+                button: 0,
+            },
+        ));
+        assert!(scrollbar_suppresses_selection(
+            &mut engine,
+            SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Drag,
+                x: 5,
+                y: 0,
+                button: 0,
+            },
+        ));
+        assert!(scrollbar_suppresses_selection(
+            &mut engine,
+            SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Up,
+                x: 5,
+                y: 0,
+                button: 0,
+            },
+        ));
+    }
+
+    #[test]
+    fn selection_in_later_scroll_pane_does_not_capture_hidden_text_from_earlier_pane() {
+        let mut engine = PaintEngine::new();
+        let mut root_style = block_style(CssDimension::Length(20.0), CssDimension::Length(2.0));
+        root_style.display = crate::style::LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Row;
+        let root = engine.create_element(root_style);
+
+        let mut left_style = block_style(CssDimension::Length(10.0), CssDimension::Length(2.0));
+        left_style.overflow_y = LayoutOverflow::Scroll;
+        let left = engine.create_element(left_style);
+        let mut left_content_style = block_style(CssDimension::Length(10.0), CssDimension::Auto);
+        left_content_style.display = crate::style::LayoutDisplay::Flex;
+        left_content_style.flex_direction = LayoutFlexDirection::Column;
+        let left_content = engine.create_element(left_content_style);
+        for index in 0..8 {
+            let row = engine.create_element(block_style(
+                CssDimension::Length(10.0),
+                CssDimension::Length(1.0),
+            ));
+            let text = engine.create_text(format!("left-{index}"));
+            engine.append_child(row, text);
+            engine.append_child(left_content, row);
+        }
+        engine.append_child(left, left_content);
+
+        let mut right_style = block_style(CssDimension::Length(10.0), CssDimension::Length(2.0));
+        right_style.overflow_y = LayoutOverflow::Scroll;
+        let right = engine.create_element(right_style);
+        let mut right_content_style = block_style(CssDimension::Length(10.0), CssDimension::Auto);
+        right_content_style.display = crate::style::LayoutDisplay::Flex;
+        right_content_style.flex_direction = LayoutFlexDirection::Column;
+        let right_content = engine.create_element(right_content_style);
+        for text in ["RIGHT-0", "RIGHT-1"] {
+            let row = engine.create_element(block_style(
+                CssDimension::Length(10.0),
+                CssDimension::Length(1.0),
+            ));
+            let text = engine.create_text(text);
+            engine.append_child(row, text);
+            engine.append_child(right_content, row);
+        }
+        engine.append_child(right, right_content);
+
+        engine.append_child(root, left);
+        engine.append_child(root, right);
+        engine.set_root(root);
+
+        engine.render_frame(20, 2).unwrap();
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Down,
+            x: 10,
+            y: 0,
+            button: 0,
+        });
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Drag,
+            x: 16,
+            y: 0,
+            button: 0,
+        });
+        engine.render_frame(20, 2).unwrap();
+
+        let action = engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Up,
+            x: 16,
+            y: 0,
+            button: 0,
+        });
+
+        assert_eq!(
+            action,
+            SelectionAction::CopyToClipboard("RIGHT-0".to_string())
+        );
+    }
+
+    #[test]
+    fn selection_drag_below_scroll_pane_scrolls_pane_before_selecting_outside() {
+        let mut engine = PaintEngine::new();
+        let mut root_style = block_style(CssDimension::Length(12.0), CssDimension::Length(4.0));
+        root_style.display = crate::style::LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = engine.create_element(root_style);
+
+        let mut viewport_style = block_style(CssDimension::Length(12.0), CssDimension::Length(2.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = engine.create_element(viewport_style);
+        let mut content_style = block_style(CssDimension::Length(12.0), CssDimension::Auto);
+        content_style.display = crate::style::LayoutDisplay::Flex;
+        content_style.flex_direction = LayoutFlexDirection::Column;
+        let content = engine.create_element(content_style);
+        for index in 0..6 {
+            let row = engine.create_element(block_style(
+                CssDimension::Length(12.0),
+                CssDimension::Length(1.0),
+            ));
+            let text = engine.create_text(format!("RIGHT-{index}"));
+            engine.append_child(row, text);
+            engine.append_child(content, row);
+        }
+        engine.append_child(viewport, content);
+
+        let footer = engine.create_element(block_style(
+            CssDimension::Length(12.0),
+            CssDimension::Length(2.0),
+        ));
+        let footer_text = engine.create_text("FOOTER");
+        engine.append_child(footer, footer_text);
+
+        engine.append_child(root, viewport);
+        engine.append_child(root, footer);
+        engine.set_root(root);
+
+        engine.render_frame(12, 4).unwrap();
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Down,
+            x: 0,
+            y: 0,
+            button: 0,
+        });
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Drag,
+            x: 6,
+            y: 2,
+            button: 0,
+        });
+        let action = engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Up,
+            x: 6,
+            y: 2,
+            button: 0,
+        });
+
+        assert_eq!(
+            action,
+            SelectionAction::CopyToClipboard(
+                ["RIGHT-0", "RIGHT-1", "RIGHT-2", "RIGHT-3"].join("\n")
+            )
+        );
+    }
+
+    #[test]
+    fn selection_drag_right_of_scroll_pane_scrolls_pane_before_selecting_outside() {
+        let mut engine = PaintEngine::new();
+        let mut root_style = block_style(CssDimension::Length(12.0), CssDimension::Length(2.0));
+        root_style.display = crate::style::LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Row;
+        let root = engine.create_element(root_style);
+
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(2.0));
+        viewport_style.overflow_x = LayoutOverflow::Scroll;
+        let viewport = engine.create_element(viewport_style);
+        let content = engine.create_element(block_style(
+            CssDimension::Length(12.0),
+            CssDimension::Length(1.0),
+        ));
+        let content_text = engine.create_text("ABCDEFGHIJKL");
+        engine.append_child(content, content_text);
+        engine.append_child(viewport, content);
+
+        let sibling = engine.create_element(block_style(
+            CssDimension::Length(6.0),
+            CssDimension::Length(2.0),
+        ));
+        let sibling_text = engine.create_text("OUT");
+        engine.append_child(sibling, sibling_text);
+
+        engine.append_child(root, viewport);
+        engine.append_child(root, sibling);
+        engine.set_root(root);
+
+        engine.render_frame(12, 2).unwrap();
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Down,
+            x: 0,
+            y: 0,
+            button: 0,
+        });
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Drag,
+            x: 8,
+            y: 0,
+            button: 0,
+        });
+        let action = engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Up,
+            x: 8,
+            y: 0,
+            button: 0,
+        });
+
+        assert_eq!(
+            action,
+            SelectionAction::CopyToClipboard("ABCDEFGHIJKL".to_string())
+        );
+    }
+
+    #[test]
     fn percent_scroll_demo_keeps_widths_after_scroll_text_updates() {
         let mut engine = PaintEngine::new();
 
@@ -1848,18 +2355,11 @@ mod tests {
         let body = engine.create_element(body_style);
 
         let mut viewport_style =
-            block_style(CssDimension::Percent(0.85), CssDimension::Percent(1.0));
+            block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
         viewport_style.overflow_y = LayoutOverflow::Scroll;
         viewport_style.overflow_x = LayoutOverflow::Hidden;
         viewport_style.background = Background::Blue;
         let viewport = engine.create_element(viewport_style);
-
-        let mut rail_style = block_style(CssDimension::Percent(0.15), CssDimension::Percent(1.0));
-        rail_style.background = Background::Magenta;
-        rail_style.white_space = CssWhiteSpace::Pre;
-        let rail = engine.create_element(rail_style);
-        let scrollbar = engine.create_text("|");
-        engine.append_child(rail, scrollbar);
 
         let mut content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
         content_style.display = crate::style::LayoutDisplay::Flex;
@@ -1879,23 +2379,18 @@ mod tests {
 
         engine.append_child(viewport, content);
         engine.append_child(body, viewport);
-        engine.append_child(body, rail);
         engine.append_child(root, header);
         engine.append_child(root, body);
         engine.set_root(root);
 
         engine.render_frame(80, 24).unwrap();
         let viewport_node = engine.node_for(viewport).unwrap();
-        let rail_node = engine.node_for(rail).unwrap();
         let first_row_node = engine.node_for(row_ids[0]).unwrap();
         let fourth_row_node = engine.node_for(row_ids[3]).unwrap();
         let before_viewport = engine.arena.layout(viewport_node);
-        let before_rail = engine.arena.layout(rail_node);
-        assert_eq!(before_viewport.size.width, 68.0);
-        assert_eq!(before_rail.location.x, 68.0);
-        assert_eq!(before_rail.size.width, 12.0);
-        assert_eq!(engine.arena.layout(first_row_node).size.width, 68.0);
-        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 68.0);
+        assert_eq!(before_viewport.size.width, 80.0);
+        assert_eq!(engine.arena.layout(first_row_node).size.width, 79.0);
+        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 79.0);
 
         let metrics = engine
             .set_scroll_offset_for_size(viewport, 0, 3, 80, 24)
@@ -1907,24 +2402,16 @@ mod tests {
                 metrics.scroll_top, metrics.scroll_height, metrics.client_height
             ),
         );
-        engine.set_text(
-            scrollbar,
-            "|\n|\n#\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|\n|",
-        );
 
         let frame = engine.render_frame(80, 24).unwrap();
         let after_viewport = engine.arena.layout(viewport_node);
-        let after_rail = engine.arena.layout(rail_node);
 
-        assert_eq!(after_viewport.size.width, 68.0);
-        assert_eq!(after_rail.location.x, 68.0);
-        assert_eq!(after_rail.size.width, 12.0);
-        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 68.0);
+        assert_eq!(after_viewport.size.width, 80.0);
+        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 79.0);
         let visible_row_prefix: String = (0..11)
             .map(|x| frame.cell(x, 2).unwrap().character)
             .collect();
         assert_eq!(visible_row_prefix, "percent row");
-        assert_eq!(frame.cell(68, 2).unwrap().background, Background::Magenta);
     }
 
     #[test]

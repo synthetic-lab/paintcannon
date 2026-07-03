@@ -57,6 +57,7 @@
     "demo:margin": "npm run build:debug && node dist/examples/margin.js",
     "demo:overflow": "npm run build:debug && node dist/examples/overflow.js",
     "demo:pong": "npm run build:debug && node dist/examples/pong.js",
+    "demo:native-scroll": "npm run build:debug && node dist/examples/native-scroll.js",
     "demo:scroll": "npm run build:debug && node dist/examples/scroll.js",
     "demo:scroll-percent": "npm run build:debug && node dist/examples/scroll-percent.js",
     "demo:scroll-percent-static": "npm run build:debug && node dist/examples/scroll-percent-static.js",

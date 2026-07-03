@@ -15,18 +15,20 @@ use termprofile::{DetectorSettings, TermProfile};
 
 use crate::engine::{
     apply_style_mutation, engine_loop, ClickEvent as EngineClickEvent, DomId, EngineCommand,
-    EngineTransitionEvent, MouseClick, StyleMutation, StyleReset,
+    EngineTransitionEvent, MouseClick, ScrollbarHit as EngineScrollbarHit, StyleMutation,
+    StyleReset,
 };
 use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseEvent, TerminalResizeEvent};
-use crate::layout::ArenaScrollMetrics;
+use crate::layout::{ArenaScrollMetrics, ScrollbarAxis};
 use crate::style::{
     parse_align_items, parse_border_style, parse_box_lengths, parse_cursor, parse_dimension,
     parse_display, parse_flex_direction, parse_flex_flow, parse_flex_shorthand, parse_flex_wrap,
     parse_font_style, parse_font_weight, parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks,
     parse_grid_line, parse_grid_placement, parse_grid_template_tracks, parse_image_rendering,
     parse_justify_content, parse_length_percentage, parse_length_percentage_auto,
-    parse_margin_lengths, parse_non_negative_number, parse_overflow, parse_text_decoration_line,
-    parse_transition, parse_white_space, Background,
+    parse_margin_lengths, parse_non_negative_number, parse_overflow, parse_scrollbar_color,
+    parse_scrollbar_gutter, parse_text_decoration_line, parse_transition, parse_white_space,
+    Background,
 };
 use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
@@ -56,6 +58,21 @@ pub struct ScrollMetrics {
     pub scroll_height: u32,
     pub client_width: u32,
     pub client_height: u32,
+}
+
+#[derive(Clone, Debug)]
+#[napi(object)]
+pub struct ScrollbarHit {
+    pub target_id: u32,
+    pub axis: String,
+    pub rail_start: u32,
+    pub rail_length: u32,
+    pub thumb_start: u32,
+    pub thumb_length: u32,
+    pub scroll_offset: u32,
+    pub max_scroll: u32,
+    pub client_length: u32,
+    pub scroll_length: u32,
 }
 
 #[derive(Clone)]
@@ -752,6 +769,20 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn scrollbar_hit_for_point(&self, x: u32, y: u32) -> Result<Option<ScrollbarHit>> {
+        let (response_tx, response_rx) = bounded(1);
+        self.send(EngineCommand::HitTestScrollbar {
+            x,
+            y,
+            response: response_tx,
+        })?;
+        response_rx
+            .recv()
+            .map_err(|_| Error::from_reason("renderer thread stopped"))
+            .map(|hit| hit.map(scrollbar_hit_to_napi))
+    }
+
+    #[napi]
     pub fn set_scroll_offset(
         &self,
         id: u32,
@@ -912,6 +943,12 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
         "overflow" => StyleMutation::Overflow(parse_overflow(value)?),
         "overflow-x" | "overflowX" => StyleMutation::OverflowX(parse_overflow(value)?),
         "overflow-y" | "overflowY" => StyleMutation::OverflowY(parse_overflow(value)?),
+        "scrollbar-color" | "scrollbarColor" => {
+            StyleMutation::ScrollbarColor(parse_scrollbar_color(value)?)
+        }
+        "scrollbar-gutter" | "scrollbarGutter" => {
+            StyleMutation::ScrollbarGutter(parse_scrollbar_gutter(value)?)
+        }
         "image-rendering" | "imageRendering" => {
             StyleMutation::ImageRendering(parse_image_rendering(value)?)
         }
@@ -1092,6 +1129,8 @@ fn style_reset(property: &str) -> Result<StyleReset> {
         "overflow" => StyleReset::Overflow,
         "overflow-x" | "overflowX" => StyleReset::OverflowX,
         "overflow-y" | "overflowY" => StyleReset::OverflowY,
+        "scrollbar-color" | "scrollbarColor" => StyleReset::ScrollbarColor,
+        "scrollbar-gutter" | "scrollbarGutter" => StyleReset::ScrollbarGutter,
         "image-rendering" | "imageRendering" => StyleReset::ImageRendering,
         "white-space" | "whiteSpace" => StyleReset::WhiteSpace,
         "flex-direction" | "flexDirection" => StyleReset::FlexDirection,
@@ -1170,6 +1209,25 @@ fn scroll_metrics_to_napi(metrics: ArenaScrollMetrics) -> ScrollMetrics {
         scroll_height: metrics.scroll_height,
         client_width: metrics.client_width,
         client_height: metrics.client_height,
+    }
+}
+
+fn scrollbar_hit_to_napi(hit: EngineScrollbarHit) -> ScrollbarHit {
+    ScrollbarHit {
+        target_id: hit.target_id.0,
+        axis: match hit.axis {
+            ScrollbarAxis::Horizontal => "x",
+            ScrollbarAxis::Vertical => "y",
+        }
+        .to_string(),
+        rail_start: hit.rail_start,
+        rail_length: hit.rail_length,
+        thumb_start: hit.thumb_start,
+        thumb_length: hit.thumb_length,
+        scroll_offset: hit.scroll_offset,
+        max_scroll: hit.max_scroll,
+        client_length: hit.client_length,
+        scroll_length: hit.scroll_length,
     }
 }
 

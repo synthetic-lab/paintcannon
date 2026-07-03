@@ -1,10 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  CSSStyleProperties,
-  PaintChangeEvent,
-  PaintKeyboardEvent,
-  PaintScrollEvent,
-} from "paintcannon";
+import React, { useEffect, useRef, useState } from "react";
+import type { CSSStyleProperties, PaintChangeEvent, PaintKeyboardEvent } from "paintcannon";
 import {
   Button,
   Div,
@@ -23,16 +18,10 @@ interface Todo {
   completed: boolean;
 }
 
-interface TodoScrollMetrics {
-  scrollTop: number;
-  scrollHeight: number;
-  clientHeight: number;
-}
-
 type HoverTarget = "add" | `check:${number}` | `edit:${number}` | `delete:${number}`;
 
 function TodoApp(): React.ReactElement {
-  const { exit, paintCannon } = useApp();
+  const { exit } = useApp();
   const listRef = useRef<DivElement | null>(null);
   const mainInputRef = useRef<InputElement | null>(null);
   const editReturnSelectionIdRef = useRef<number | undefined>(undefined);
@@ -51,38 +40,6 @@ function TodoApp(): React.ReactElement {
   const [selectedIndex, setSelectedIndex] = useState<number | undefined>();
   const [mainInputFocused, setMainInputFocused] = useState(false);
   const [hovered, setHovered] = useState<HoverTarget | undefined>();
-  const [scrollMetrics, setScrollMetrics] = useState<TodoScrollMetrics>({
-    scrollTop: 0,
-    scrollHeight: 0,
-    clientHeight: 0,
-  });
-
-  const updateScrollMetrics = useCallback((metrics: TodoScrollMetrics): void => {
-    setScrollMetrics(current =>
-      current.scrollTop === metrics.scrollTop &&
-      current.scrollHeight === metrics.scrollHeight &&
-      current.clientHeight === metrics.clientHeight
-        ? current
-        : metrics,
-    );
-  }, []);
-
-  const readListScrollMetrics = useCallback((): void => {
-    const list = listRef.current;
-    if (list === null) {
-      return;
-    }
-
-    updateScrollMetrics({
-      scrollTop: list.scrollTop,
-      scrollHeight: list.scrollHeight,
-      clientHeight: list.clientHeight,
-    });
-  }, [updateScrollMetrics]);
-
-  useEffect(() => {
-    readListScrollMetrics();
-  }, [todos, editingId, editingText, readListScrollMetrics]);
 
   useEffect(() => {
     if (selectedIndex === undefined) {
@@ -119,15 +76,7 @@ function TodoApp(): React.ReactElement {
     } else if (rowBottom > visibleBottom) {
       list.scrollTop = Math.max(0, rowBottom - list.clientHeight);
     }
-
-    readListScrollMetrics();
-  }, [readListScrollMetrics, selectedIndex]);
-
-  useEffect(() => {
-    const handleResize = (): void => readListScrollMetrics();
-    paintCannon.addEventListener("resize", handleResize);
-    return () => paintCannon.removeEventListener("resize", handleResize);
-  }, [paintCannon, readListScrollMetrics]);
+  }, [selectedIndex]);
 
   const addTodo = (): void => {
     const text = draft.trim();
@@ -387,14 +336,7 @@ function TodoApp(): React.ReactElement {
               border: "rounded",
               borderColor: "#334155",
               backgroundColor: "#111827",
-            }}
-            onScroll={(event: PaintScrollEvent) => {
-              const list = listRef.current;
-              updateScrollMetrics({
-                scrollTop: event.scrollTop,
-                scrollHeight: event.scrollHeight,
-                clientHeight: list?.clientHeight ?? 0,
-              });
+              scrollbarColor: "#38bdf8 #334155",
             }}
           >
             {todos.length === 0 ? (
@@ -422,7 +364,6 @@ function TodoApp(): React.ReactElement {
               ))
             )}
           </Div>
-          <ScrollRail metrics={scrollMetrics} />
         </Div>
         <Div style={{ color: selectedIndex === undefined ? "#64748b" : "#38bdf8" }}>
           {selectionInstruction}
@@ -434,47 +375,6 @@ function TodoApp(): React.ReactElement {
     </Div>
   );
 }
-
-function ScrollRail({ metrics }: { metrics: TodoScrollMetrics }): React.ReactElement {
-  const clientHeight = Math.max(0, Math.floor(metrics.clientHeight));
-  const scrollHeight = Math.max(clientHeight, Math.floor(metrics.scrollHeight));
-  const overflow = scrollHeight > clientHeight && clientHeight > 0;
-  const trackHeight = Math.max(1, clientHeight + todoListVerticalChrome);
-  const thumbHeight = overflow
-    ? Math.max(1, Math.floor((trackHeight * clientHeight) / scrollHeight))
-    : trackHeight;
-  const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
-  const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
-  const thumbTop =
-    overflow && maxScrollTop > 0 ? Math.round((metrics.scrollTop / maxScrollTop) * maxThumbTop) : 0;
-  const thumbBottom = Math.max(0, trackHeight - thumbTop - thumbHeight);
-
-  return (
-    <Div
-      style={{
-        width: 1,
-        height: trackHeight,
-        display: "flex",
-        flexDirection: "column",
-        flexShrink: 0,
-        backgroundColor: "#111827",
-      }}
-    >
-      <Div style={{ height: thumbTop, width: 1, flexShrink: 0 }} />
-      <Div
-        style={{
-          height: thumbHeight,
-          width: 1,
-          flexShrink: 0,
-          backgroundColor: overflow ? "#38bdf8" : "#334155",
-        }}
-      />
-      <Div style={{ height: thumbBottom, width: 1, flexShrink: 0 }} />
-    </Div>
-  );
-}
-
-const todoListVerticalChrome = 2;
 const todoRowHeight = 3;
 const todoRowStride = 4;
 const selectedRowBackground = "#1e3a5f";
