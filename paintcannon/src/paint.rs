@@ -276,14 +276,10 @@ impl<'a, 'out> Painter<'a, 'out> {
             self.output.frame.write_decoration_glyph(
                 rail.left,
                 rail.top + row as i32,
-                if is_thumb { '█' } else { ' ' },
+                ' ',
                 GlyphStyle {
-                    background,
-                    foreground: if is_thumb {
-                        thumb_color
-                    } else {
-                        Background::Default
-                    },
+                    background: if is_thumb { thumb_color } else { background },
+                    foreground: Background::Default,
                     selection_background: None,
                     bold: false,
                     italic: false,
@@ -339,14 +335,10 @@ impl<'a, 'out> Painter<'a, 'out> {
             self.output.frame.write_decoration_glyph(
                 rail.left + column as i32,
                 rail.top,
-                if is_thumb { '█' } else { ' ' },
+                ' ',
                 GlyphStyle {
-                    background,
-                    foreground: if is_thumb {
-                        thumb_color
-                    } else {
-                        Background::Default
-                    },
+                    background: if is_thumb { thumb_color } else { background },
+                    foreground: Background::Default,
                     selection_background: None,
                     bold: false,
                     italic: false,
@@ -1470,12 +1462,12 @@ mod tests {
             output.frame.cell(5, 0).unwrap().foreground,
             Background::Default
         );
-        assert_eq!(output.frame.cell(5, 2).unwrap().character, '█');
-        assert_eq!(output.frame.cell(5, 2).unwrap().foreground, Background::Red);
+        assert_eq!(output.frame.cell(5, 2).unwrap().character, ' ');
         assert_eq!(
-            output.frame.cell(5, 2).unwrap().background,
-            Background::Black
+            output.frame.cell(5, 2).unwrap().foreground,
+            Background::Default
         );
+        assert_eq!(output.frame.cell(5, 2).unwrap().background, Background::Red);
         assert_eq!(output.frame.cell(5, 2).unwrap().selection_order, None);
     }
 
@@ -1520,12 +1512,12 @@ mod tests {
             output.frame.cell(0, 2).unwrap().foreground,
             Background::Default
         );
-        assert_eq!(output.frame.cell(5, 2).unwrap().character, '█');
-        assert_eq!(output.frame.cell(5, 2).unwrap().foreground, Background::Red);
+        assert_eq!(output.frame.cell(5, 2).unwrap().character, ' ');
         assert_eq!(
-            output.frame.cell(5, 2).unwrap().background,
-            Background::Black
+            output.frame.cell(5, 2).unwrap().foreground,
+            Background::Default
         );
+        assert_eq!(output.frame.cell(5, 2).unwrap().background, Background::Red);
         assert_eq!(output.frame.cell(5, 2).unwrap().selection_order, None);
     }
 
@@ -1560,8 +1552,18 @@ mod tests {
         let metrics = arena.scroll_metrics(viewport).unwrap();
         assert_eq!(metrics.client_width, 5);
         assert_eq!(metrics.client_height, 3);
-        assert_eq!(output.frame.cell(5, 2).unwrap().character, '█');
-        assert_eq!(output.frame.cell(4, 3).unwrap().character, '█');
+        assert_eq!(output.frame.cell(5, 2).unwrap().character, ' ');
+        assert_eq!(output.frame.cell(5, 2).unwrap().background, Background::Red);
+        assert_eq!(
+            output.frame.cell(5, 2).unwrap().foreground,
+            Background::Default
+        );
+        assert_eq!(output.frame.cell(4, 3).unwrap().character, ' ');
+        assert_eq!(output.frame.cell(4, 3).unwrap().background, Background::Red);
+        assert_eq!(
+            output.frame.cell(4, 3).unwrap().foreground,
+            Background::Default
+        );
         assert_eq!(output.frame.cell(5, 3).unwrap().character, ' ');
         assert_eq!(
             output.frame.cell(5, 3).unwrap().background,
@@ -1571,6 +1573,113 @@ mod tests {
             output.frame.cell(5, 3).unwrap().foreground,
             Background::Default
         );
+    }
+
+    #[test]
+    fn synthe_style_row_backgrounds_do_not_overpaint_stable_scrollbar_thumb() {
+        let mut arena = LayoutArena::new();
+        let mut shell_style = block_style(CssDimension::Length(16.0), CssDimension::Length(6.0));
+        shell_style.border_top = BorderStyle::Rounded;
+        shell_style.border_bottom = BorderStyle::Rounded;
+        shell_style.overflow_x = LayoutOverflow::Hidden;
+        shell_style.overflow_y = LayoutOverflow::Hidden;
+        let shell = arena.create_element(shell_style);
+
+        let mut viewport_style = block_style(CssDimension::Percent(1.0), CssDimension::Length(4.0));
+        viewport_style.display = LayoutDisplay::Flex;
+        viewport_style.flex_direction = LayoutFlexDirection::Column;
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.overflow_x = LayoutOverflow::Hidden;
+        viewport_style.scrollbar_gutter = crate::style::ScrollbarGutter::Stable;
+        viewport_style.background = Background::Black;
+        viewport_style.scrollbar_color = crate::style::ScrollbarColor::Colors {
+            thumb: Background::White,
+            track: Background::Black,
+        };
+        let viewport = arena.create_element(viewport_style);
+
+        let mut content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        content_style.display = LayoutDisplay::Flex;
+        content_style.flex_direction = LayoutFlexDirection::Column;
+        let content = arena.create_element(content_style);
+
+        for index in 0..12 {
+            let mut row_style = block_style(CssDimension::Percent(1.0), CssDimension::Length(1.0));
+            row_style.display = LayoutDisplay::Flex;
+            row_style.flex_direction = LayoutFlexDirection::Row;
+            row_style.overflow_x = LayoutOverflow::Hidden;
+            row_style.overflow_y = LayoutOverflow::Hidden;
+            let row = arena.create_element(row_style);
+
+            let mut span_style = block_style(CssDimension::Length(15.0), CssDimension::Length(1.0));
+            span_style.display = LayoutDisplay::Inline;
+            span_style.background = Background::Blue;
+            span_style.overflow_x = LayoutOverflow::Hidden;
+            span_style.overflow_y = LayoutOverflow::Hidden;
+            let span = arena.create_element(span_style);
+            let text = arena.create_text(format!("row-{index:02}          "));
+            arena.append_child(span, text);
+            arena.append_child(row, span);
+            arena.append_child(content, row);
+        }
+
+        arena.append_child(viewport, content);
+        arena.append_child(shell, viewport);
+        arena.compute_layout(
+            shell,
+            Size {
+                width: AvailableSpace::Definite(16.0),
+                height: AvailableSpace::Definite(6.0),
+            },
+        );
+        arena.set_scroll_offset(viewport, 0, 8);
+
+        let output = paint_arena(&arena, shell, 16, 6, false);
+
+        assert_eq!(output.frame.cell(15, 3).unwrap().character, ' ');
+        assert_eq!(
+            output.frame.cell(15, 3).unwrap().foreground,
+            Background::Default
+        );
+        assert_eq!(
+            output.frame.cell(15, 3).unwrap().background,
+            Background::White
+        );
+    }
+
+    #[test]
+    fn vertical_scrollbar_thumb_owns_the_full_cell_background() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.background = Background::Blue;
+        viewport_style.scrollbar_gutter = crate::style::ScrollbarGutter::Stable;
+        viewport_style.scrollbar_color = crate::style::ScrollbarColor::Colors {
+            thumb: Background::White,
+            track: Background::Blue,
+        };
+        let viewport = arena.create_element(viewport_style);
+
+        let child = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(8.0),
+        ));
+        arena.append_child(viewport, child);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+        arena.set_scroll_offset(viewport, 0, 5);
+        let output = paint_arena(&arena, viewport, 6, 3, false);
+
+        let thumb = output.frame.cell(5, 2).unwrap();
+        assert_eq!(thumb.character, ' ');
+        assert_eq!(thumb.background, Background::White);
+        assert_eq!(thumb.foreground, Background::Default);
     }
 
     #[test]
