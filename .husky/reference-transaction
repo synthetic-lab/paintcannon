@@ -32,6 +32,6 @@ while read -r _old_oid new_oid ref_name; do
   esac
 done
 
-if [ "$run_release_check" = "1" ]; then
+if [ "$run_release_check" = "1" ] && [ "${PAINTCANNON_RELEASE_CHECK_DONE:-}" != "1" ]; then
   npm run release:check
 fi
