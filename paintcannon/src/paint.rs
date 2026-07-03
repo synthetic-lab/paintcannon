@@ -10,7 +10,8 @@ use crate::layout::{
 };
 use crate::style::{
     Background, ColorTransitionProperty, CssFontStyle, CssFontWeight, CssTextDecorationLine,
-    DivStyle, ImageRendering, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap, LayoutOverflow,
+    CssVisibility, DivStyle, ImageRendering, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap,
+    LayoutOverflow,
 };
 use crate::text::parse_text_for_single_line;
 use crate::text_wrap::WrappedText;
@@ -109,6 +110,7 @@ pub(crate) fn paint_arena_with_options(
                 bold: false,
                 italic: false,
                 underline: false,
+                visible: true,
                 clip: ClipBounds::unbounded(),
             },
         );
@@ -133,6 +135,7 @@ struct PaintState {
     bold: bool,
     italic: bool,
     underline: bool,
+    visible: bool,
     clip: ClipBounds,
 }
 
@@ -161,8 +164,9 @@ impl<'a, 'out> Painter<'a, 'out> {
 
     fn paint_element(&mut self, id: NodeId, bounds: ClipRect, state: PaintState) {
         let style = self.arena.style(id);
+        let visible = effective_visibility(style.visibility, state.visible);
         let layout = self.arena.layout(id);
-        let background = effective_background(
+        let painted_background = effective_background(
             self.paint_color(
                 id,
                 ColorTransitionProperty::BackgroundColor,
@@ -177,27 +181,39 @@ impl<'a, 'out> Painter<'a, 'out> {
         let selection_background = style.selection_background.or(state.selection_background);
         let text_state = apply_text_style(style, state);
 
-        push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
+        if visible {
+            push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
+        }
         let content = content_box_rect(bounds, layout);
         let scrollport = scrollport_rect(bounds, layout);
-        self.output
-            .frame
-            .fill_rect(bounds, background, selection_background, state.clip);
-        self.output
-            .frame
-            .clear_chunky_rounded_corners(bounds, style, state.clip);
+        if visible {
+            self.output.frame.fill_rect(
+                bounds,
+                painted_background,
+                selection_background,
+                state.clip,
+            );
+            self.output
+                .frame
+                .clear_chunky_rounded_corners(bounds, style, state.clip);
+        }
 
         let child_clip = child_clip_for(style.overflow_x, style.overflow_y, scrollport, state.clip);
         let (scroll_left, scroll_top) = self.arena.scroll_offset(id);
         let child_state = PaintState {
             parent_x: bounds.left - scroll_offset_cells(style.overflow_x, scroll_left),
             parent_y: bounds.top - scroll_offset_cells(style.overflow_y, scroll_top),
-            background,
+            background: if visible {
+                painted_background
+            } else {
+                state.background
+            },
             selection_background,
             foreground,
             bold: text_state.bold,
             italic: text_state.italic,
             underline: text_state.underline,
+            visible,
             clip: child_clip,
         };
 
@@ -217,18 +233,20 @@ impl<'a, 'out> Painter<'a, 'out> {
             );
         }
 
-        self.paint_vertical_scrollbar(id, bounds, layout, background, state.clip);
-        self.paint_horizontal_scrollbar(id, bounds, layout, background, state.clip);
+        if visible {
+            self.paint_vertical_scrollbar(id, bounds, layout, painted_background, state.clip);
+            self.paint_horizontal_scrollbar(id, bounds, layout, painted_background, state.clip);
 
-        let border_color =
-            self.paint_color(id, ColorTransitionProperty::BorderColor, style.border_color);
-        self.output.frame.stroke_border(
-            bounds,
-            style,
-            border_color,
-            selection_background,
-            state.clip,
-        );
+            let border_color =
+                self.paint_color(id, ColorTransitionProperty::BorderColor, style.border_color);
+            self.output.frame.stroke_border(
+                bounds,
+                style,
+                border_color,
+                selection_background,
+                state.clip,
+            );
+        }
     }
 
     fn paint_vertical_scrollbar(
@@ -357,6 +375,9 @@ impl<'a, 'out> Painter<'a, 'out> {
         state: PaintState,
     ) {
         let style = self.arena.style(id);
+        if !effective_visibility(style.visibility, state.visible) {
+            return;
+        }
         let background = effective_background(
             self.paint_color(
                 id,
@@ -404,6 +425,9 @@ impl<'a, 'out> Painter<'a, 'out> {
         state: PaintState,
     ) {
         let style = self.arena.style(id);
+        if !effective_visibility(style.visibility, state.visible) {
+            return;
+        }
         let background = effective_background(
             self.paint_color(
                 id,
@@ -460,6 +484,9 @@ impl<'a, 'out> Painter<'a, 'out> {
         state: PaintState,
     ) {
         let style = self.arena.style(id);
+        if !effective_visibility(style.visibility, state.visible) {
+            return;
+        }
         let background = effective_background(
             self.paint_color(
                 id,
@@ -511,6 +538,9 @@ impl<'a, 'out> Painter<'a, 'out> {
     }
 
     fn paint_text(&mut self, text: &str, x: i32, y: i32, state: PaintState) {
+        if !state.visible {
+            return;
+        }
         let style = GlyphStyle {
             background: state.background,
             foreground: state.foreground,
@@ -534,13 +564,20 @@ impl<'a, 'out> Painter<'a, 'out> {
                 fragment.width as i32,
                 fragment.height as i32,
             );
-            if let Some(hit_node) = fragment.hit_node {
-                push_hit_region(&mut self.output.hit_regions, hit_node, rect, state.clip);
-            }
-
             match fragment.kind {
                 InlineFragmentKind::Text { character, .. } => {
                     let fragment_state = self.inline_fragment_state(id, fragment.node, state);
+                    if !fragment_state.visible {
+                        continue;
+                    }
+                    if let Some(hit_node) = fragment.hit_node {
+                        push_hit_region(
+                            &mut self.output.hit_regions,
+                            hit_node,
+                            rect,
+                            fragment_state.clip,
+                        );
+                    }
                     let glyph_style = GlyphStyle {
                         background: fragment_state.background,
                         foreground: fragment_state.foreground,
@@ -587,26 +624,33 @@ impl<'a, 'out> Painter<'a, 'out> {
                 continue;
             }
             let style = self.arena.style(node);
-            state.background = effective_background(
-                self.paint_color(
-                    node,
-                    ColorTransitionProperty::BackgroundColor,
-                    style.background,
-                ),
-                state.background,
-            );
+            let visible = effective_visibility(style.visibility, state.visible);
+            if visible {
+                state.background = effective_background(
+                    self.paint_color(
+                        node,
+                        ColorTransitionProperty::BackgroundColor,
+                        style.background,
+                    ),
+                    state.background,
+                );
+            }
             state.foreground = effective_background(
                 self.paint_color(node, ColorTransitionProperty::Color, style.color),
                 state.foreground,
             );
             state.selection_background = style.selection_background.or(state.selection_background);
             state = apply_text_style(style, state);
+            state.visible = visible;
         }
 
         state
     }
 
     fn paint_inline_replaced(&mut self, node: NodeId, rect: ClipRect, state: PaintState) {
+        if !state.visible {
+            return;
+        }
         match self.arena.kind(node) {
             LayoutNodeKind::Image(image) => {
                 self.paint_image_node(node, image, rect, state);
@@ -735,6 +779,14 @@ fn effective_background(value: Background, inherited: Background) -> Background 
         inherited
     } else {
         value
+    }
+}
+
+fn effective_visibility(value: CssVisibility, inherited: bool) -> bool {
+    match value {
+        CssVisibility::Inherit => inherited,
+        CssVisibility::Visible => true,
+        CssVisibility::Hidden => false,
     }
 }
 
@@ -1221,7 +1273,7 @@ mod tests {
 
     use crate::style::{
         BorderStyle, CssDimension, CssFontStyle, CssFontWeight, CssLengthPercentage,
-        CssTextDecorationLine, ImageRendering, LayoutAlignItems, LayoutDisplay,
+        CssTextDecorationLine, CssVisibility, ImageRendering, LayoutAlignItems, LayoutDisplay,
         LayoutFlexDirection,
     };
 
@@ -1261,6 +1313,172 @@ mod tests {
             output.frame.cell(0, 0).unwrap().foreground,
             Background::White
         );
+    }
+
+    #[test]
+    fn hidden_block_keeps_layout_space_without_painting_or_hit_testing() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(4.0), CssDimension::Length(2.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = arena.create_element(root_style);
+
+        let mut hidden_style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
+        hidden_style.visibility = CssVisibility::Hidden;
+        hidden_style.background = Background::Red;
+        let hidden = arena.create_element(hidden_style);
+        let hidden_text = arena.create_text("no");
+        arena.append_child(hidden, hidden_text);
+
+        let visible = arena.create_element(block_style(
+            CssDimension::Length(4.0),
+            CssDimension::Length(1.0),
+        ));
+        let visible_text = arena.create_text("ok");
+        arena.append_child(visible, visible_text);
+        arena.append_child(root, hidden);
+        arena.append_child(root, visible);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 4, 2, false);
+
+        assert_eq!(arena.layout(visible).location.y, 1.0);
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, ' ');
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().background,
+            Background::Default
+        );
+        assert_ne!(output.target_at(0, 0), Some(hidden));
+        assert_eq!(output.frame.cell(0, 1).unwrap().character, 'o');
+        assert_eq!(output.frame.cell(1, 1).unwrap().character, 'k');
+        assert_eq!(output.target_at(0, 1), Some(visible));
+    }
+
+    #[test]
+    fn visible_block_descendant_can_paint_inside_hidden_parent() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(block_style(
+            CssDimension::Length(4.0),
+            CssDimension::Length(1.0),
+        ));
+
+        let mut hidden_style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
+        hidden_style.visibility = CssVisibility::Hidden;
+        hidden_style.background = Background::Red;
+        let hidden = arena.create_element(hidden_style);
+
+        let mut visible_style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
+        visible_style.visibility = CssVisibility::Visible;
+        let visible = arena.create_element(visible_style);
+        let visible_text = arena.create_text("ok");
+        arena.append_child(visible, visible_text);
+        arena.append_child(hidden, visible);
+        arena.append_child(root, hidden);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 4, 1, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'o');
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, 'k');
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().background,
+            Background::Default
+        );
+        assert_ne!(output.target_at(0, 0), Some(hidden));
+        assert_eq!(output.target_at(0, 0), Some(visible));
+    }
+
+    #[test]
+    fn hidden_inline_span_keeps_layout_space_without_painting_or_hit_testing() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(block_style(
+            CssDimension::Length(4.0),
+            CssDimension::Length(1.0),
+        ));
+
+        let mut hidden_style = DivStyle::default();
+        hidden_style.display = LayoutDisplay::Inline;
+        hidden_style.visibility = CssVisibility::Hidden;
+        hidden_style.background = Background::Red;
+        let hidden = arena.create_element(hidden_style);
+        let hidden_text = arena.create_text("no");
+        arena.append_child(hidden, hidden_text);
+
+        let mut visible_style = DivStyle::default();
+        visible_style.display = LayoutDisplay::Inline;
+        let visible = arena.create_element(visible_style);
+        let visible_text = arena.create_text("ok");
+        arena.append_child(visible, visible_text);
+        arena.append_child(root, hidden);
+        arena.append_child(root, visible);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 4, 1, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, ' ');
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, ' ');
+        assert_eq!(output.frame.cell(2, 0).unwrap().character, 'o');
+        assert_eq!(output.frame.cell(3, 0).unwrap().character, 'k');
+        assert_ne!(output.target_at(0, 0), Some(hidden));
+        assert_eq!(output.target_at(2, 0), Some(visible));
+    }
+
+    #[test]
+    fn visible_inline_descendant_can_paint_inside_hidden_inline_parent() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(block_style(
+            CssDimension::Length(4.0),
+            CssDimension::Length(1.0),
+        ));
+
+        let mut hidden_style = DivStyle::default();
+        hidden_style.display = LayoutDisplay::Inline;
+        hidden_style.visibility = CssVisibility::Hidden;
+        let hidden = arena.create_element(hidden_style);
+
+        let mut visible_style = DivStyle::default();
+        visible_style.display = LayoutDisplay::Inline;
+        visible_style.visibility = CssVisibility::Visible;
+        let visible = arena.create_element(visible_style);
+        let visible_text = arena.create_text("ok");
+        arena.append_child(visible, visible_text);
+        arena.append_child(hidden, visible);
+        arena.append_child(root, hidden);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 4, 1, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'o');
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, 'k');
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().background,
+            Background::Default
+        );
+        assert_eq!(output.target_at(0, 0), Some(visible));
     }
 
     #[test]

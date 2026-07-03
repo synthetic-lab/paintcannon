@@ -18,6 +18,7 @@ PaintCannon supports the following CSS layout and paint features:
 - Inline layout
 - Margins and padding, including auto margins
 - Overflow hidden and scroll, with native mouse scrolling
+- `visibility: hidden`, which preserves layout space while suppressing paint and hit testing
 - 24-bit RGB background, border, text, placeholder, and selection coloring with 256-color and
   16-color fallbacks
 - CSS transitions for color properties

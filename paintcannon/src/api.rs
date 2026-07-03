@@ -27,8 +27,8 @@ use crate::style::{
     parse_grid_line, parse_grid_placement, parse_grid_template_tracks, parse_image_rendering,
     parse_justify_content, parse_length_percentage, parse_length_percentage_auto,
     parse_margin_lengths, parse_non_negative_number, parse_overflow, parse_scrollbar_color,
-    parse_scrollbar_gutter, parse_text_decoration_line, parse_transition, parse_white_space,
-    Background,
+    parse_scrollbar_gutter, parse_text_decoration_line, parse_transition, parse_visibility,
+    parse_white_space, Background,
 };
 use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
@@ -940,6 +940,7 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
 
     let mutation = match property {
         "display" => StyleMutation::Display(parse_display(value)?),
+        "visibility" => StyleMutation::Visibility(parse_visibility(value)?),
         "overflow" => StyleMutation::Overflow(parse_overflow(value)?),
         "overflow-x" | "overflowX" => StyleMutation::OverflowX(parse_overflow(value)?),
         "overflow-y" | "overflowY" => StyleMutation::OverflowY(parse_overflow(value)?),
@@ -1126,6 +1127,7 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
 fn style_reset(property: &str) -> Result<StyleReset> {
     let reset = match property {
         "display" => StyleReset::Display,
+        "visibility" => StyleReset::Visibility,
         "overflow" => StyleReset::Overflow,
         "overflow-x" | "overflowX" => StyleReset::OverflowX,
         "overflow-y" | "overflowY" => StyleReset::OverflowY,
@@ -1315,7 +1317,7 @@ impl Drop for PaintCannon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::CssDimension;
+    use crate::style::{CssDimension, CssVisibility};
 
     #[test]
     fn can_fold_style_mutation_into_create_command() {
@@ -1354,6 +1356,18 @@ mod tests {
                 ..
             } => assert_eq!(value, 0.9),
             _ => panic!("expected max-height style mutation"),
+        }
+    }
+
+    #[test]
+    fn visibility_style_command_is_supported() {
+        let command = style_command(1, "visibility", "hidden").unwrap();
+        match command {
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Visibility(CssVisibility::Hidden),
+                ..
+            } => {}
+            _ => panic!("expected visibility style mutation"),
         }
     }
 

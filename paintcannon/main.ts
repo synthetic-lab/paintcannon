@@ -161,6 +161,7 @@ type EventListenerForTuple<
 > = Extract<TEvents, readonly [TType, ElementEventListenerFunction]>[1];
 export type ClickEventListener = MouseEventListener;
 export type ImageRendering = "ascii" | "half-block";
+export type CSSVisibility = "visible" | "hidden";
 export type CSSWhiteSpace = "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
 export type CSSFontWeight = "normal" | "bold";
 export type CSSFontStyle = "normal" | "italic";
@@ -2818,6 +2819,14 @@ export class CSSStyleDeclaration {
     this.setProperty("display", value);
   }
 
+  get visibility(): CSSVisibility | string {
+    return this.getPropertyValue("visibility");
+  }
+
+  set visibility(value: CSSVisibility | string) {
+    this.setProperty("visibility", value);
+  }
+
   get overflow(): "visible" | "hidden" | "scroll" | string {
     return this.getPropertyValue("overflow");
   }
@@ -3442,6 +3451,7 @@ function normalizeStyleName(property: string): CSSStyleProperty {
 
 export const SUPPORTED_STYLE_PROPERTY_NAMES = [
   "display",
+  "visibility",
   "overflow",
   "overflow-x",
   "overflow-y",
