@@ -20,6 +20,8 @@ PaintCannon supports the following CSS:
   256-color and 16-color fallbacks
 - CSS transitions for all color properties
 - Mouse pointer styling (in supported terminals using the kitty protocol)
+- Terminal focus detection via `PaintCannon.hasFocus` and app-level
+  `focus`/`blur` events
 
 It also exposes a non-standard set of border styles, since typical
 pixel-based borders can't be rendered in terminals:
@@ -56,6 +58,15 @@ And the following DOM events and event handlers, with bubbling,
 
 PaintCannon also exposes a `requestAnimationFrame` function to hook into its
 paint timing, much like browsers do.
+
+Terminal focus detection uses xterm focus reporting under the hood. PaintCannon
+enables the terminal protocol from Rust and exposes it as app-level
+`focus`/`blur` events plus `pc.hasFocus`. Inside tmux, focus events work when
+tmux has `focus-events` enabled:
+
+```tmux
+set -g focus-events on
+```
 
 We also ship `paintcannon-react`, a React reconciler that sits on top of
 PaintCannon's DOM API, for fast, React-based terminal rendering with
