@@ -9,10 +9,11 @@ use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{
-        self as terminal_event, DisableMouseCapture, EnableMouseCapture, Event as TerminalEvent,
-        KeyCode, KeyEvent as TerminalKeyEvent, KeyEventKind, KeyModifiers,
-        KeyboardEnhancementFlags, MouseButton, MouseEvent as CrosstermMouseEvent, MouseEventKind,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self as terminal_event, DisableFocusChange, DisableMouseCapture, EnableFocusChange,
+        EnableMouseCapture, Event as TerminalEvent, KeyCode, KeyEvent as TerminalKeyEvent,
+        KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton,
+        MouseEvent as CrosstermMouseEvent, MouseEventKind, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{
@@ -63,10 +64,18 @@ pub struct TerminalResizeEvent {
     pub rows: u32,
 }
 
+#[derive(Clone)]
+#[napi(object)]
+pub struct TerminalFocusEvent {
+    pub r#type: String,
+}
+
 pub(crate) struct TerminalInput {
     keyboard_events: Arc<Mutex<VecDeque<KeyboardEvent>>>,
     mouse_events: Arc<Mutex<VecDeque<TerminalMouseEvent>>>,
     resize_events: Arc<Mutex<VecDeque<TerminalResizeEvent>>>,
+    focus_events: Arc<Mutex<VecDeque<TerminalFocusEvent>>>,
+    focused: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     synthetic_keyup_delay_ms: Arc<Mutex<u32>>,
     kitty_keyboard_enabled: bool,
@@ -76,6 +85,7 @@ pub(crate) struct TerminalInput {
     keyboard_enhancement_pushed: Arc<Mutex<bool>>,
     alternate_screen_entered: Arc<Mutex<bool>>,
     mouse_capture_enabled: Arc<Mutex<bool>>,
+    focus_change_enabled: Arc<Mutex<bool>>,
     terminal_captured: Arc<Mutex<bool>>,
     thread: JoinHandle<()>,
 }
@@ -103,6 +113,11 @@ impl TerminalInput {
             set_bool(&mouse_capture_enabled, true);
         }
 
+        let focus_change_enabled = Arc::new(Mutex::new(false));
+        if execute!(io::stdout(), EnableFocusChange).is_ok() {
+            set_bool(&focus_change_enabled, true);
+        }
+
         let kitty_keyboard_enabled =
             !force_compat_mode && supports_keyboard_enhancement().unwrap_or(false);
         let keyboard_enhancement_pushed = Arc::new(Mutex::new(false));
@@ -127,18 +142,23 @@ impl TerminalInput {
         let keyboard_events = Arc::new(Mutex::new(VecDeque::new()));
         let mouse_events = Arc::new(Mutex::new(VecDeque::new()));
         let resize_events = Arc::new(Mutex::new(VecDeque::new()));
+        let focus_events = Arc::new(Mutex::new(VecDeque::new()));
+        let focused = Arc::new(AtomicBool::new(true));
         let stop = Arc::new(AtomicBool::new(false));
         let synthetic_keyup_delay_ms = Arc::new(Mutex::new(synthetic_keyup_delay_ms));
         let terminal_captured = Arc::new(Mutex::new(true));
         let thread_keyboard_events = Arc::clone(&keyboard_events);
         let thread_mouse_events = Arc::clone(&mouse_events);
         let thread_resize_events = Arc::clone(&resize_events);
+        let thread_focus_events = Arc::clone(&focus_events);
+        let thread_focused = Arc::clone(&focused);
         let thread_stop = Arc::clone(&stop);
         let thread_synthetic_keyup_delay_ms = Arc::clone(&synthetic_keyup_delay_ms);
         let thread_renderer_tx = if capture_mouse { renderer_tx } else { None };
         let thread_keyboard_enhancement_pushed = Arc::clone(&keyboard_enhancement_pushed);
         let thread_alternate_screen_entered = Arc::clone(&alternate_screen_entered);
         let thread_mouse_capture_enabled = Arc::clone(&mouse_capture_enabled);
+        let thread_focus_change_enabled = Arc::clone(&focus_change_enabled);
         let thread_terminal_captured = Arc::clone(&terminal_captured);
 
         let thread = thread::spawn(move || {
@@ -155,6 +175,7 @@ impl TerminalInput {
                                         release_terminal_state(
                                             &thread_terminal_captured,
                                             &thread_mouse_capture_enabled,
+                                            &thread_focus_change_enabled,
                                             &thread_keyboard_enhancement_pushed,
                                             &thread_alternate_screen_entered,
                                         );
@@ -189,6 +210,20 @@ impl TerminalInput {
                                         },
                                     );
                                 }
+                                TerminalEvent::FocusGained => {
+                                    handle_terminal_focus_event(
+                                        true,
+                                        &thread_focus_events,
+                                        &thread_focused,
+                                    );
+                                }
+                                TerminalEvent::FocusLost => {
+                                    handle_terminal_focus_event(
+                                        false,
+                                        &thread_focus_events,
+                                        &thread_focused,
+                                    );
+                                }
                                 _ => {}
                             }
                         }
@@ -212,6 +247,8 @@ impl TerminalInput {
             keyboard_events,
             mouse_events,
             resize_events,
+            focus_events,
+            focused,
             stop,
             synthetic_keyup_delay_ms,
             kitty_keyboard_enabled,
@@ -221,6 +258,7 @@ impl TerminalInput {
             keyboard_enhancement_pushed,
             alternate_screen_entered,
             mouse_capture_enabled,
+            focus_change_enabled,
             terminal_captured,
             thread,
         })
@@ -256,6 +294,18 @@ impl TerminalInput {
         latest.into_iter().collect()
     }
 
+    pub(crate) fn drain_focus_events(&self) -> Vec<TerminalFocusEvent> {
+        let Ok(mut events) = self.focus_events.lock() else {
+            return Vec::new();
+        };
+
+        events.drain(..).collect()
+    }
+
+    pub(crate) fn has_focus(&self) -> bool {
+        self.focused.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn set_synthetic_keyup_delay(&self, delay_ms: u32) {
         if let Ok(mut current_delay) = self.synthetic_keyup_delay_ms.lock() {
             *current_delay = delay_ms;
@@ -270,6 +320,7 @@ impl TerminalInput {
         release_terminal_state(
             &self.terminal_captured,
             &self.mouse_capture_enabled,
+            &self.focus_change_enabled,
             &self.keyboard_enhancement_pushed,
             &self.alternate_screen_entered,
         );
@@ -291,6 +342,10 @@ impl TerminalInput {
 
         if self.capture_mouse && execute!(io::stdout(), EnableMouseCapture).is_ok() {
             set_bool(&self.mouse_capture_enabled, true);
+        }
+
+        if execute!(io::stdout(), EnableFocusChange).is_ok() {
+            set_bool(&self.focus_change_enabled, true);
         }
 
         if self.kitty_keyboard_enabled {
@@ -338,6 +393,7 @@ fn swap_bool(value: &Arc<Mutex<bool>>, next: bool) -> bool {
 fn release_terminal_state(
     terminal_captured: &Arc<Mutex<bool>>,
     mouse_capture_enabled: &Arc<Mutex<bool>>,
+    focus_change_enabled: &Arc<Mutex<bool>>,
     keyboard_enhancement_pushed: &Arc<Mutex<bool>>,
     alternate_screen_entered: &Arc<Mutex<bool>>,
 ) {
@@ -348,6 +404,9 @@ fn release_terminal_state(
     if swap_bool(mouse_capture_enabled, false) {
         reset_pointer_shape();
         let _ = execute!(io::stdout(), DisableMouseCapture);
+    }
+    if swap_bool(focus_change_enabled, false) {
+        let _ = execute!(io::stdout(), DisableFocusChange);
     }
     if swap_bool(keyboard_enhancement_pushed, false) {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
@@ -634,6 +693,30 @@ fn push_resize_event(
     }
 }
 
+fn handle_terminal_focus_event(
+    focused: bool,
+    events: &Arc<Mutex<VecDeque<TerminalFocusEvent>>>,
+    current_focus: &Arc<AtomicBool>,
+) {
+    current_focus.store(focused, Ordering::Relaxed);
+    push_focus_event(events, terminal_focus_event(focused));
+}
+
+fn push_focus_event(events: &Arc<Mutex<VecDeque<TerminalFocusEvent>>>, event: TerminalFocusEvent) {
+    if let Ok(mut events) = events.lock() {
+        events.push_back(event);
+        while events.len() > 16 {
+            events.pop_front();
+        }
+    }
+}
+
+fn terminal_focus_event(focused: bool) -> TerminalFocusEvent {
+    TerminalFocusEvent {
+        r#type: if focused { "focus" } else { "blur" }.to_string(),
+    }
+}
+
 fn mouse_event_from_terminal(
     event_type: &str,
     event: CrosstermMouseEvent,
@@ -824,5 +907,29 @@ fn character_code(character: char) -> &'static str {
         '.' | '>' => "Period",
         '/' | '?' => "Slash",
         _ => "Unidentified",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_focus_events_use_browser_event_names() {
+        assert_eq!(terminal_focus_event(true).r#type, "focus");
+        assert_eq!(terminal_focus_event(false).r#type, "blur");
+    }
+
+    #[test]
+    fn handle_terminal_focus_event_updates_focus_state_and_queues_event() {
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let focused = Arc::new(AtomicBool::new(true));
+
+        handle_terminal_focus_event(false, &events, &focused);
+
+        assert!(!focused.load(Ordering::Relaxed));
+        let mut events = events.lock().expect("focus events mutex poisoned");
+        let event = events.pop_front().expect("focus event should be queued");
+        assert_eq!(event.r#type, "blur");
     }
 }

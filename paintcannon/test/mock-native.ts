@@ -7,6 +7,7 @@ import type {
   NativeScrollbarHit,
   NativeScrollMetrics,
   NativeTransitionEvent,
+  TerminalFocusEvent,
   TerminalMouseEvent,
   TerminalResizeEvent,
   TerminalSize,
@@ -43,6 +44,7 @@ export function createMockNativeBinding(instances: MockNativePaintCannon[] = [])
 
 export class MockNativePaintCannon implements NativePaintCannon {
   readonly kittyKeyboardEnabled = false;
+  private focused = true;
   renderCalls = 0;
   renderSyncCalls = 0;
   stopCalls = 0;
@@ -54,6 +56,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
   scrollbarHitAtPoint: NativeScrollbarHit | null = null;
   cursorAtPoint: number | null = null;
   keyboardEvents: NativeKeyboardEvent[] = [];
+  focusEvents: TerminalFocusEvent[] = [];
   mouseEvents: TerminalMouseEvent[] = [];
   resizeEvents: TerminalResizeEvent[] = [];
   transitionEvents: NativeTransitionEvent[] = [];
@@ -171,6 +174,10 @@ export class MockNativePaintCannon implements NativePaintCannon {
     };
   }
 
+  get hasFocus(): boolean {
+    return this.focused;
+  }
+
   render(): void {
     this.renderCalls += 1;
   }
@@ -196,6 +203,15 @@ export class MockNativePaintCannon implements NativePaintCannon {
   drainResizeEvents(): TerminalResizeEvent[] {
     const events = this.resizeEvents;
     this.resizeEvents = [];
+    return events;
+  }
+
+  drainFocusEvents(): TerminalFocusEvent[] {
+    const events = this.focusEvents;
+    this.focusEvents = [];
+    for (const event of events) {
+      this.focused = event.type === "focus";
+    }
     return events;
   }
 

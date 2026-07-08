@@ -48,6 +48,7 @@
     "demo:spans": "npm run demo:spans --workspace paintcannon",
     "demo:textarea": "npm run demo:textarea --workspace paintcannon",
     "demo:todo": "npm run demo:todo --workspace paintcannon-react",
+    "demo:terminal-focus": "npm run demo:terminal-focus --workspace paintcannon",
     "demo:visibility": "npm run demo:visibility --workspace paintcannon",
     "demo:transitions": "npm run demo:transitions --workspace paintcannon"
   },

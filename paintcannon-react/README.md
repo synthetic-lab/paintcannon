@@ -97,6 +97,21 @@ These components map to PaintCannon's DOM-like core API and support typed style
 props, bubbling events, forms, focus handling, controlled inputs, and mouse
 interactions. The subset of the React-DOM props they support is as follows:
 
+Host component `onFocus` and `onBlur` are element focus events. Terminal
+window/pane focus is exposed by the underlying PaintCannon instance as
+`paintCannon.hasFocus` and app-level `focus`/`blur` events. The root returned
+from `render()` includes that instance:
+
+```tsx
+const app = render(<App />, { alternateScreen: true });
+
+app.paintCannon.addEventListener("blur", () => {
+  // Dim or pause the app while the terminal is unfocused.
+});
+```
+
+Inside tmux, terminal focus reporting requires `set -g focus-events on`.
+
 ### Common props:
 
 All host components accept:

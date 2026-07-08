@@ -8,6 +8,7 @@ import type {
   PaintCannon as NativePaintCannon,
   ScrollbarHit as NativeScrollbarHit,
   ScrollMetrics as NativeScrollMetrics,
+  TerminalFocusEvent,
   TerminalMouseEvent,
   TerminalResizeEvent,
   TerminalSize,
@@ -22,6 +23,7 @@ export type {
   PaintCannon as NativePaintCannon,
   ScrollbarHit as NativeScrollbarHit,
   ScrollMetrics as NativeScrollMetrics,
+  TerminalFocusEvent,
   TerminalMouseEvent,
   TerminalResizeEvent,
   TerminalSize,
@@ -44,9 +46,12 @@ export interface PaintCannonOptions {
 
 export type AnimationFrameCallback = (timestamp: number) => void;
 export const KEYBOARD_EVENT_TYPES = ["keydown", "keyup"] as const;
+export const PAINT_CANNON_FOCUS_EVENT_TYPES = ["focus", "blur"] as const;
 export type KeyboardEventType = (typeof KEYBOARD_EVENT_TYPES)[number];
-export type PaintCannonEventType = KeyboardEventType | "resize";
+export type PaintCannonFocusEventType = (typeof PAINT_CANNON_FOCUS_EVENT_TYPES)[number];
+export type PaintCannonEventType = KeyboardEventType | PaintCannonFocusEventType | "resize";
 export type KeyboardEventListener = (event: PaintKeyboardEvent) => void;
+export type PaintCannonFocusEventListener = (event: PaintCannonFocusEvent) => void;
 export type ResizeEventListener = (event: PaintResizeEvent) => void;
 export const MOUSE_ELEMENT_EVENT_TYPES = [
   "click",
@@ -372,6 +377,13 @@ export class PaintCannon {
     keydown: new Set(),
     keyup: new Set(),
   };
+  private readonly focusEventListeners: Record<
+    PaintCannonFocusEventType,
+    Set<PaintCannonFocusEventListener>
+  > = {
+    focus: new Set(),
+    blur: new Set(),
+  };
   private readonly resizeEventListeners = new Set<ResizeEventListener>();
   private readonly elements = new Map<number, PaintElement>();
   private readonly parents = new Map<number, PaintElement>();
@@ -551,6 +563,10 @@ export class PaintCannon {
     return this.binding.kittyKeyboardEnabled;
   }
 
+  get hasFocus(): boolean {
+    return this.binding.hasFocus;
+  }
+
   setSyntheticKeyupDelay(delayMs: number): void {
     if (!Number.isFinite(delayMs) || delayMs < 0) {
       throw new Error(`synthetic keyup delay must be a non-negative number, got ${delayMs}`);
@@ -627,12 +643,19 @@ export class PaintCannon {
   }
 
   addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
+  addEventListener(type: PaintCannonFocusEventType, listener: PaintCannonFocusEventListener): void;
   addEventListener(type: "resize", listener: ResizeEventListener): void;
   addEventListener(
     type: PaintCannonEventType,
-    listener: KeyboardEventListener | ResizeEventListener,
+    listener: KeyboardEventListener | PaintCannonFocusEventListener | ResizeEventListener,
   ): void {
-    if (type !== "keydown" && type !== "keyup" && type !== "resize") {
+    if (
+      type !== "keydown" &&
+      type !== "keyup" &&
+      type !== "focus" &&
+      type !== "blur" &&
+      type !== "resize"
+    ) {
       throw new Error(`unsupported event type: ${type}`);
     }
 
@@ -642,6 +665,8 @@ export class PaintCannon {
 
     if (type === "resize") {
       this.resizeEventListeners.add(listener as ResizeEventListener);
+    } else if (type === "focus" || type === "blur") {
+      this.focusEventListeners[type].add(listener as PaintCannonFocusEventListener);
     } else {
       this.keyboardEventListeners[type].add(listener as KeyboardEventListener);
     }
@@ -649,17 +674,29 @@ export class PaintCannon {
   }
 
   removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
+  removeEventListener(
+    type: PaintCannonFocusEventType,
+    listener: PaintCannonFocusEventListener,
+  ): void;
   removeEventListener(type: "resize", listener: ResizeEventListener): void;
   removeEventListener(
     type: PaintCannonEventType,
-    listener: KeyboardEventListener | ResizeEventListener,
+    listener: KeyboardEventListener | PaintCannonFocusEventListener | ResizeEventListener,
   ): void {
-    if (type !== "keydown" && type !== "keyup" && type !== "resize") {
+    if (
+      type !== "keydown" &&
+      type !== "keyup" &&
+      type !== "focus" &&
+      type !== "blur" &&
+      type !== "resize"
+    ) {
       return;
     }
 
     if (type === "resize") {
       this.resizeEventListeners.delete(listener as ResizeEventListener);
+    } else if (type === "focus" || type === "blur") {
+      this.focusEventListeners[type].delete(listener as PaintCannonFocusEventListener);
     } else {
       this.keyboardEventListeners[type].delete(listener as KeyboardEventListener);
     }
@@ -751,6 +788,8 @@ export class PaintCannon {
     this.animationFrameCallbacks.clear();
     this.keyboardEventListeners.keydown.clear();
     this.keyboardEventListeners.keyup.clear();
+    this.focusEventListeners.focus.clear();
+    this.focusEventListeners.blur.clear();
     this.resizeEventListeners.clear();
     this.elementEventListeners.clear();
     this.elements.clear();
@@ -1323,6 +1362,16 @@ export class PaintCannon {
       handledAnyEvent = true;
     }
 
+    const focusEvents = this.binding.drainFocusEvents();
+    for (const nativeEvent of focusEvents) {
+      const event = new PaintCannonFocusEvent(nativeEvent, this);
+      const listeners = Array.from(this.focusEventListeners[event.type]);
+      for (const listener of listeners) {
+        listener(event);
+      }
+      handledAnyEvent = true;
+    }
+
     const transitionEvents = this.binding.drainTransitionEvents();
     for (const event of transitionEvents) {
       if (this.dispatchTransitionEvent(event)) {
@@ -1350,9 +1399,14 @@ export class PaintCannon {
     return this.keyboardEventListeners.keydown.size + this.keyboardEventListeners.keyup.size;
   }
 
+  private focusListenerCount(): number {
+    return this.focusEventListeners.focus.size + this.focusEventListeners.blur.size;
+  }
+
   private shouldPumpInputEvents(): boolean {
     return (
       this.keyboardListenerCount() > 0 ||
+      this.focusListenerCount() > 0 ||
       this.resizeEventListeners.size > 0 ||
       this.hasElementEventListeners("transitionstart") ||
       this.hasElementEventListeners("transitionend") ||
@@ -2259,6 +2313,20 @@ export class PaintResizeEvent {
   constructor(cols: number, rows: number) {
     this.cols = cols;
     this.rows = rows;
+  }
+}
+
+export class PaintCannonFocusEvent {
+  readonly type: PaintCannonFocusEventType;
+  readonly target: PaintCannon;
+  readonly currentTarget: PaintCannon;
+  readonly hasFocus: boolean;
+
+  constructor(event: TerminalFocusEvent, target: PaintCannon) {
+    this.type = event.type as PaintCannonFocusEventType;
+    this.target = target;
+    this.currentTarget = target;
+    this.hasFocus = event.type === "focus";
   }
 }
 
