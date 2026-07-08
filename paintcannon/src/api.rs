@@ -18,7 +18,9 @@ use crate::engine::{
     EngineTransitionEvent, MouseClick, ScrollbarHit as EngineScrollbarHit, StyleMutation,
     StyleReset,
 };
-use crate::input::{KeyboardEvent, TerminalInput, TerminalMouseEvent, TerminalResizeEvent};
+use crate::input::{
+    KeyboardEvent, TerminalFocusEvent, TerminalInput, TerminalMouseEvent, TerminalResizeEvent,
+};
 use crate::layout::{ArenaScrollMetrics, ScrollbarAxis};
 use crate::style::{
     parse_align_items, parse_border_style, parse_box_lengths, parse_cursor, parse_dimension,
@@ -625,6 +627,14 @@ impl PaintCannon {
         self.kitty_keyboard_enabled
     }
 
+    #[napi(getter)]
+    pub fn has_focus(&self) -> bool {
+        self.input
+            .as_ref()
+            .map(TerminalInput::has_focus)
+            .unwrap_or(true)
+    }
+
     #[napi]
     pub fn render(&self) -> Result<()> {
         if self
@@ -704,6 +714,14 @@ impl PaintCannon {
             self.set_layout_size(event.cols as usize, event.rows as usize);
         }
         events
+    }
+
+    #[napi]
+    pub fn drain_focus_events(&self) -> Vec<TerminalFocusEvent> {
+        self.input
+            .as_ref()
+            .map(TerminalInput::drain_focus_events)
+            .unwrap_or_default()
     }
 
     #[napi]

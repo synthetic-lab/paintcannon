@@ -65,6 +65,7 @@
     "demo:spans": "npm run build:debug && node dist/examples/spans.js",
     "demo:textarea": "npm run build:debug && node dist/examples/textarea.js",
     "demo:text-styles": "npm run build:debug && node dist/examples/text-styles.js",
+    "demo:terminal-focus": "npm run build:debug && node dist/examples/terminal-focus.js",
     "demo:visibility": "npm run build:debug && node dist/examples/visibility.js",
     "demo:transitions": "npm run build:debug && node dist/examples/transitions.js",
     "test": "npm run build:native:debug && vitest run",

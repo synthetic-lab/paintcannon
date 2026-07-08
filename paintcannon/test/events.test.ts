@@ -364,6 +364,34 @@ describe("core resize events", () => {
   });
 });
 
+describe("core app focus events", () => {
+  it("dispatches terminal focus reports as PaintCannon focus and blur events", () => {
+    const paintCannon = new PaintCannon({ fps: 120 });
+    const mockNative = currentMockNative();
+    const events: string[] = [];
+
+    expect(paintCannon.hasFocus).toBe(true);
+    paintCannon.addEventListener("blur", event => {
+      events.push(`${event.type}:${event.hasFocus}:${event.target === paintCannon}`);
+    });
+    paintCannon.addEventListener("focus", event => {
+      events.push(`${event.type}:${event.hasFocus}:${event.currentTarget === paintCannon}`);
+    });
+
+    mockNative.focusEvents.push({ type: "blur" });
+    runKeyboardEventPump(paintCannon);
+    expect(paintCannon.hasFocus).toBe(false);
+
+    mockNative.focusEvents.push({ type: "focus" });
+    runKeyboardEventPump(paintCannon);
+    paintCannon.stop();
+
+    expect(events).toEqual(["blur:false:true", "focus:true:true"]);
+    expect(paintCannon.hasFocus).toBe(true);
+    expect(mockNative.renderCalls).toBe(2);
+  });
+});
+
 describe("core style validation", () => {
   it("supports maxHeight and rejects unsupported style keys before native calls", () => {
     const { paintCannon, mockNative, root } = createPaintTree();
