@@ -19,12 +19,20 @@ pub struct TerminalSize {
     pub pixel_height: u32,
 }
 
-pub(crate) fn reset_terminal() {
+pub(crate) fn reset_terminal(append_newline: bool) {
     let mut out = io::stdout().lock();
-    let _ = write_synchronized_output_end(&mut out);
-    let _ = write_pointer_shape(&mut out, None);
-    let _ = write!(out, "\x1b[0m\x1b[?1004l\x1b[?7h\x1b[?25h\n");
+    let _ = write_terminal_reset(&mut out, append_newline);
     let _ = out.flush();
+}
+
+fn write_terminal_reset(out: &mut impl Write, append_newline: bool) -> io::Result<()> {
+    write_synchronized_output_end(out)?;
+    write_pointer_shape(out, None)?;
+    write!(out, "\x1b[0m\x1b[?1004l\x1b[?7h\x1b[?25h")?;
+    if append_newline {
+        writeln!(out)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn copy_text_to_clipboard(text: &str) {
@@ -238,7 +246,7 @@ fn query_terminal_size_from<T>(_stream: T) -> Option<TerminalSize> {
 
 #[cfg(test)]
 mod tests {
-    use super::encode_tmux_passthrough;
+    use super::{encode_tmux_passthrough, write_terminal_reset};
 
     #[test]
     fn tmux_passthrough_encoder_matches_kitty_and_tmux_faq_form() {
@@ -246,5 +254,21 @@ mod tests {
         encode_tmux_passthrough(&mut bytes, b"\x1b]22;pointer\x07").unwrap();
 
         assert_eq!(bytes, b"\x1bPtmux;\x1b\x1b]22;pointer\x07\x1b\\");
+    }
+
+    #[test]
+    fn alternate_screen_reset_does_not_advance_the_restored_main_screen() {
+        let mut bytes = Vec::new();
+        write_terminal_reset(&mut bytes, false).unwrap();
+
+        assert!(!bytes.ends_with(b"\n"));
+    }
+
+    #[test]
+    fn normal_screen_reset_leaves_the_cursor_on_a_fresh_line() {
+        let mut bytes = Vec::new();
+        write_terminal_reset(&mut bytes, true).unwrap();
+
+        assert!(bytes.ends_with(b"\n"));
     }
 }

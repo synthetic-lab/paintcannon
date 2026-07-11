@@ -411,7 +411,9 @@ pub(crate) enum EngineCommand {
         enabled: bool,
     },
     InvalidateFrame,
-    Shutdown,
+    Shutdown {
+        response: Option<Sender<()>>,
+    },
 }
 
 pub(crate) struct PaintEngine {
@@ -1906,7 +1908,12 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
             engine.set_truecolor_enabled(enabled);
         }
         EngineCommand::InvalidateFrame => engine.invalidate_frame(),
-        EngineCommand::Shutdown => return false,
+        EngineCommand::Shutdown { response } => {
+            if let Some(response) = response {
+                let _ = response.send(());
+            }
+            return false;
+        }
     }
 
     true
@@ -2912,7 +2919,7 @@ mod tests {
         .unwrap();
         assert_eq!(response_rx.recv().unwrap(), Some(root));
 
-        tx.send(EngineCommand::Shutdown).unwrap();
+        tx.send(EngineCommand::Shutdown { response: None }).unwrap();
         thread.join().unwrap();
     }
 
@@ -2952,8 +2959,29 @@ mod tests {
         assert_eq!(frame.cell(0, 0).unwrap().character, 'o');
         assert_eq!(frame.cell(1, 0).unwrap().character, 'k');
 
-        tx.send(EngineCommand::Shutdown).unwrap();
+        tx.send(EngineCommand::Shutdown { response: None }).unwrap();
         thread.join().unwrap();
+    }
+
+    #[test]
+    fn command_loop_acknowledges_shutdown_after_earlier_commands() {
+        let (tx, rx) = bounded(32);
+        let thread = thread::spawn(move || engine_loop(rx));
+
+        tx.send(EngineCommand::CreateTextWithId {
+            id: DomId(1),
+            text: "queued before shutdown".to_string(),
+        })
+        .unwrap();
+        let (response_tx, response_rx) = bounded(1);
+        tx.send(EngineCommand::Shutdown {
+            response: Some(response_tx),
+        })
+        .unwrap();
+
+        response_rx.recv().unwrap();
+        thread.join().unwrap();
+        assert!(tx.send(EngineCommand::InvalidateFrame).is_err());
     }
 
     #[test]
@@ -3006,7 +3034,7 @@ mod tests {
         assert_eq!(large.client_height, 12);
         assert_eq!(large.scroll_height, 20);
 
-        tx.send(EngineCommand::Shutdown).unwrap();
+        tx.send(EngineCommand::Shutdown { response: None }).unwrap();
         thread.join().unwrap();
     }
 }

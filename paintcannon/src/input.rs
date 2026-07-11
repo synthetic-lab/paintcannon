@@ -154,7 +154,7 @@ impl TerminalInput {
         let thread_focused = Arc::clone(&focused);
         let thread_stop = Arc::clone(&stop);
         let thread_synthetic_keyup_delay_ms = Arc::clone(&synthetic_keyup_delay_ms);
-        let thread_renderer_tx = if capture_mouse { renderer_tx } else { None };
+        let thread_renderer_tx = renderer_tx;
         let thread_keyboard_enhancement_pushed = Arc::clone(&keyboard_enhancement_pushed);
         let thread_alternate_screen_entered = Arc::clone(&alternate_screen_entered);
         let thread_mouse_capture_enabled = Arc::clone(&mouse_capture_enabled);
@@ -172,6 +172,8 @@ impl TerminalInput {
                             match event {
                                 TerminalEvent::Key(event) => {
                                     if !capture_ctrl_c && is_ctrl_c_event(&event) {
+                                        stop_renderer(thread_renderer_tx.as_ref());
+                                        reset_terminal(!get_bool(&thread_alternate_screen_entered));
                                         release_terminal_state(
                                             &thread_terminal_captured,
                                             &thread_mouse_capture_enabled,
@@ -179,7 +181,6 @@ impl TerminalInput {
                                             &thread_keyboard_enhancement_pushed,
                                             &thread_alternate_screen_entered,
                                         );
-                                        reset_terminal();
                                         signal_process_group(libc::SIGINT);
                                         thread_stop.store(true, Ordering::Relaxed);
                                         break;
@@ -198,7 +199,11 @@ impl TerminalInput {
                                         event,
                                         &mut mouse_down,
                                         &thread_mouse_events,
-                                        thread_renderer_tx.as_ref(),
+                                        if capture_mouse {
+                                            thread_renderer_tx.as_ref()
+                                        } else {
+                                            None
+                                        },
                                     );
                                 }
                                 TerminalEvent::Resize(cols, rows) => {
@@ -326,6 +331,14 @@ impl TerminalInput {
         );
     }
 
+    pub(crate) fn is_captured(&self) -> bool {
+        get_bool(&self.terminal_captured)
+    }
+
+    pub(crate) fn is_alternate_screen_entered(&self) -> bool {
+        get_bool(&self.alternate_screen_entered)
+    }
+
     pub(crate) fn capture_terminal(&self) {
         if swap_bool(&self.terminal_captured, true) {
             return;
@@ -388,6 +401,26 @@ fn swap_bool(value: &Arc<Mutex<bool>>, next: bool) -> bool {
     let previous = *value;
     *value = next;
     previous
+}
+
+fn get_bool(value: &Arc<Mutex<bool>>) -> bool {
+    value.lock().is_ok_and(|value| *value)
+}
+
+fn stop_renderer(renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>) {
+    let Some(renderer_tx) = renderer_tx else {
+        return;
+    };
+
+    let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+    if renderer_tx
+        .send(EngineCommand::Shutdown {
+            response: Some(response_tx),
+        })
+        .is_ok()
+    {
+        let _ = response_rx.recv();
+    }
 }
 
 fn release_terminal_state(

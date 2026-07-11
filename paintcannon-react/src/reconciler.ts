@@ -49,6 +49,7 @@ type RootContainer = {
   paintCannon: PaintCannon;
   root: PaintDivElement | PaintSpanElement | PaintFormElement;
   children: HostNode[];
+  presentCommits: boolean;
 };
 
 type PackageInfo = {
@@ -70,7 +71,9 @@ const reconciler = createReconciler({
   },
   resetAfterCommit(container: RootContainer) {
     container.paintCannon.commitTransaction();
-    container.paintCannon.render();
+    if (container.presentCommits) {
+      container.paintCannon.render();
+    }
   },
   preparePortalMount: () => null,
   clearContainer(container: RootContainer) {
@@ -199,6 +202,7 @@ export function createRoot(options: CreateRootOptions = {}): PaintCannonReactRoo
     paintCannon,
     root: container,
     children: [],
+    presentCommits: true,
   };
   const animationScheduler = new AnimationScheduler(paintCannon);
   const reactRoot = reconciler.createContainer(
@@ -235,6 +239,7 @@ export function createRoot(options: CreateRootOptions = {}): PaintCannonReactRoo
       }
 
       exited = true;
+      rootContainer.presentCommits = false;
       reconciler.updateContainer(null, reactRoot, null, () => {
         animationScheduler.stop();
         paintCannon.stop();

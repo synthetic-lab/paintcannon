@@ -818,7 +818,6 @@ export class PaintCannon {
     }
     livePaintCannons.delete(this);
     process.off("SIGCONT", this.handleSigcont);
-    this.binding.releaseTerminal();
     this.binding.stop();
   }
 
