@@ -477,7 +477,7 @@ impl PaintEngine {
 
     fn reserve_for_batch(&mut self, commands: &[EngineCommand]) {
         let mut create_count = 0;
-        let mut append_count = 0;
+        let mut append_counts = HashMap::new();
         for command in commands {
             match command {
                 EngineCommand::CreateElementWithId { .. }
@@ -489,7 +489,9 @@ impl PaintEngine {
                 EngineCommand::CreateElement { .. } | EngineCommand::CreateText { .. } => {
                     create_count += 1
                 }
-                EngineCommand::AppendChild { .. } => append_count += 1,
+                EngineCommand::AppendChild { parent, .. } => {
+                    *append_counts.entry(*parent).or_insert(0) += 1;
+                }
                 _ => {}
             }
         }
@@ -499,9 +501,19 @@ impl PaintEngine {
             self.dom_to_node.reserve(create_count);
             self.node_to_dom.reserve(create_count);
         }
-        if append_count > 0 {
+        if !append_counts.is_empty() {
+            let append_count = append_counts.values().sum();
             self.parents.reserve(append_count);
-            self.children.reserve(append_count);
+            self.children.reserve(append_counts.len());
+            for (parent, child_count) in append_counts {
+                self.children
+                    .entry(parent)
+                    .or_default()
+                    .reserve(child_count);
+                if let Some(parent_node) = self.node_for(parent) {
+                    self.arena.reserve_children(parent_node, child_count);
+                }
+            }
         }
     }
 
@@ -1141,6 +1153,15 @@ impl PaintEngine {
                     (
                         "dirty_textarea_visits",
                         layout_profile.dirty_textarea_visits.to_string(),
+                    ),
+                    ("taffy_ms", ns_to_ms(layout_profile.taffy_ns)),
+                    (
+                        "dirty_descendants_ms",
+                        ns_to_ms(layout_profile.dirty_descendants_ns),
+                    ),
+                    (
+                        "visible_overflow_ms",
+                        ns_to_ms(layout_profile.visible_overflow_ns),
                     ),
                     ("inline_width_ms", ns_to_ms(layout_profile.inline_width_ns)),
                     (
