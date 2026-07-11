@@ -26,7 +26,15 @@ const paintcannonPath = "paintcannon/package.json";
 const reactPath = "paintcannon-react/package.json";
 const lockPath = "package-lock.json";
 
-const version = parseVersion(versionArg);
+const paintcannonPackage = readPackage(paintcannonPath);
+const reactPackage = readPackage(reactPath);
+if (paintcannonPackage.version !== reactPackage.version) {
+  fail(
+    `Workspace versions must match before release: paintcannon=${paintcannonPackage.version}, paintcannon-react=${reactPackage.version}`,
+  );
+}
+
+const version = resolveVersion(versionArg, paintcannonPackage.version);
 const paintcannonTag = `paintcannon@${version}`;
 const reactTag = `paintcannon-react@${version}`;
 
@@ -41,9 +49,6 @@ if (commandOutput("git", ["status", "--porcelain"]) !== "") {
 
 ensureTagDoesNotExist(paintcannonTag);
 ensureTagDoesNotExist(reactTag);
-
-const paintcannonPackage = readPackage(paintcannonPath);
-const reactPackage = readPackage(reactPath);
 
 paintcannonPackage.version = version;
 reactPackage.version = version;
@@ -73,12 +78,31 @@ function writePackage(path: string, contents: PackageJson): void {
   writeFileSync(resolve(root, path), `${JSON.stringify(contents, null, 2)}\n`);
 }
 
-function parseVersion(version: string): string {
+function resolveVersion(version: string, currentVersion: string): string {
+  if (version === "patch" || version === "minor" || version === "major") {
+    const [major, minor, patch] = parseStableVersion(currentVersion);
+    if (version === "major") {
+      return `${major + 1}.0.0`;
+    }
+    if (version === "minor") {
+      return `${major}.${minor + 1}.0`;
+    }
+    return `${major}.${minor}.${patch + 1}`;
+  }
+
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
     fail(`Invalid version: ${version}`);
   }
 
   return version;
+}
+
+function parseStableVersion(version: string): [number, number, number] {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  if (match === null) {
+    fail(`Cannot apply a relative bump to prerelease version: ${version}`);
+  }
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
 function ensureTagDoesNotExist(tag: string): void {
@@ -124,8 +148,11 @@ function fail(message: string): never {
 }
 
 function printUsage(): void {
-  console.log(`Usage: npm run release -- <version>
+  console.log(`Usage: npm run release -- <patch|minor|major|version>
 
 Examples:
+  npm run release -- patch
+  npm run release -- minor
+  npm run release -- major
   npm run release -- 0.0.13`);
 }
