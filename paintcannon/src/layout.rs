@@ -87,6 +87,7 @@ struct LayoutNode {
     scroll_top: u32,
     fragments: Vec<InlineFragment>,
     measure_cache: InlineMeasureCache,
+    visible_overflow_size: Size<f32>,
 }
 
 #[derive(Clone, Copy)]
@@ -513,6 +514,7 @@ impl LayoutArena {
         self.clear_measure_caches();
         compute_root_layout(self, root, available);
         self.ensure_dirty_descendants_are_laid_out(root);
+        self.compute_visible_overflow_sizes(root);
     }
 
     pub(crate) fn layout(&self, node: NodeId) -> Layout {
@@ -529,6 +531,10 @@ impl LayoutArena {
 
     pub(crate) fn children(&self, node: NodeId) -> &[NodeId] {
         &self.nodes[node_index(node)].children
+    }
+
+    pub(crate) fn visible_overflow_size(&self, node: NodeId) -> Size<f32> {
+        self.nodes[node_index(node)].visible_overflow_size
     }
 
     pub(crate) fn parent(&self, node: NodeId) -> Option<NodeId> {
@@ -587,6 +593,7 @@ impl LayoutArena {
             scroll_top: 0,
             fragments: Vec::new(),
             measure_cache: InlineMeasureCache::default(),
+            visible_overflow_size: Size::ZERO,
         });
         id
     }
@@ -759,12 +766,23 @@ impl LayoutArena {
             for child_index in 0..child_count {
                 let child = self.nodes[index].children[child_index];
                 let child_layout = self.layout(child);
+                let child_style = &self.nodes[node_index(child)].style;
+                let child_overflow = self.nodes[node_index(child)].visible_overflow_size;
+                let child_width = if child_style.overflow_x == LayoutOverflow::Visible {
+                    child_overflow.width
+                } else {
+                    child_layout.size.width
+                };
+                let child_height = if child_style.overflow_y == LayoutOverflow::Visible {
+                    child_overflow.height
+                } else {
+                    child_layout.size.height
+                };
                 scroll_width = scroll_width.max(float_to_cells(
-                    child_layout.location.x + child_layout.size.width - padding_origin.x
-                        + layout.padding.right,
+                    child_layout.location.x + child_width - padding_origin.x + layout.padding.right,
                 ));
                 scroll_height = scroll_height.max(float_to_cells(
-                    child_layout.location.y + child_layout.size.height - padding_origin.y
+                    child_layout.location.y + child_height - padding_origin.y
                         + layout.padding.bottom,
                 ));
             }
@@ -871,12 +889,23 @@ impl LayoutArena {
             for child_index in 0..child_count {
                 let child = self.nodes[index].children[child_index];
                 let child_layout = self.layout(child);
+                let child_style = &self.nodes[node_index(child)].style;
+                let child_overflow = self.nodes[node_index(child)].visible_overflow_size;
+                let child_width = if child_style.overflow_x == LayoutOverflow::Visible {
+                    child_overflow.width
+                } else {
+                    child_layout.size.width
+                };
+                let child_height = if child_style.overflow_y == LayoutOverflow::Visible {
+                    child_overflow.height
+                } else {
+                    child_layout.size.height
+                };
                 scroll_width = scroll_width.max(float_to_cells(
-                    child_layout.location.x + child_layout.size.width - padding_origin.x
-                        + layout.padding.right,
+                    child_layout.location.x + child_width - padding_origin.x + layout.padding.right,
                 ));
                 scroll_height = scroll_height.max(float_to_cells(
-                    child_layout.location.y + child_layout.size.height - padding_origin.y
+                    child_layout.location.y + child_height - padding_origin.y
                         + layout.padding.bottom,
                 ));
             }
@@ -1023,6 +1052,59 @@ impl LayoutArena {
             let child = self.nodes[node_index(node)].children[child_index];
             self.ensure_dirty_descendants_are_laid_out(child);
         }
+    }
+
+    fn compute_visible_overflow_sizes(&mut self, node: NodeId) -> Size<f32> {
+        let child_count = self.nodes[node_index(node)].children.len();
+        for child_index in 0..child_count {
+            let child = self.nodes[node_index(node)].children[child_index];
+            self.compute_visible_overflow_sizes(child);
+        }
+
+        let layout = self.layout(node);
+        let mut size = layout.size;
+        if self.is_inline_context(node) {
+            for fragment in &self.nodes[node_index(node)].fragments {
+                size.width = size.width.max(
+                    layout.border.left
+                        + layout.padding.left
+                        + fragment.x as f32
+                        + fragment.width as f32
+                        + layout.padding.right
+                        + layout.border.right,
+                );
+                size.height = size.height.max(
+                    layout.border.top
+                        + layout.padding.top
+                        + fragment.y as f32
+                        + fragment.height as f32
+                        + layout.padding.bottom
+                        + layout.border.bottom,
+                );
+            }
+        } else {
+            for child_index in 0..child_count {
+                let child = self.nodes[node_index(node)].children[child_index];
+                let child_layout = self.layout(child);
+                let child_style = &self.nodes[node_index(child)].style;
+                let child_overflow = self.nodes[node_index(child)].visible_overflow_size;
+                let propagated_width = if child_style.overflow_x == LayoutOverflow::Visible {
+                    child_overflow.width
+                } else {
+                    child_layout.size.width
+                };
+                let propagated_height = if child_style.overflow_y == LayoutOverflow::Visible {
+                    child_overflow.height
+                } else {
+                    child_layout.size.height
+                };
+                size.width = size.width.max(child_layout.location.x + propagated_width);
+                size.height = size.height.max(child_layout.location.y + propagated_height);
+            }
+        }
+
+        self.nodes[node_index(node)].visible_overflow_size = size;
+        size
     }
 
     fn has_dirty_child_layout(&self, node: NodeId) -> bool {
@@ -3593,6 +3675,36 @@ mod tests {
 
         let metrics = arena.set_scroll_offset(viewport, 0, 100).unwrap();
         assert_eq!(metrics.scroll_top, 7);
+    }
+
+    #[test]
+    fn scroll_metrics_include_visible_overflow_from_descendants() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(10.0), CssDimension::Length(4.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = arena.create_element(viewport_style);
+        let root = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Percent(1.0),
+        ));
+        let content = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(10.0),
+        ));
+        arena.append_child(root, content);
+        arena.append_child(viewport, root);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(4.0),
+            },
+        );
+
+        let metrics = arena.scroll_metrics(viewport).unwrap();
+        assert_eq!(metrics.client_height, 4);
+        assert_eq!(metrics.scroll_height, 10);
     }
 
     #[test]

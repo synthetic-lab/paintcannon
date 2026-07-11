@@ -60,6 +60,9 @@ export class MockNativePaintCannon implements NativePaintCannon {
   mouseEvents: TerminalMouseEvent[] = [];
   resizeEvents: TerminalResizeEvent[] = [];
   transitionEvents: NativeTransitionEvent[] = [];
+  rootId: number | undefined;
+  viewportId: number | undefined;
+  appendedChildren: Array<{ parent: number; child: number }> = [];
   textControls = new Map<number, NativeTextControlState>();
   styleMutations: NativeStyleMutation[] = [];
   scrollMetricsById = new Map<number, NativeScrollMetrics>();
@@ -135,8 +138,15 @@ export class MockNativePaintCannon implements NativePaintCannon {
     return this.cursorAtPoint;
   }
 
-  setRoot(_id: number): void {}
-  appendChild(_parent: number, _child: number): void {}
+  setRoot(id: number): void {
+    this.rootId = id;
+  }
+  setViewport(id: number): void {
+    this.viewportId = id;
+  }
+  appendChild(parent: number, child: number): void {
+    this.appendedChildren.push({ parent, child });
+  }
   insertChildBefore(_parent: number, _child: number, _before: number): void {}
   detachNode(_id: number): void {}
   destroyNode(_id: number): void {}

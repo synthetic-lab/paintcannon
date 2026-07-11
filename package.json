@@ -50,6 +50,7 @@
     "demo:todo": "npm run demo:todo --workspace paintcannon-react",
     "demo:terminal-focus": "npm run demo:terminal-focus --workspace paintcannon",
     "demo:visibility": "npm run demo:visibility --workspace paintcannon",
+    "demo:viewport-scroll": "npm run demo:viewport-scroll --workspace paintcannon",
     "demo:transitions": "npm run demo:transitions --workspace paintcannon"
   },
   "lint-staged": {

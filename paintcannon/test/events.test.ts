@@ -263,6 +263,60 @@ describe("core mouse events", () => {
 });
 
 describe("core native scrollbar events", () => {
+  it("wraps alternate-screen roots in a private scrollable viewport", () => {
+    const paintCannon = new PaintCannon({ alternateScreen: true, fps: 120 });
+    const mockNative = currentMockNative();
+    const root = paintCannon.createElement("div");
+
+    paintCannon.setRoot(root);
+    paintCannon.stop();
+
+    expect(mockNative.viewportId).toBeDefined();
+    expect(mockNative.rootId).toBe(mockNative.viewportId);
+    expect(mockNative.appendedChildren).toContainEqual({
+      parent: mockNative.viewportId,
+      child: root.id,
+    });
+    expect(mockNative.styleMutations).toEqual(
+      expect.arrayContaining([
+        { id: mockNative.viewportId, property: "width", value: "100%" },
+        { id: mockNative.viewportId, property: "height", value: "100%" },
+      ]),
+    );
+  });
+
+  it("uses the alternate-screen viewport as the wheel fallback", () => {
+    const paintCannon = new PaintCannon({
+      alternateScreen: true,
+      captureMouse: true,
+      fps: 120,
+    });
+    const mockNative = currentMockNative();
+    const root = paintCannon.createElement("div");
+    const child = paintCannon.createElement("div");
+    root.appendChild(child);
+    paintCannon.setRoot(root);
+    const viewportId = mockNative.viewportId;
+    if (viewportId === undefined) {
+      throw new Error("expected alternate-screen viewport");
+    }
+    mockNative.targetIdAtPoint = child.id;
+    mockNative.scrollMetricsById.set(viewportId, {
+      scrollLeft: 0,
+      scrollTop: 0,
+      scrollWidth: 10,
+      scrollHeight: 40,
+      clientWidth: 10,
+      clientHeight: 10,
+    });
+
+    mockNative.mouseEvents.push(mouseEvent("wheel", { deltaY: 1 }));
+    runKeyboardEventPump(paintCannon);
+    paintCannon.stop();
+
+    expect(mockNative.scrollMetrics(viewportId).scrollTop).toBe(3);
+  });
+
   it("drags vertical scrollbar thumbs by mapping rail position to scroll offset", () => {
     const { paintCannon, mockNative, child } = createPaintTree({ captureMouse: true });
     const scrollTops: number[] = [];

@@ -317,6 +317,13 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn set_viewport(&self, id: u32) -> Result<()> {
+        self.send(EngineCommand::SetViewport {
+            viewport: DomId(id),
+        })
+    }
+
+    #[napi]
     pub fn append_child(&self, parent: u32, child: u32) -> Result<()> {
         self.send(EngineCommand::AppendChild {
             parent: DomId(parent),
