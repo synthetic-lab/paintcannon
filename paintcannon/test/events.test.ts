@@ -399,6 +399,42 @@ describe("core native scrollbar events", () => {
   });
 });
 
+describe("core node lifecycle", () => {
+  it("cleans up an entire transaction-created subtree when its root is destroyed", () => {
+    const paintCannon = new PaintCannon({ captureMouse: true, fps: 120 });
+    const mockNative = currentMockNative();
+    let root: PaintElement | undefined;
+    let child: PaintElement | undefined;
+    let grandchild: PaintElement | undefined;
+
+    paintCannon.transaction(() => {
+      root = paintCannon.createElement("div");
+      child = paintCannon.createElement("div");
+      grandchild = paintCannon.createElement("div");
+      child.appendChild(grandchild);
+      root.appendChild(child);
+      paintCannon.setRoot(root);
+    });
+    if (child === undefined || grandchild === undefined) {
+      throw new Error("expected transaction-created subtree");
+    }
+
+    let clicks = 0;
+    grandchild.addEventListener("click", () => {
+      clicks += 1;
+    });
+    const grandchildId = grandchild.id;
+    child.destroy();
+    mockNative.targetIdAtPoint = grandchildId;
+    mockNative.mouseEvents.push(mouseEvent("click"));
+    runKeyboardEventPump(paintCannon);
+    paintCannon.stop();
+
+    expect(clicks).toBe(0);
+    expect(mockNative.destroyedNodes).toContain(child.id);
+  });
+});
+
 describe("core resize events", () => {
   it("dispatches the latest resize and uses the normal render path", () => {
     const paintCannon = new PaintCannon({ fps: 120 });

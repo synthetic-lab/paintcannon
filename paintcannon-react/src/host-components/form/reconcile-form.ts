@@ -10,7 +10,7 @@ export function create(
 ): MountedComponent<typeof form> {
   const node = paintCannon.createElement("form");
   applyProps(node, {}, props, applyCommonProps);
-  return { kind: "element", type: form.type, props, children: [], node };
+  return { kind: "element", type: form.type, props, children: new Set(), node };
 }
 
 export function applyProps(

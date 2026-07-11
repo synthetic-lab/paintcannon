@@ -371,7 +371,7 @@ export class PaintCannon {
   private readonly captureCtrlZ: boolean;
   private readonly captureMouse: boolean;
   private readonly animationFrameCallbacks = new Map<number, AnimationFrameCallback>();
-  private readonly textControls: TextControlElement[] = [];
+  private readonly textControls = new Set<TextControlElement>();
   private focusedTextControl: TextControlElement | undefined;
   private readonly keyboardEventListeners: Record<KeyboardEventType, Set<KeyboardEventListener>> = {
     keydown: new Set(),
@@ -387,6 +387,7 @@ export class PaintCannon {
   private readonly resizeEventListeners = new Set<ResizeEventListener>();
   private readonly elements = new Map<number, PaintElement>();
   private readonly parents = new Map<number, PaintElement>();
+  private readonly children = new Map<number, Set<number>>();
   private readonly elementEventListeners = new Map<
     number,
     Partial<Record<ElementEventType, Set<ElementEventListener>>>
@@ -529,7 +530,7 @@ export class PaintCannon {
       (id, property, value) => this.setNativeStyleProperty(id, property, value),
     );
     this.registerElement(element);
-    this.textControls.push(element);
+    this.textControls.add(element);
     return element;
   }
 
@@ -545,7 +546,7 @@ export class PaintCannon {
       (id, property, value) => this.setNativeStyleProperty(id, property, value),
     );
     this.registerElement(element);
-    this.textControls.push(element);
+    this.textControls.add(element);
     return element;
   }
 
@@ -821,6 +822,8 @@ export class PaintCannon {
     this.elementEventListeners.clear();
     this.elements.clear();
     this.parents.clear();
+    this.children.clear();
+    this.textControls.clear();
     this.scrollMetrics.clear();
     this.hoveredElement = undefined;
     this.rootElement = undefined;
@@ -849,7 +852,17 @@ export class PaintCannon {
   }
 
   private setParent(child: PaintNodeBase, parent: PaintElement): void {
+    const previousParent = this.parents.get(child.id);
+    if (previousParent !== undefined && previousParent !== parent) {
+      this.children.get(previousParent.id)?.delete(child.id);
+    }
     this.parents.set(child.id, parent);
+    let children = this.children.get(parent.id);
+    if (children === undefined) {
+      children = new Set();
+      this.children.set(parent.id, children);
+    }
+    children.add(child.id);
   }
 
   getScrollLeft(element: PaintElementBase): number {
@@ -1065,6 +1078,7 @@ export class PaintCannon {
 
     this.detachNativeNode(child.id);
     this.parents.delete(child.id);
+    this.children.get(parent.id)?.delete(child.id);
     this.clearDetachedState(child);
     return child;
   }
@@ -1075,7 +1089,11 @@ export class PaintCannon {
     }
 
     this.detachNativeNode(node.id);
+    const parent = this.parents.get(node.id);
     this.parents.delete(node.id);
+    if (parent !== undefined) {
+      this.children.get(parent.id)?.delete(node.id);
+    }
     this.clearDetachedState(node);
   }
 
@@ -1103,19 +1121,7 @@ export class PaintCannon {
   }
 
   private clearDetachedState(node: PaintNodeBase): void {
-    const ids = new Set<number>();
-    const collect = (id: number): void => {
-      if (ids.has(id)) {
-        return;
-      }
-      ids.add(id);
-      for (const [childId, parent] of this.parents) {
-        if (parent.id === id) {
-          collect(childId);
-        }
-      }
-    };
-    collect(node.id);
+    const ids = this.collectSubtreeIds(node.id);
 
     if (this.focusedTextControl !== undefined && ids.has(this.focusedTextControl.id)) {
       this.blurFocusedInput(this.focusedTextControl, true);
@@ -1132,24 +1138,22 @@ export class PaintCannon {
   private cleanupDestroyedNode(node: PaintNodeBase): void {
     const ids = this.collectSubtreeIds(node.id);
 
+    const parent = this.parents.get(node.id);
+    if (parent !== undefined && !ids.has(parent.id)) {
+      this.children.get(parent.id)?.delete(node.id);
+    }
+
     for (const id of ids) {
       this.parents.delete(id);
+      this.children.delete(id);
+      const element = this.elements.get(id);
+      if (isTextControl(element)) {
+        this.textControls.delete(element);
+      }
       this.elements.delete(id);
       this.elementEventListeners.delete(id);
       this.scrollMetrics.delete(id);
       this.batchNodes.delete(id);
-    }
-
-    for (const [childId, parent] of Array.from(this.parents.entries())) {
-      if (ids.has(parent.id)) {
-        this.parents.delete(childId);
-      }
-    }
-
-    for (let index = this.textControls.length - 1; index >= 0; index -= 1) {
-      if (ids.has(this.textControls[index].id)) {
-        this.textControls.splice(index, 1);
-      }
     }
 
     if (this.focusedTextControl !== undefined && ids.has(this.focusedTextControl.id)) {
@@ -1166,18 +1170,18 @@ export class PaintCannon {
 
   private collectSubtreeIds(id: number): Set<number> {
     const ids = new Set<number>();
-    const collect = (currentId: number): void => {
-      if (ids.has(currentId)) {
-        return;
+    const pending = [id];
+    while (pending.length > 0) {
+      const currentId = pending.pop();
+      if (currentId === undefined || ids.has(currentId)) {
+        continue;
       }
       ids.add(currentId);
-      for (const [childId, parent] of this.parents) {
-        if (parent.id === currentId) {
-          collect(childId);
-        }
+      const children = this.children.get(currentId);
+      if (children !== undefined) {
+        pending.push(...children);
       }
-    };
-    collect(id);
+    }
     return ids;
   }
 
@@ -1247,6 +1251,7 @@ export class PaintCannon {
 
     this.rekeyElementMap(ids);
     this.rekeyParentMap(ids);
+    this.rekeyChildrenMap(ids);
     this.rekeyElementEventListeners(ids);
     this.rekeyScrollMetrics(ids);
   }
@@ -1274,6 +1279,21 @@ export class PaintCannon {
     this.parents.clear();
     for (const [childId, parent] of entries) {
       this.parents.set(ids.get(childId) ?? childId, parent);
+    }
+  }
+
+  private rekeyChildrenMap(ids: Map<number, number>): void {
+    if (this.children.size === 0) {
+      return;
+    }
+
+    const entries = Array.from(this.children.entries());
+    this.children.clear();
+    for (const [parentId, children] of entries) {
+      this.children.set(
+        ids.get(parentId) ?? parentId,
+        new Set(Array.from(children, childId => ids.get(childId) ?? childId)),
+      );
     }
   }
 
@@ -1438,7 +1458,7 @@ export class PaintCannon {
       this.hasElementEventListeners("transitionend") ||
       this.hasElementEventListeners("keydown") ||
       this.hasElementEventListeners("keyup") ||
-      this.textControls.length > 0 ||
+      this.textControls.size > 0 ||
       !this.captureCtrlZ ||
       this.captureMouse
     );
@@ -1602,17 +1622,16 @@ export class PaintCannon {
   }
 
   private focusNextInput(direction: 1 | -1): boolean {
-    if (this.textControls.length === 0) {
+    if (this.textControls.size === 0) {
       return false;
     }
 
+    const textControls = Array.from(this.textControls);
     const currentIndex =
-      this.focusedTextControl === undefined
-        ? -1
-        : this.textControls.indexOf(this.focusedTextControl);
+      this.focusedTextControl === undefined ? -1 : textControls.indexOf(this.focusedTextControl);
     const start = currentIndex < 0 ? (direction === 1 ? -1 : 0) : currentIndex;
-    const nextIndex = (start + direction + this.textControls.length) % this.textControls.length;
-    this.focusInput(this.textControls[nextIndex]);
+    const nextIndex = (start + direction + textControls.length) % textControls.length;
+    this.focusInput(textControls[nextIndex]);
     return true;
   }
 

@@ -19,7 +19,8 @@ export type MountedHostElement<Type extends HostType, Props, Element extends Pai
   kind: "element";
   type: Type;
   props: Props;
-  children: HostNode[];
+  children: Set<HostNode>;
+  parent?: HostParent;
   node: Element;
 };
 
@@ -41,10 +42,12 @@ export type HostElement =
 export type HostText = {
   kind: "text";
   text: string;
+  parent?: HostParent;
   node: TextNode;
 };
 
 export type HostNode = HostElement | HostText;
+export type HostParent = { children: Set<HostNode> };
 
 const hostPropsForType = {
   [div.type]: undefined as unknown as div.Props,
