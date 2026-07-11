@@ -14,7 +14,7 @@ export function create(
 ): MountedComponent<typeof textarea> {
   const node = paintCannon.createElement("textarea");
   applyProps(node, {}, props, applyCommonProps);
-  return { kind: "element", type: textarea.type, props, children: [], node };
+  return { kind: "element", type: textarea.type, props, children: new Set(), node };
 }
 
 export function applyProps(

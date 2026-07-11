@@ -264,6 +264,31 @@ describe("app exit", () => {
   });
 });
 
+describe("host tree lifecycle", () => {
+  it("destroys a large set of removed siblings in one React commit", async () => {
+    const view = (count: number): React.ReactElement => (
+      <Div>
+        {Array.from({ length: count }, (_, index) => (
+          <Div key={index}>row {index}</Div>
+        ))}
+      </Div>
+    );
+    const root = render(view(200), { fps: 120 });
+    const mockNative = mockNativeInstances[0];
+    if (mockNative === undefined) {
+      throw new Error("expected mock native instance");
+    }
+
+    await commit();
+    const destroysBeforeUpdate = mockNative.destroyedNodes.length;
+    root.render(view(1));
+    await commit();
+    root.paintCannon.stop();
+
+    expect(mockNative.destroyedNodes.length - destroysBeforeUpdate).toBe(199);
+  });
+});
+
 describe("scroll events", () => {
   it("commits state updates from onScroll before the input pump returns", async () => {
     let scroller: PaintElement | undefined;

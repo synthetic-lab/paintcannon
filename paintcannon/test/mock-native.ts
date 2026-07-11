@@ -63,6 +63,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
   rootId: number | undefined;
   viewportId: number | undefined;
   appendedChildren: Array<{ parent: number; child: number }> = [];
+  destroyedNodes: number[] = [];
   textControls = new Map<number, NativeTextControlState>();
   styleMutations: NativeStyleMutation[] = [];
   scrollMetricsById = new Map<number, NativeScrollMetrics>();
@@ -149,7 +150,9 @@ export class MockNativePaintCannon implements NativePaintCannon {
   }
   insertChildBefore(_parent: number, _child: number, _before: number): void {}
   detachNode(_id: number): void {}
-  destroyNode(_id: number): void {}
+  destroyNode(id: number): void {
+    this.destroyedNodes.push(id);
+  }
   setStyleProperty(id: number, property: string, value: string): void {
     this.styleMutations.push({ id, property, value });
   }
@@ -162,6 +165,19 @@ export class MockNativePaintCannon implements NativePaintCannon {
       }
     }
     for (const command of commands) {
+      if (
+        command.type === "appendChild" &&
+        command.parent !== undefined &&
+        command.child !== undefined
+      ) {
+        this.appendChild(
+          resolveBatchId(command.parent, mappings),
+          resolveBatchId(command.child, mappings),
+        );
+      }
+      if (command.type === "destroyNode" && command.id !== undefined) {
+        this.destroyNode(resolveBatchId(command.id, mappings));
+      }
       if (
         command.type === "setStyleProperty" &&
         command.id !== undefined &&

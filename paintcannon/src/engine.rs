@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, IsTerminal, Write};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc::Sender as StdSender,
-    Arc,
+    Arc, OnceLock,
 };
 use std::time::Instant;
 
@@ -653,22 +653,84 @@ impl PaintEngine {
     }
 
     pub(crate) fn destroy_node(&mut self, node: DomId) -> bool {
-        let Some(node_id) = self.node_for(node) else {
-            return false;
-        };
+        self.destroy_nodes([node]) > 0
+    }
 
-        if let Some(parent) = self.parents.remove(&node) {
-            if let Some(parent_node) = self.node_for(parent) {
-                self.arena.remove_child(parent_node, node_id);
+    fn destroy_nodes(&mut self, roots: impl IntoIterator<Item = DomId>) -> usize {
+        let mut removed = HashSet::new();
+        let mut stack = roots
+            .into_iter()
+            .filter(|node| self.node_for(*node).is_some())
+            .collect::<Vec<_>>();
+        while let Some(node) = stack.pop() {
+            if !removed.insert(node) {
+                continue;
             }
+            if let Some(children) = self.children.get(&node) {
+                stack.extend(children.iter().copied());
+            }
+        }
+        if removed.is_empty() {
+            return 0;
+        }
+
+        let mut removed_by_parent: HashMap<DomId, HashSet<DomId>> = HashMap::new();
+        for node in &removed {
+            if let Some(parent) = self.parents.get(node).copied() {
+                if !removed.contains(&parent) {
+                    removed_by_parent.entry(parent).or_default().insert(*node);
+                }
+            }
+        }
+        for (parent, removed_children) in removed_by_parent {
             if let Some(siblings) = self.children.get_mut(&parent) {
-                siblings.retain(|id| *id != node);
+                siblings.retain(|child| !removed_children.contains(child));
+            }
+            if let Some(parent_node) = self.node_for(parent) {
+                let removed_child_nodes = removed_children
+                    .iter()
+                    .filter_map(|child| self.node_for(*child))
+                    .collect::<HashSet<_>>();
+                self.arena
+                    .remove_children(parent_node, &removed_child_nodes);
             }
         }
 
-        self.delete_subtree(node);
+        let removed_layout_nodes = removed
+            .iter()
+            .filter_map(|node| self.node_for(*node))
+            .collect::<HashSet<_>>();
+        if self
+            .selection_scroll_node
+            .is_some_and(|node| removed_layout_nodes.contains(&node))
+        {
+            self.selection_scroll_node = None;
+        }
+
+        if self.root.is_some_and(|root| removed.contains(&root)) {
+            self.root = None;
+        }
+        if self
+            .viewport
+            .is_some_and(|viewport| removed.contains(&viewport))
+        {
+            self.viewport = None;
+        }
+
+        for node in &removed {
+            self.parents.remove(node);
+            self.children.remove(node);
+        }
+        for node in &removed {
+            if let Some(node_id) = self.dom_to_node.remove(node) {
+                self.node_to_dom.remove(&node_id);
+                self.transitions.clear_node(node_id);
+                self.arena.remove_node(node_id);
+            }
+        }
+
         self.layout_dirty = true;
-        true
+        removed.len()
     }
 
     pub(crate) fn detach_node(&mut self, node: DomId) -> bool {
@@ -1022,46 +1084,76 @@ impl PaintEngine {
         let total_start = Instant::now();
         let layout_start = Instant::now();
         let layout_passes_before = self.layout_passes();
+        let ensure_layout_start = Instant::now();
         self.ensure_layout(width, height, root);
-        self.arena.clamp_scroll_offsets();
+        profile_log("ensure_layout", ensure_layout_start.elapsed(), &[]);
+        let layout_changed = layout_passes_before != self.layout_passes();
+        if layout_changed {
+            let clamp_scroll_start = Instant::now();
+            self.arena.clamp_scroll_offsets();
+            profile_log("clamp_scroll_offsets", clamp_scroll_start.elapsed(), &[]);
+        }
+        let textarea_scroll_start = Instant::now();
         self.arena.ensure_dirty_textareas_visible();
-        let stats = self.arena.stats();
-        let layout_profile = self.arena.profile_stats();
         profile_log(
-            "layout",
-            layout_start.elapsed(),
-            &[
-                (
-                    "dirty",
-                    (layout_passes_before != self.layout_passes()).to_string(),
-                ),
-                ("passes", self.layout_passes().to_string()),
-                ("nodes", stats.node_count.to_string()),
-                ("inline_contexts", stats.inline_context_count.to_string()),
-                ("inline_fragments", stats.inline_fragment_count.to_string()),
-                (
-                    "inline_width_calls",
-                    layout_profile.inline_width_calls.to_string(),
-                ),
-                (
-                    "inline_height_calls",
-                    layout_profile.inline_height_calls.to_string(),
-                ),
-                (
-                    "inline_fragment_calls",
-                    layout_profile.inline_fragment_calls.to_string(),
-                ),
-                ("inline_width_ms", ns_to_ms(layout_profile.inline_width_ns)),
-                (
-                    "inline_height_ms",
-                    ns_to_ms(layout_profile.inline_height_ns),
-                ),
-                (
-                    "inline_fragment_ms",
-                    ns_to_ms(layout_profile.inline_fragment_ns),
-                ),
-            ],
+            "ensure_dirty_textareas_visible",
+            textarea_scroll_start.elapsed(),
+            &[],
         );
+        if profile_enabled() {
+            let layout_stats_start = Instant::now();
+            let stats = self.arena.stats();
+            let layout_profile = self.arena.profile_stats();
+            profile_log("layout_stats", layout_stats_start.elapsed(), &[]);
+            profile_log(
+                "layout",
+                layout_start.elapsed(),
+                &[
+                    ("dirty", layout_changed.to_string()),
+                    ("passes", self.layout_passes().to_string()),
+                    ("nodes", stats.node_count.to_string()),
+                    ("inline_contexts", stats.inline_context_count.to_string()),
+                    ("inline_fragments", stats.inline_fragment_count.to_string()),
+                    (
+                        "inline_width_calls",
+                        layout_profile.inline_width_calls.to_string(),
+                    ),
+                    (
+                        "inline_height_calls",
+                        layout_profile.inline_height_calls.to_string(),
+                    ),
+                    (
+                        "inline_fragment_calls",
+                        layout_profile.inline_fragment_calls.to_string(),
+                    ),
+                    (
+                        "dirty_descendant_visits",
+                        layout_profile.dirty_descendant_visits.to_string(),
+                    ),
+                    (
+                        "visible_overflow_visits",
+                        layout_profile.visible_overflow_visits.to_string(),
+                    ),
+                    (
+                        "scroll_clamp_visits",
+                        layout_profile.scroll_clamp_visits.to_string(),
+                    ),
+                    (
+                        "dirty_textarea_visits",
+                        layout_profile.dirty_textarea_visits.to_string(),
+                    ),
+                    ("inline_width_ms", ns_to_ms(layout_profile.inline_width_ns)),
+                    (
+                        "inline_height_ms",
+                        ns_to_ms(layout_profile.inline_height_ns),
+                    ),
+                    (
+                        "inline_fragment_ms",
+                        ns_to_ms(layout_profile.inline_fragment_ns),
+                    ),
+                ],
+            );
+        }
 
         let capture_hidden_selection_units =
             force_capture_hidden_selection_units || self.selection.active_selection().is_some();
@@ -1435,23 +1527,6 @@ impl PaintEngine {
         self.node_for(id).map(|node| self.arena.style(node))
     }
 
-    fn delete_subtree(&mut self, node: DomId) {
-        if self.root == Some(node) {
-            self.root = None;
-        }
-
-        let children = self.children.remove(&node).unwrap_or_default();
-        for child in children {
-            self.parents.remove(&child);
-            self.delete_subtree(child);
-        }
-
-        if let Some(node_id) = self.dom_to_node.remove(&node) {
-            self.node_to_dom.remove(&node_id);
-            self.transitions.clear_node(node_id);
-        }
-    }
-
     fn transition_event_for_dom(&self, event: TransitionEvent) -> Option<EngineTransitionEvent> {
         Some(EngineTransitionEvent {
             event_type: event.event_type,
@@ -1737,7 +1812,15 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
             let start = Instant::now();
             let command_count = commands.len();
             engine.reserve_for_batch(&commands);
+            let mut pending_destroys = Vec::new();
             for command in commands {
+                if let EngineCommand::DestroyNode { node } = command {
+                    pending_destroys.push(node);
+                    continue;
+                }
+                if !pending_destroys.is_empty() {
+                    engine.destroy_nodes(pending_destroys.drain(..));
+                }
                 if !apply_command(engine, command) {
                     profile_log(
                         "batch_apply",
@@ -1749,6 +1832,9 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
                     );
                     return false;
                 }
+            }
+            if !pending_destroys.is_empty() {
+                engine.destroy_nodes(pending_destroys);
             }
             profile_log(
                 "batch_apply",
@@ -2018,7 +2104,7 @@ fn clamp_pointer_to_rect_axis(value: i32, start: i32, end: i32) -> u32 {
 }
 
 fn profile_log(label: &str, duration: std::time::Duration, fields: &[(&str, String)]) {
-    if std::env::var_os("PAINTCANNON_PROFILE").is_none() {
+    if !profile_enabled() {
         return;
     }
 
@@ -2031,6 +2117,11 @@ fn profile_log(label: &str, duration: std::time::Duration, fields: &[(&str, Stri
         eprint!(" {key}={value}");
     }
     eprintln!();
+}
+
+fn profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("PAINTCANNON_PROFILE").is_some())
 }
 
 fn ns_to_ms(ns: u128) -> String {
@@ -2674,6 +2765,76 @@ mod tests {
         assert_ne!(first, second);
         assert!(!engine.destroy_node(first));
         assert!(engine.set_root(second));
+    }
+
+    #[test]
+    fn destroying_subtrees_reclaims_layout_nodes_for_future_trees() {
+        let mut engine = PaintEngine::new();
+        let root = engine.create_element(DivStyle::default());
+        for index in 0..1_000 {
+            let row = engine.create_element(DivStyle::default());
+            let text = engine.create_text(format!("row {index}"));
+            assert!(engine.append_child(row, text));
+            assert!(engine.append_child(root, row));
+        }
+
+        assert_eq!(engine.arena.stats().node_count, 2_001);
+        assert!(engine.destroy_node(root));
+        assert_eq!(engine.arena.stats().node_count, 0);
+
+        let replacement_root = engine.create_element(DivStyle::default());
+        for index in 0..1_000 {
+            let row = engine.create_element(DivStyle::default());
+            let text = engine.create_text(format!("replacement {index}"));
+            assert!(engine.append_child(row, text));
+            assert!(engine.append_child(replacement_root, row));
+        }
+
+        let stats = engine.arena.stats();
+        assert_eq!(stats.node_count, 2_001);
+        assert_eq!(stats.allocated_slot_count, 2_001);
+    }
+
+    #[test]
+    fn batched_sibling_destruction_preserves_survivors_and_reuses_slots() {
+        let mut engine = PaintEngine::new();
+        let root = engine.create_element(DivStyle::default());
+        let survivor = engine.create_element(DivStyle::default());
+        assert!(engine.append_child(root, survivor));
+
+        let removed = (0..1_000)
+            .map(|_| {
+                let child = engine.create_element(DivStyle::default());
+                assert!(engine.append_child(root, child));
+                child
+            })
+            .collect::<Vec<_>>();
+        let allocated_slots = engine.arena.stats().allocated_slot_count;
+
+        assert!(apply_command(
+            &mut engine,
+            EngineCommand::Batch {
+                commands: removed
+                    .iter()
+                    .map(|node| EngineCommand::DestroyNode { node: *node })
+                    .collect(),
+            },
+        ));
+
+        assert_eq!(engine.children.get(&root), Some(&vec![survivor]));
+        assert_eq!(
+            engine.arena.children(engine.node_for(root).unwrap()).len(),
+            1
+        );
+        assert_eq!(engine.arena.stats().node_count, 2);
+        for node in removed {
+            assert!(engine.node_for(node).is_none());
+        }
+
+        for _ in 0..1_000 {
+            engine.create_element(DivStyle::default());
+        }
+        assert_eq!(engine.arena.stats().allocated_slot_count, allocated_slots);
     }
 
     #[test]

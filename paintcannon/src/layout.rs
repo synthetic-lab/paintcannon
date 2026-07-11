@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{collections::HashSet, time::Instant};
 
 use taffy::{
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
@@ -51,9 +51,13 @@ pub(crate) struct TextAreaLayoutData {
 
 pub(crate) struct LayoutArena {
     nodes: Vec<LayoutNode>,
+    free_nodes: Vec<usize>,
+    scroll_nodes: HashSet<NodeId>,
+    dirty_textareas: HashSet<NodeId>,
     layout_passes: u64,
     layout_mode_stack: Vec<RunMode>,
     profile: LayoutProfileStats,
+    last_root_layout: Option<(NodeId, Size<AvailableSpace>)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -64,16 +68,22 @@ pub(crate) struct LayoutProfileStats {
     pub(crate) inline_width_ns: u128,
     pub(crate) inline_height_ns: u128,
     pub(crate) inline_fragment_ns: u128,
+    pub(crate) dirty_descendant_visits: u64,
+    pub(crate) visible_overflow_visits: u64,
+    pub(crate) scroll_clamp_visits: u64,
+    pub(crate) dirty_textarea_visits: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LayoutStats {
     pub(crate) node_count: usize,
+    pub(crate) allocated_slot_count: usize,
     pub(crate) inline_context_count: usize,
     pub(crate) inline_fragment_count: usize,
 }
 
 struct LayoutNode {
+    occupied: bool,
     kind: LayoutNodeKind,
     style: DivStyle,
     taffy_style: Style,
@@ -83,6 +93,8 @@ struct LayoutNode {
     cache: Cache,
     layout_dirty: bool,
     fragments_dirty: bool,
+    post_layout_dirty: bool,
+    visible_overflow_dirty: bool,
     scroll_left: u32,
     scroll_top: u32,
     fragments: Vec<InlineFragment>,
@@ -169,9 +181,13 @@ impl LayoutArena {
     pub(crate) fn new() -> Self {
         Self {
             nodes: Vec::new(),
+            free_nodes: Vec::new(),
+            scroll_nodes: HashSet::new(),
+            dirty_textareas: HashSet::new(),
             layout_passes: 0,
             layout_mode_stack: Vec::new(),
             profile: LayoutProfileStats::default(),
+            last_root_layout: None,
         }
     }
 
@@ -180,7 +196,8 @@ impl LayoutArena {
     }
 
     pub(crate) fn reserve_nodes(&mut self, additional: usize) {
-        self.nodes.reserve(additional);
+        self.nodes
+            .reserve(additional.saturating_sub(self.free_nodes.len()));
     }
 
     pub(crate) fn create_text(&mut self, text: impl Into<String>) -> NodeId {
@@ -303,6 +320,7 @@ impl LayoutArena {
             textarea.value = value.into();
             textarea.cursor = cursor;
             textarea.scroll_cursor_dirty = true;
+            self.dirty_textareas.insert(node);
             self.clear_cache_from(node);
         }
     }
@@ -312,6 +330,7 @@ impl LayoutArena {
             textarea.focused = focused;
             if focused {
                 textarea.scroll_cursor_dirty = true;
+                self.dirty_textareas.insert(node);
             }
         }
     }
@@ -342,6 +361,7 @@ impl LayoutArena {
         let next = next.min(textarea.value.chars().count()) as u32;
         textarea.cursor = next;
         textarea.scroll_cursor_dirty = true;
+        self.dirty_textareas.insert(node);
         Some(next)
     }
 
@@ -389,6 +409,7 @@ impl LayoutArena {
                     .min(value_len) as u32;
                 textarea.cursor = next;
                 textarea.scroll_cursor_dirty = false;
+                self.dirty_textareas.remove(&node);
                 Some(next)
             }
             LayoutNodeKind::Element | LayoutNodeKind::Text(_) | LayoutNodeKind::Image(_) => None,
@@ -448,16 +469,16 @@ impl LayoutArena {
     }
 
     pub(crate) fn append_child(&mut self, parent: NodeId, child: NodeId) {
-        if let Some(previous_parent) = self.nodes[node_index(child)].parent {
+        let previous_parent = self.nodes[node_index(child)].parent;
+        if let Some(previous_parent) = previous_parent {
             let children = &mut self.nodes[node_index(previous_parent)].children;
             if let Some(index) = children.iter().position(|id| *id == child) {
                 children.remove(index);
                 self.clear_cache_from(previous_parent);
             }
         }
-        let children = &mut self.nodes[node_index(parent)].children;
-        if let Some(index) = children.iter().position(|id| *id == child) {
-            children.remove(index);
+        if previous_parent.is_some_and(|previous_parent| previous_parent != parent) {
+            self.clear_cache_subtree(child);
         }
         self.nodes[node_index(parent)].children.push(child);
         self.nodes[node_index(child)].parent = Some(parent);
@@ -475,6 +496,9 @@ impl LayoutArena {
             if let Some(index) = children.iter().position(|id| *id == child) {
                 children.remove(index);
                 self.clear_cache_from(previous_parent);
+            }
+            if previous_parent != parent {
+                self.clear_cache_subtree(child);
             }
         }
 
@@ -497,21 +521,70 @@ impl LayoutArena {
         if let Some(index) = children.iter().position(|id| *id == child) {
             children.remove(index);
             self.nodes[node_index(child)].parent = None;
+            self.clear_cache_subtree(child);
             self.clear_cache_from(parent);
         }
+    }
+
+    pub(crate) fn remove_children(
+        &mut self,
+        parent: NodeId,
+        removed: &std::collections::HashSet<NodeId>,
+    ) {
+        let children = &mut self.nodes[node_index(parent)].children;
+        let original_len = children.len();
+        children.retain(|child| !removed.contains(child));
+        if children.len() == original_len {
+            return;
+        }
+        for child in removed {
+            let child_index = node_index(*child);
+            if self.nodes[child_index].parent == Some(parent) {
+                self.nodes[child_index].parent = None;
+            }
+        }
+        self.clear_cache_from(parent);
+    }
+
+    pub(crate) fn remove_node(&mut self, node: NodeId) {
+        let index = node_index(node);
+        self.scroll_nodes.remove(&node);
+        self.dirty_textareas.remove(&node);
+        let item = &mut self.nodes[index];
+        debug_assert!(item.occupied, "layout node removed twice");
+        item.occupied = false;
+        item.kind = LayoutNodeKind::Element;
+        item.style = DivStyle::default();
+        item.taffy_style = item.style.to_taffy();
+        item.children.clear();
+        item.parent = None;
+        item.layout = Layout::new();
+        item.cache.clear();
+        item.layout_dirty = true;
+        item.fragments_dirty = true;
+        item.post_layout_dirty = true;
+        item.visible_overflow_dirty = true;
+        item.fragments.clear();
+        item.measure_cache = InlineMeasureCache::default();
+        item.visible_overflow_size = Size::ZERO;
+        self.free_nodes.push(index);
     }
 
     pub(crate) fn set_style(&mut self, node: NodeId, style: DivStyle) {
         let item = &mut self.nodes[node_index(node)];
         item.taffy_style = style.to_taffy();
         item.style = style;
+        self.update_scroll_node(node);
         self.clear_cache_subtree_and_ancestors(node);
     }
 
     pub(crate) fn compute_layout(&mut self, root: NodeId, available: Size<AvailableSpace>) {
         self.layout_passes += 1;
         self.profile = LayoutProfileStats::default();
-        self.clear_measure_caches();
+        if self.last_root_layout != Some((root, available)) {
+            self.mark_post_layout_subtree_dirty(root);
+            self.last_root_layout = Some((root, available));
+        }
         compute_root_layout(self, root, available);
         self.ensure_dirty_descendants_are_laid_out(root);
         self.compute_visible_overflow_sizes(root);
@@ -562,14 +635,22 @@ impl LayoutArena {
 
     pub(crate) fn stats(&self) -> LayoutStats {
         LayoutStats {
-            node_count: self.nodes.len(),
+            node_count: self.nodes.iter().filter(|node| node.occupied).count(),
+            allocated_slot_count: self.nodes.len(),
             inline_context_count: self
                 .nodes
                 .iter()
                 .enumerate()
-                .filter(|(index, _)| self.is_inline_context(NodeId::from(*index)))
+                .filter(|(index, node)| {
+                    node.occupied && self.is_inline_context(NodeId::from(*index))
+                })
                 .count(),
-            inline_fragment_count: self.nodes.iter().map(|node| node.fragments.len()).sum(),
+            inline_fragment_count: self
+                .nodes
+                .iter()
+                .filter(|node| node.occupied)
+                .map(|node| node.fragments.len())
+                .sum(),
         }
     }
 
@@ -578,8 +659,8 @@ impl LayoutArena {
     }
 
     fn push_node(&mut self, kind: LayoutNodeKind, style: DivStyle) -> NodeId {
-        let id = NodeId::from(self.nodes.len());
-        self.nodes.push(LayoutNode {
+        let node = LayoutNode {
+            occupied: true,
             kind,
             taffy_style: style.to_taffy(),
             style,
@@ -589,13 +670,37 @@ impl LayoutArena {
             cache: Cache::new(),
             layout_dirty: true,
             fragments_dirty: true,
+            post_layout_dirty: true,
+            visible_overflow_dirty: true,
             scroll_left: 0,
             scroll_top: 0,
             fragments: Vec::new(),
             measure_cache: InlineMeasureCache::default(),
             visible_overflow_size: Size::ZERO,
-        });
+        };
+        let id = if let Some(index) = self.free_nodes.pop() {
+            self.nodes[index] = node;
+            NodeId::from(index)
+        } else {
+            let id = NodeId::from(self.nodes.len());
+            self.nodes.push(node);
+            id
+        };
+        self.update_scroll_node(id);
         id
+    }
+
+    fn update_scroll_node(&mut self, node: NodeId) {
+        let item = &self.nodes[node_index(node)];
+        let is_scroll_node = matches!(item.kind, LayoutNodeKind::TextArea(_))
+            || matches!(item.kind, LayoutNodeKind::Element)
+                && (item.style.overflow_x != LayoutOverflow::Visible
+                    || item.style.overflow_y != LayoutOverflow::Visible);
+        if is_scroll_node {
+            self.scroll_nodes.insert(node);
+        } else {
+            self.scroll_nodes.remove(&node);
+        }
     }
 
     pub(crate) fn inline_fragments(&self, node: NodeId) -> &[InlineFragment] {
@@ -833,13 +938,15 @@ impl LayoutArena {
         item.scroll_top = scroll_top.min(max_top);
         if let LayoutNodeKind::TextArea(textarea) = &mut item.kind {
             textarea.scroll_cursor_dirty = false;
+            self.dirty_textareas.remove(&node);
         }
         self.scroll_metrics_for_node(node)
     }
 
     pub(crate) fn clamp_scroll_offsets(&mut self) {
-        let nodes = (0..self.nodes.len()).map(NodeId::from).collect::<Vec<_>>();
+        let nodes = self.scroll_nodes.iter().copied().collect::<Vec<_>>();
         for node in nodes {
+            self.profile.scroll_clamp_visits += 1;
             let Some(metrics) = self.scroll_metrics_for_node(node) else {
                 continue;
             };
@@ -954,17 +1061,8 @@ impl LayoutArena {
     }
 
     pub(crate) fn ensure_dirty_textareas_visible(&mut self) {
-        let nodes = self
-            .nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(index, node)| match &node.kind {
-                LayoutNodeKind::TextArea(textarea) if textarea.scroll_cursor_dirty => {
-                    Some(NodeId::from(index))
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let nodes = std::mem::take(&mut self.dirty_textareas);
+        self.profile.dirty_textarea_visits += nodes.len() as u64;
 
         for node in nodes {
             self.ensure_textarea_cursor_visible(node);
@@ -1001,8 +1099,12 @@ impl LayoutArena {
         while let Some(node_id) = current {
             let item = &mut self.nodes[node_index(node_id)];
             item.cache.clear();
+            item.measure_cache.widths.clear();
+            item.measure_cache.heights.clear();
             item.layout_dirty = true;
             item.fragments_dirty = true;
+            item.post_layout_dirty = true;
+            item.visible_overflow_dirty = true;
             current = item.parent;
         }
     }
@@ -1015,8 +1117,12 @@ impl LayoutArena {
     fn clear_cache_subtree(&mut self, node: NodeId) {
         let index = node_index(node);
         self.nodes[index].cache.clear();
+        self.nodes[index].measure_cache.widths.clear();
+        self.nodes[index].measure_cache.heights.clear();
         self.nodes[index].layout_dirty = true;
         self.nodes[index].fragments_dirty = true;
+        self.nodes[index].post_layout_dirty = true;
+        self.nodes[index].visible_overflow_dirty = true;
         let child_count = self.nodes[index].children.len();
         for child_index in 0..child_count {
             let child = self.nodes[index].children[child_index];
@@ -1024,10 +1130,14 @@ impl LayoutArena {
         }
     }
 
-    fn clear_measure_caches(&mut self) {
-        for node in &mut self.nodes {
-            node.measure_cache.widths.clear();
-            node.measure_cache.heights.clear();
+    fn mark_post_layout_subtree_dirty(&mut self, node: NodeId) {
+        let index = node_index(node);
+        self.nodes[index].post_layout_dirty = true;
+        self.nodes[index].visible_overflow_dirty = true;
+        let child_count = self.nodes[index].children.len();
+        for child_index in 0..child_count {
+            let child = self.nodes[index].children[child_index];
+            self.mark_post_layout_subtree_dirty(child);
         }
     }
 
@@ -1039,6 +1149,10 @@ impl LayoutArena {
     }
 
     fn ensure_dirty_descendants_are_laid_out(&mut self, node: NodeId) {
+        if !self.nodes[node_index(node)].post_layout_dirty {
+            return;
+        }
+        self.profile.dirty_descendant_visits += 1;
         if self.inline_fragments_need_layout(node) {
             self.compute_inline_fragments_for_stored_layout(node);
         }
@@ -1052,9 +1166,14 @@ impl LayoutArena {
             let child = self.nodes[node_index(node)].children[child_index];
             self.ensure_dirty_descendants_are_laid_out(child);
         }
+        self.nodes[node_index(node)].post_layout_dirty = false;
     }
 
     fn compute_visible_overflow_sizes(&mut self, node: NodeId) -> Size<f32> {
+        if !self.nodes[node_index(node)].visible_overflow_dirty {
+            return self.nodes[node_index(node)].visible_overflow_size;
+        }
+        self.profile.visible_overflow_visits += 1;
         let child_count = self.nodes[node_index(node)].children.len();
         for child_index in 0..child_count {
             let child = self.nodes[node_index(node)].children[child_index];
@@ -1104,6 +1223,7 @@ impl LayoutArena {
         }
 
         self.nodes[node_index(node)].visible_overflow_size = size;
+        self.nodes[node_index(node)].visible_overflow_dirty = false;
         size
     }
 
@@ -3708,6 +3828,45 @@ mod tests {
     }
 
     #[test]
+    fn resize_recomputes_visible_overflow_for_percent_descendants() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style =
+            block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = arena.create_element(viewport_style);
+        let wrapper = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Percent(1.0),
+        ));
+        let content = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Percent(2.0),
+        ));
+        arena.append_child(wrapper, content);
+        arena.append_child(viewport, wrapper);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(4.0),
+            },
+        );
+        assert_eq!(arena.scroll_metrics(viewport).unwrap().scroll_height, 8);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(8.0),
+            },
+        );
+        let metrics = arena.scroll_metrics(viewport).unwrap();
+        assert_eq!(metrics.client_height, 8);
+        assert_eq!(metrics.scroll_height, 16);
+    }
+
+    #[test]
     fn scroll_offset_clamps_when_viewport_grows_after_resize() {
         let mut arena = LayoutArena::new();
         let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Length(3.0));
@@ -3939,6 +4098,65 @@ mod tests {
         let metrics = arena.scroll_metrics(viewport).unwrap();
         assert_eq!(metrics.client_height, 5);
         assert_eq!(metrics.scroll_height, 10_000);
+    }
+
+    #[test]
+    fn isolated_text_change_does_not_walk_clean_ten_thousand_row_branch() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(80.0), CssDimension::Length(24.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = arena.create_element(root_style);
+
+        let header = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(1.0),
+        ));
+        let status = arena.create_text("scrollTop=0");
+        arena.append_child(header, status);
+        arena.append_child(root, header);
+
+        let mut viewport_style =
+            block_style(CssDimension::Percent(1.0), CssDimension::Length(23.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = arena.create_element(viewport_style);
+        let mut content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        content_style.display = LayoutDisplay::Flex;
+        content_style.flex_direction = LayoutFlexDirection::Column;
+        let content = arena.create_element(content_style);
+        for index in 0..10_000 {
+            let row =
+                arena.create_element(block_style(CssDimension::Percent(1.0), CssDimension::Auto));
+            let text = arena.create_text(format!("row {index}"));
+            arena.append_child(row, text);
+            arena.append_child(content, row);
+        }
+        arena.append_child(viewport, content);
+        arena.append_child(root, viewport);
+
+        let available = Size {
+            width: AvailableSpace::Definite(80.0),
+            height: AvailableSpace::Definite(24.0),
+        };
+        arena.compute_layout(root, available);
+        arena.set_text(status, "scrollTop=3");
+        arena.compute_layout(root, available);
+        arena.clamp_scroll_offsets();
+        arena.ensure_dirty_textareas_visible();
+
+        let profile = arena.profile_stats();
+        assert!(
+            profile.dirty_descendant_visits < 100 && profile.visible_overflow_visits < 100,
+            "visited {} nodes while finding dirty descendants and {} while updating visible overflow",
+            profile.dirty_descendant_visits,
+            profile.visible_overflow_visits,
+        );
+        assert!(
+            profile.scroll_clamp_visits < 100 && profile.dirty_textarea_visits < 100,
+            "visited {} nodes while clamping scroll offsets and {} while finding dirty textareas",
+            profile.scroll_clamp_visits,
+            profile.dirty_textarea_visits,
+        );
     }
 
     #[test]

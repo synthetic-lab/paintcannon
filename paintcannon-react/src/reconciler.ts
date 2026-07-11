@@ -25,7 +25,7 @@ type HostProps = hostComponents.HostProps;
 type HostNode = hostComponents.HostNode;
 type HostElement = hostComponents.HostElement;
 type HostText = hostComponents.HostText;
-type HostParent = HostElement | RootContainer;
+type HostParent = hostComponents.HostParent;
 type ChildContainerElement = PaintElement & {
   appendChild(child: PaintNode): PaintNode;
   insertBefore(child: PaintNode, before: PaintNode): PaintNode;
@@ -48,7 +48,7 @@ export type PaintCannonReactRoot = {
 type RootContainer = {
   paintCannon: PaintCannon;
   root: PaintDivElement | PaintSpanElement | PaintFormElement;
-  children: HostNode[];
+  children: Set<HostNode>;
   presentCommits: boolean;
 };
 
@@ -78,9 +78,10 @@ const reconciler = createReconciler({
   preparePortalMount: () => null,
   clearContainer(container: RootContainer) {
     for (const child of container.children) {
+      child.parent = undefined;
       destroyHostNode(child);
     }
-    container.children = [];
+    container.children.clear();
     return false;
   },
   shouldSetTextContent: () => false,
@@ -107,11 +108,11 @@ const reconciler = createReconciler({
     container.root.appendChild(child.node);
   },
   insertBefore(parent: HostElement, child: HostNode, before: HostNode) {
-    insertVirtualChild(parent, child, before);
+    insertVirtualChild(parent, child);
     insertPaintChild(parent.node, child.node, before.node);
   },
   insertInContainerBefore(container: RootContainer, child: HostNode, before: HostNode) {
-    insertVirtualChild(container, child, before);
+    insertVirtualChild(container, child);
     container.root.insertBefore(child.node, before.node);
   },
   removeChild(parent: HostElement, child: HostNode) {
@@ -201,7 +202,7 @@ export function createRoot(options: CreateRootOptions = {}): PaintCannonReactRoo
   const rootContainer: RootContainer = {
     paintCannon,
     root: container,
-    children: [],
+    children: new Set(),
     presentCommits: true,
   };
   const animationScheduler = new AnimationScheduler(paintCannon);
@@ -292,24 +293,21 @@ export function render(
 }
 
 function appendVirtualChild(parent: HostParent, child: HostNode): void {
-  removeVirtualChild(parent, child);
-  parent.children.push(child);
+  child.parent?.children.delete(child);
+  parent.children.add(child);
+  child.parent = parent;
 }
 
-function insertVirtualChild(parent: HostParent, child: HostNode, before: HostNode): void {
-  removeVirtualChild(parent, child);
-  const index = parent.children.indexOf(before);
-  if (index === -1) {
-    parent.children.push(child);
-  } else {
-    parent.children.splice(index, 0, child);
-  }
+function insertVirtualChild(parent: HostParent, child: HostNode): void {
+  child.parent?.children.delete(child);
+  parent.children.add(child);
+  child.parent = parent;
 }
 
 function removeVirtualChild(parent: HostParent, child: HostNode): void {
-  const index = parent.children.indexOf(child);
-  if (index !== -1) {
-    parent.children.splice(index, 1);
+  if (child.parent === parent) {
+    parent.children.delete(child);
+    child.parent = undefined;
   }
 }
 
