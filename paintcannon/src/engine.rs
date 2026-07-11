@@ -285,6 +285,9 @@ pub(crate) enum EngineCommand {
     SetRoot {
         root: DomId,
     },
+    SetViewport {
+        viewport: DomId,
+    },
     DestroyNode {
         node: DomId,
     },
@@ -419,6 +422,7 @@ pub(crate) enum EngineCommand {
 pub(crate) struct PaintEngine {
     arena: LayoutArena,
     root: Option<DomId>,
+    viewport: Option<DomId>,
     next_dom_id: u32,
     dom_to_node: HashMap<DomId, NodeId>,
     node_to_dom: HashMap<NodeId, DomId>,
@@ -443,6 +447,7 @@ impl PaintEngine {
         Self {
             arena: LayoutArena::new(),
             root: None,
+            viewport: None,
             next_dom_id: 1,
             dom_to_node: HashMap::new(),
             node_to_dom: HashMap::new(),
@@ -630,6 +635,19 @@ impl PaintEngine {
             return false;
         }
         self.root = Some(root);
+        self.layout_dirty = true;
+        true
+    }
+
+    pub(crate) fn set_viewport(&mut self, viewport: DomId) -> bool {
+        let Some(node) = self.node_for(viewport) else {
+            return false;
+        };
+        let mut style = self.arena.style(node).clone();
+        style.overflow_x = LayoutOverflow::Hidden;
+        style.overflow_y = LayoutOverflow::Hidden;
+        self.arena.set_style(node, style);
+        self.viewport = Some(viewport);
         self.layout_dirty = true;
         true
     }
@@ -999,6 +1017,7 @@ impl PaintEngine {
         now: Instant,
         force_capture_hidden_selection_units: bool,
     ) -> Option<Frame> {
+        self.sync_viewport_scrollbar_color();
         let root = self.root.and_then(|root| self.node_for(root))?;
         let total_start = Instant::now();
         let layout_start = Instant::now();
@@ -1304,13 +1323,36 @@ impl PaintEngine {
             return;
         }
 
-        self.arena.compute_layout(
-            root,
-            Size {
-                width: AvailableSpace::Definite(width as f32),
-                height: AvailableSpace::Definite(height as f32),
-            },
-        );
+        let available = Size {
+            width: AvailableSpace::Definite(width as f32),
+            height: AvailableSpace::Definite(height as f32),
+        };
+        for _ in 0..3 {
+            self.arena.compute_layout(root, available);
+            let Some(viewport) = self.viewport.and_then(|id| self.node_for(id)) else {
+                break;
+            };
+            let Some(metrics) = self.arena.scroll_metrics_snapshot(viewport) else {
+                break;
+            };
+            let mut style = self.arena.style(viewport).clone();
+            let overflow_x = if metrics.scroll_width > metrics.client_width {
+                LayoutOverflow::Scroll
+            } else {
+                LayoutOverflow::Hidden
+            };
+            let overflow_y = if metrics.scroll_height > metrics.client_height {
+                LayoutOverflow::Scroll
+            } else {
+                LayoutOverflow::Hidden
+            };
+            if style.overflow_x == overflow_x && style.overflow_y == overflow_y {
+                break;
+            }
+            style.overflow_x = overflow_x;
+            style.overflow_y = overflow_y;
+            self.arena.set_style(viewport, style);
+        }
         self.layout_dirty = false;
         self.last_layout_size = Some(size);
     }
@@ -1319,6 +1361,34 @@ impl PaintEngine {
         if let Some(root) = self.root.and_then(|root| self.node_for(root)) {
             self.ensure_layout(width, height, root);
         }
+    }
+
+    fn sync_viewport_scrollbar_color(&mut self) {
+        let Some(viewport) = self.viewport else {
+            return;
+        };
+        let Some(content_root) = self
+            .children
+            .get(&viewport)
+            .and_then(|children| children.first())
+            .copied()
+        else {
+            return;
+        };
+        let Some(viewport_node) = self.node_for(viewport) else {
+            return;
+        };
+        let Some(content_root_node) = self.node_for(content_root) else {
+            return;
+        };
+        let scrollbar_color = self.arena.style(content_root_node).scrollbar_color;
+        if self.arena.style(viewport_node).scrollbar_color == scrollbar_color {
+            return;
+        }
+
+        let mut style = self.arena.style(viewport_node).clone();
+        style.scrollbar_color = scrollbar_color;
+        self.arena.set_style(viewport_node, style);
     }
 
     #[cfg(test)]
@@ -1739,6 +1809,9 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         EngineCommand::SetRoot { root } => {
             engine.set_root(root);
         }
+        EngineCommand::SetViewport { viewport } => {
+            engine.set_viewport(viewport);
+        }
         EngineCommand::DestroyNode { node } => {
             engine.destroy_node(node);
         }
@@ -2143,6 +2216,141 @@ mod tests {
                 button: 0,
             },
         ));
+    }
+
+    #[test]
+    fn viewport_automatically_enables_scrollbars_for_descendant_overflow() {
+        let mut engine = PaintEngine::new();
+        let viewport = engine.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Percent(1.0),
+        ));
+        let root = engine.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Percent(1.0),
+        ));
+        let content = engine.create_element(block_style(
+            CssDimension::Length(20.0),
+            CssDimension::Length(10.0),
+        ));
+        assert!(engine.append_child(root, content));
+        assert!(engine.append_child(viewport, root));
+        assert!(engine.set_viewport(viewport));
+        assert!(engine.set_root(viewport));
+
+        engine.render_frame(10, 4).unwrap();
+
+        let metrics = engine.scroll_metrics(viewport).unwrap();
+        assert_eq!(metrics.client_width, 9);
+        assert_eq!(metrics.client_height, 3);
+        assert_eq!(metrics.scroll_width, 20);
+        assert_eq!(metrics.scroll_height, 10);
+        let vertical = engine.scrollbar_hit_at(9, 1).unwrap();
+        assert_eq!(vertical.target_id, viewport);
+        assert_eq!(vertical.axis, ScrollbarAxis::Vertical);
+        let horizontal = engine.scrollbar_hit_at(2, 3).unwrap();
+        assert_eq!(horizontal.target_id, viewport);
+        assert_eq!(horizontal.axis, ScrollbarAxis::Horizontal);
+
+        let layout_passes = engine.layout_passes();
+        let thumb_color = Background::Rgb(56, 189, 248);
+        assert!(engine.mutate_style(
+            root,
+            StyleMutation::ScrollbarColor(ScrollbarColor::Colors {
+                thumb: thumb_color,
+                track: Background::Rgb(17, 24, 39),
+            }),
+        ));
+        let recolored = engine.render_frame(10, 4).unwrap();
+        assert_eq!(engine.layout_passes(), layout_passes);
+        assert_eq!(recolored.cell(9, 0).unwrap().background, thumb_color);
+
+        engine.set_scroll_offset(viewport, 8, 6).unwrap();
+        engine.render_frame(30, 12).unwrap();
+        let resized = engine.scroll_metrics(viewport).unwrap();
+        assert_eq!(resized.scroll_left, 0);
+        assert_eq!(resized.scroll_top, 0);
+        assert!(engine.scrollbar_hit_at(29, 1).is_none());
+        assert!(engine.scrollbar_hit_at(1, 11).is_none());
+    }
+
+    #[test]
+    fn viewport_does_not_render_scrollbars_when_content_fits() {
+        let mut engine = PaintEngine::new();
+        let viewport = engine.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Percent(1.0),
+        ));
+        let content = engine.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Percent(1.0),
+        ));
+        assert!(engine.append_child(viewport, content));
+        assert!(engine.set_viewport(viewport));
+        assert!(engine.set_root(viewport));
+
+        engine.render_frame(10, 4).unwrap();
+
+        assert!(engine.scrollbar_hit_at(9, 1).is_none());
+        let viewport_node = engine.node_for(viewport).unwrap();
+        let style = engine.arena.style(viewport_node);
+        assert!(style.overflow_x == LayoutOverflow::Hidden);
+        assert!(style.overflow_y == LayoutOverflow::Hidden);
+    }
+
+    #[test]
+    fn viewport_frame_is_unchanged_when_scrolling_past_the_end() {
+        let mut engine = PaintEngine::new();
+        let viewport = engine.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Percent(1.0),
+        ));
+        let root = engine.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Percent(1.0),
+        ));
+        let mut content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        content_style.display = crate::style::LayoutDisplay::Flex;
+        content_style.flex_direction = LayoutFlexDirection::Column;
+        let content = engine.create_element(content_style);
+        for index in 0..80 {
+            let row = engine.create_element(block_style(
+                CssDimension::Percent(1.0),
+                CssDimension::Length(1.0),
+            ));
+            let text = engine.create_text(format!("{index:02}"));
+            assert!(engine.append_child(row, text));
+            assert!(engine.append_child(content, row));
+        }
+        assert!(engine.append_child(root, content));
+        assert!(engine.append_child(viewport, root));
+        assert!(engine.set_viewport(viewport));
+        assert!(engine.set_root(viewport));
+
+        engine.render_frame(10, 4).unwrap();
+        let metrics = engine.scroll_metrics(viewport).unwrap();
+        assert_eq!(metrics.client_height, 4);
+        assert_eq!(metrics.scroll_height, 80);
+        let max_top = metrics.scroll_height - metrics.client_height;
+        let at_max_metrics = engine.set_scroll_offset(viewport, 0, max_top).unwrap();
+        let at_max = engine.render_frame(10, 4).unwrap();
+
+        let past_end_metrics = engine
+            .set_scroll_offset(viewport, 0, max_top.saturating_add(3))
+            .unwrap();
+        let past_end = engine.render_frame(10, 4).unwrap();
+
+        assert_eq!(at_max_metrics, past_end_metrics);
+        for y in 0..at_max.height() {
+            for x in 0..at_max.width() {
+                assert_eq!(at_max.cell(x, y), past_end.cell(x, y));
+            }
+        }
+        assert!((0..past_end.height())
+            .flat_map(|y| (0..past_end.width()).map(move |x| (x, y)))
+            .any(|(x, y)| past_end
+                .cell(x, y)
+                .is_some_and(|cell| cell.character != ' ')));
     }
 
     #[test]

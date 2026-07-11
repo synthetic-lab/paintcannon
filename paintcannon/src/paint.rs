@@ -729,7 +729,13 @@ impl<'a, 'out> Painter<'a, 'out> {
     fn child_vertical_edges(&self, child: NodeId, parent_y: i32) -> (i32, i32) {
         let layout = self.arena.layout(child);
         let top = parent_y + layout.location.y.round() as i32;
-        let height = layout.size.height.round().max(0.0) as i32;
+        let height = if self.arena.style(child).overflow_y == LayoutOverflow::Visible {
+            self.arena.visible_overflow_size(child).height
+        } else {
+            layout.size.height
+        }
+        .round()
+        .max(0.0) as i32;
         (top, top + height)
     }
 

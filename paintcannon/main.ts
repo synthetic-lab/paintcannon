@@ -407,6 +407,7 @@ export class PaintCannon {
   };
   private hoveredElement: PaintElement | undefined;
   private rootElement: PaintElement | undefined;
+  private readonly viewportElement: DivElement | undefined;
   private readonly handleSigcont = () => {
     if (!this.suspendedByPaintCannon || this.stopped) {
       return;
@@ -421,15 +422,26 @@ export class PaintCannon {
 
   constructor(options: PaintCannonOptions = {}) {
     const binding = paintCannonDeps.loadNativeBinding();
+    const alternateScreen = options.alternateScreen ?? false;
     this.binding = new binding.PaintCannon(
       options.forceCompatMode ?? false,
-      options.alternateScreen ?? false,
+      alternateScreen,
       options.captureMouse ?? false,
       options.captureCtrlC ?? false,
     );
     this.frameIntervalMs = fpsToInterval(options.fps ?? 60);
     this.captureCtrlZ = options.captureCtrlZ ?? false;
     this.captureMouse = options.captureMouse ?? false;
+    if (alternateScreen) {
+      const viewport = this.createDivElement();
+      viewport.style.width = "100%";
+      viewport.style.height = "100%";
+      this.binding.setViewport(viewport.id);
+      this.setNativeRoot(viewport.id);
+      this.viewportElement = viewport;
+    } else {
+      this.viewportElement = undefined;
+    }
     registerLivePaintCannon(this);
     process.on("SIGCONT", this.handleSigcont);
     if (options.syntheticKeyupDelayMs !== undefined) {
@@ -551,8 +563,23 @@ export class PaintCannon {
 
   setRoot(element: PaintElement): void {
     assertElement(element);
+    const viewport = this.viewportElement;
+    if (viewport !== undefined) {
+      const previousRoot = this.rootElement;
+      if (
+        previousRoot !== undefined &&
+        previousRoot !== element &&
+        this.parents.get(previousRoot.id) === viewport
+      ) {
+        viewport.detachChild(previousRoot);
+      }
+      if (this.parents.get(element.id) !== viewport) {
+        viewport.appendChild(element);
+      }
+    } else {
+      this.setNativeRoot(element.id);
+    }
     this.rootElement = element;
-    this.setNativeRoot(element.id);
   }
 
   get terminalSize(): TerminalSize {
@@ -1809,8 +1836,8 @@ export class PaintCannon {
     }
 
     const current = this.getScrollMetrics(scrollTarget) ?? emptyScrollMetrics();
-    const canScrollX = isElementAxisScrollable(scrollTarget, "x");
-    const canScrollY = isElementAxisScrollable(scrollTarget, "y");
+    const canScrollX = this.isElementAxisScrollable(scrollTarget, "x");
+    const canScrollY = this.isElementAxisScrollable(scrollTarget, "y");
     const nextLeft = canScrollX ? current.scrollLeft + input.deltaX * 4 : current.scrollLeft;
     const nextTop = canScrollY ? current.scrollTop + input.deltaY * 3 : current.scrollTop;
 
@@ -1829,13 +1856,17 @@ export class PaintCannon {
     deltaY: number,
   ): PaintElement | undefined {
     for (const element of this.elementPath(target)) {
-      const canScrollX = deltaX !== 0 && isElementAxisScrollable(element, "x");
-      const canScrollY = deltaY !== 0 && isElementAxisScrollable(element, "y");
+      const canScrollX = deltaX !== 0 && this.isElementAxisScrollable(element, "x");
+      const canScrollY = deltaY !== 0 && this.isElementAxisScrollable(element, "y");
       if (canScrollX || canScrollY) {
         return element;
       }
     }
     return undefined;
+  }
+
+  private isElementAxisScrollable(element: PaintElement, axis: ScrollbarAxis): boolean {
+    return element === this.viewportElement || isElementAxisScrollable(element, axis);
   }
 
   private dispatchHoverBoundaryEvents(
