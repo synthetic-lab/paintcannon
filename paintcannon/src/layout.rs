@@ -72,6 +72,9 @@ pub(crate) struct LayoutProfileStats {
     pub(crate) visible_overflow_visits: u64,
     pub(crate) scroll_clamp_visits: u64,
     pub(crate) dirty_textarea_visits: u64,
+    pub(crate) taffy_ns: u128,
+    pub(crate) dirty_descendants_ns: u128,
+    pub(crate) visible_overflow_ns: u128,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,8 +113,10 @@ struct ContentWidths {
 
 #[derive(Default)]
 struct InlineMeasureCache {
-    widths: Vec<InlineWidthCacheEntry>,
-    heights: Vec<InlineHeightCacheEntry>,
+    width: Option<InlineWidthCacheEntry>,
+    extra_widths: Vec<InlineWidthCacheEntry>,
+    height: Option<InlineHeightCacheEntry>,
+    extra_heights: Vec<InlineHeightCacheEntry>,
 }
 
 #[derive(Clone, Copy)]
@@ -125,6 +130,47 @@ struct InlineHeightCacheEntry {
     white_space: CssWhiteSpace,
     width: u32,
     height: f32,
+}
+
+impl InlineMeasureCache {
+    fn width(&self, white_space: CssWhiteSpace) -> Option<ContentWidths> {
+        self.width
+            .iter()
+            .chain(&self.extra_widths)
+            .find(|entry| entry.white_space == white_space)
+            .map(|entry| entry.widths)
+    }
+
+    fn insert_width(&mut self, entry: InlineWidthCacheEntry) {
+        if self.width.is_none() {
+            self.width = Some(entry);
+        } else {
+            self.extra_widths.push(entry);
+        }
+    }
+
+    fn height(&self, white_space: CssWhiteSpace, width: u32) -> Option<f32> {
+        self.height
+            .iter()
+            .chain(&self.extra_heights)
+            .find(|entry| entry.white_space == white_space && entry.width == width)
+            .map(|entry| entry.height)
+    }
+
+    fn insert_height(&mut self, entry: InlineHeightCacheEntry) {
+        if self.height.is_none() {
+            self.height = Some(entry);
+        } else {
+            self.extra_heights.push(entry);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.width = None;
+        self.extra_widths.clear();
+        self.height = None;
+        self.extra_heights.clear();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,6 +244,10 @@ impl LayoutArena {
     pub(crate) fn reserve_nodes(&mut self, additional: usize) {
         self.nodes
             .reserve(additional.saturating_sub(self.free_nodes.len()));
+    }
+
+    pub(crate) fn reserve_children(&mut self, node: NodeId, additional: usize) {
+        self.nodes[node_index(node)].children.reserve(additional);
     }
 
     pub(crate) fn create_text(&mut self, text: impl Into<String>) -> NodeId {
@@ -585,9 +635,15 @@ impl LayoutArena {
             self.mark_post_layout_subtree_dirty(root);
             self.last_root_layout = Some((root, available));
         }
+        let taffy_start = Instant::now();
         compute_root_layout(self, root, available);
+        self.profile.taffy_ns = taffy_start.elapsed().as_nanos();
+        let dirty_descendants_start = Instant::now();
         self.ensure_dirty_descendants_are_laid_out(root);
+        self.profile.dirty_descendants_ns = dirty_descendants_start.elapsed().as_nanos();
+        let visible_overflow_start = Instant::now();
         self.compute_visible_overflow_sizes(root);
+        self.profile.visible_overflow_ns = visible_overflow_start.elapsed().as_nanos();
     }
 
     pub(crate) fn layout(&self, node: NodeId) -> Layout {
@@ -1099,8 +1155,7 @@ impl LayoutArena {
         while let Some(node_id) = current {
             let item = &mut self.nodes[node_index(node_id)];
             item.cache.clear();
-            item.measure_cache.widths.clear();
-            item.measure_cache.heights.clear();
+            item.measure_cache.clear();
             item.layout_dirty = true;
             item.fragments_dirty = true;
             item.post_layout_dirty = true;
@@ -1117,8 +1172,7 @@ impl LayoutArena {
     fn clear_cache_subtree(&mut self, node: NodeId) {
         let index = node_index(node);
         self.nodes[index].cache.clear();
-        self.nodes[index].measure_cache.widths.clear();
-        self.nodes[index].measure_cache.heights.clear();
+        self.nodes[index].measure_cache.clear();
         self.nodes[index].layout_dirty = true;
         self.nodes[index].fragments_dirty = true;
         self.nodes[index].post_layout_dirty = true;
@@ -1315,21 +1369,40 @@ impl LayoutArena {
             ..
         } = inputs;
 
-        let style = self.nodes[node_index(node_id)].taffy_style.clone();
-        let paint_style = self.nodes[node_index(node_id)].style.clone();
+        let (
+            margin_style,
+            padding_style,
+            border_style,
+            box_sizing,
+            style_aspect_ratio,
+            style_size,
+            style_min_size,
+            style_max_size,
+            scrollbar_gutter,
+            white_space,
+        ) = {
+            let node = &self.nodes[node_index(node_id)];
+            let style = &node.taffy_style;
+            (
+                style.margin,
+                style.padding,
+                style.border,
+                style.box_sizing,
+                style.aspect_ratio,
+                style.size,
+                style.min_size,
+                style.max_size,
+                scrollbar_gutter_for_style(style),
+                node.style.white_space,
+            )
+        };
 
-        let margin = style
-            .margin()
-            .resolve_or_zero(parent_size.width, |_, _| 0.0);
-        let padding = style
-            .padding()
-            .resolve_or_zero(parent_size.width, |_, _| 0.0);
-        let border = style
-            .border()
-            .resolve_or_zero(parent_size.width, |_, _| 0.0);
+        let margin = margin_style.resolve_or_zero(parent_size.width, |_, _| 0.0);
+        let padding = padding_style.resolve_or_zero(parent_size.width, |_, _| 0.0);
+        let border = border_style.resolve_or_zero(parent_size.width, |_, _| 0.0);
         let padding_border = padding + border;
         let padding_border_size = padding_border.sum_axes();
-        let box_sizing_adjustment = if style.box_sizing() == taffy::BoxSizing::ContentBox {
+        let box_sizing_adjustment = if box_sizing == taffy::BoxSizing::ContentBox {
             padding_border_size
         } else {
             Size::ZERO
@@ -1338,19 +1411,16 @@ impl LayoutArena {
         let (node_size, node_min_size, node_max_size, aspect_ratio) = match sizing_mode {
             SizingMode::ContentSize => (known_dimensions, Size::NONE, Size::NONE, None),
             SizingMode::InherentSize => {
-                let aspect_ratio = style.aspect_ratio();
-                let style_size = style
-                    .size()
+                let aspect_ratio = style_aspect_ratio;
+                let style_size = style_size
                     .maybe_resolve(parent_size, |_, _| 0.0)
                     .maybe_apply_aspect_ratio(aspect_ratio)
                     .maybe_add(box_sizing_adjustment);
-                let style_min_size = style
-                    .min_size()
+                let style_min_size = style_min_size
                     .maybe_resolve(parent_size, |_, _| 0.0)
                     .maybe_apply_aspect_ratio(aspect_ratio)
                     .maybe_add(box_sizing_adjustment);
-                let style_max_size = style
-                    .max_size()
+                let style_max_size = style_max_size
                     .maybe_resolve(parent_size, |_, _| 0.0)
                     .maybe_add(box_sizing_adjustment);
 
@@ -1374,7 +1444,7 @@ impl LayoutArena {
             }
         }
 
-        let content_box_inset = padding_border + scrollbar_gutter_for_style(&style);
+        let content_box_inset = padding_border + scrollbar_gutter;
         let content_available = Size {
             width: known_dimensions
                 .width
@@ -1401,7 +1471,7 @@ impl LayoutArena {
         };
 
         let inline_width_start = Instant::now();
-        let content_widths = self.inline_content_widths(node_id, paint_style.white_space);
+        let content_widths = self.inline_content_widths(node_id, white_space);
         self.profile.inline_width_calls += 1;
         self.profile.inline_width_ns += inline_width_start.elapsed().as_nanos();
         let content_width = known_dimensions
@@ -1424,18 +1494,15 @@ impl LayoutArena {
             });
 
         let inline_height_start = Instant::now();
-        let content_height = self.inline_content_height(
-            node_id,
-            paint_style.white_space,
-            content_width.max(1.0).round() as u32,
-        );
+        let content_height =
+            self.inline_content_height(node_id, white_space, content_width.max(1.0).round() as u32);
         self.profile.inline_height_calls += 1;
         self.profile.inline_height_ns += inline_height_start.elapsed().as_nanos();
         if run_mode == RunMode::PerformLayout && self.should_store_layout() {
             let inline_fragment_start = Instant::now();
             self.compute_inline_fragments(
                 node_id,
-                paint_style.white_space,
+                white_space,
                 content_width.max(1.0).round() as u32,
             );
             self.mark_inline_descendants_clean(node_id);
@@ -1470,13 +1537,8 @@ impl LayoutArena {
         white_space: CssWhiteSpace,
     ) -> ContentWidths {
         let index = node_index(node_id);
-        if let Some(entry) = self.nodes[index]
-            .measure_cache
-            .widths
-            .iter()
-            .find(|entry| entry.white_space == white_space)
-        {
-            return entry.widths;
+        if let Some(widths) = self.nodes[index].measure_cache.width(white_space) {
+            return widths;
         }
 
         let child_count = self.nodes[index].children.len();
@@ -1491,8 +1553,7 @@ impl LayoutArena {
         }
         self.nodes[index]
             .measure_cache
-            .widths
-            .push(InlineWidthCacheEntry {
+            .insert_width(InlineWidthCacheEntry {
                 white_space,
                 widths,
             });
@@ -1538,13 +1599,8 @@ impl LayoutArena {
     ) -> f32 {
         let width = width.max(1);
         let index = node_index(node);
-        if let Some(entry) = self.nodes[index]
-            .measure_cache
-            .heights
-            .iter()
-            .find(|entry| entry.white_space == white_space && entry.width == width)
-        {
-            return entry.height;
+        if let Some(height) = self.nodes[index].measure_cache.height(white_space, width) {
+            return height;
         }
 
         let mut cursor = InlineMeasureCursor {
@@ -1561,8 +1617,7 @@ impl LayoutArena {
         let height = (cursor.row + 1).max(1) as f32;
         self.nodes[index]
             .measure_cache
-            .heights
-            .push(InlineHeightCacheEntry {
+            .insert_height(InlineHeightCacheEntry {
                 white_space,
                 width,
                 height,
@@ -1604,15 +1659,20 @@ impl LayoutArena {
     }
 
     fn compute_inline_fragments(&mut self, node: NodeId, white_space: CssWhiteSpace, width: u32) {
+        let index = node_index(node);
+        let fragment_capacity = self.nodes[index]
+            .measure_cache
+            .width(white_space)
+            .map(|widths| widths.max.ceil() as usize)
+            .unwrap_or(0);
         let mut cursor = InlineLayoutCursor {
             col: 0,
             row: 0,
             width: width.max(1),
             max_col: 0,
             selection_order: 0,
-            fragments: Vec::new(),
+            fragments: Vec::with_capacity(fragment_capacity),
         };
-        let index = node_index(node);
         let child_count = self.nodes[index].children.len();
         for child_index in 0..child_count {
             let child = self.nodes[index].children[child_index];
@@ -4127,7 +4187,9 @@ mod tests {
         for index in 0..10_000 {
             let row =
                 arena.create_element(block_style(CssDimension::Percent(1.0), CssDimension::Auto));
-            let text = arena.create_text(format!("row {index}"));
+            let text = arena.create_text(format!(
+                "percent row {index:05} - resize changes visible content"
+            ));
             arena.append_child(row, text);
             arena.append_child(content, row);
         }
@@ -4138,7 +4200,34 @@ mod tests {
             width: AvailableSpace::Definite(80.0),
             height: AvailableSpace::Definite(24.0),
         };
+        let initial_layout_start = Instant::now();
         arena.compute_layout(root, available);
+        if std::env::var_os("PAINTCANNON_PROFILE").is_some() {
+            let profile = arena.profile_stats();
+            let milliseconds = |nanoseconds: u128| nanoseconds as f64 / 1_000_000.0;
+            let extra_width_entries = arena
+                .nodes
+                .iter()
+                .map(|node| node.measure_cache.extra_widths.len())
+                .sum::<usize>();
+            let extra_height_entries = arena
+                .nodes
+                .iter()
+                .map(|node| node.measure_cache.extra_heights.len())
+                .sum::<usize>();
+            eprintln!(
+                "[paintcannon-profile] event=ten_thousand_row_initial_layout duration_ms={:.3} taffy_ms={:.3} dirty_descendants_ms={:.3} visible_overflow_ms={:.3} inline_width_ms={:.3} inline_height_ms={:.3} inline_fragment_ms={:.3} extra_width_entries={} extra_height_entries={}",
+                initial_layout_start.elapsed().as_secs_f64() * 1_000.0,
+                milliseconds(profile.taffy_ns),
+                milliseconds(profile.dirty_descendants_ns),
+                milliseconds(profile.visible_overflow_ns),
+                milliseconds(profile.inline_width_ns),
+                milliseconds(profile.inline_height_ns),
+                milliseconds(profile.inline_fragment_ns),
+                extra_width_entries,
+                extra_height_entries,
+            );
+        }
         arena.set_text(status, "scrollTop=3");
         arena.compute_layout(root, available);
         arena.clamp_scroll_offsets();
