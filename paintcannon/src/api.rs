@@ -849,9 +849,11 @@ impl PaintCannon {
     #[napi]
     pub fn release_terminal(&self) {
         if let Some(input) = self.input.as_ref() {
+            if input.is_captured() {
+                reset_terminal(false);
+            }
             input.release_terminal();
         }
-        reset_terminal();
         let _ = self.tx.send(EngineCommand::InvalidateFrame);
     }
 
@@ -921,18 +923,17 @@ impl PaintCannon {
     }
 
     fn shutdown(&mut self) {
-        let should_reset_terminal = self.input.is_some() || self.thread.is_some();
-        if let Some(input) = self.input.take() {
-            input.shutdown();
-        }
-        if should_reset_terminal {
-            reset_terminal();
-        }
-
-        let _ = self.tx.send(EngineCommand::Shutdown);
+        let _ = self.tx.send(EngineCommand::Shutdown { response: None });
 
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+
+        if let Some(input) = self.input.take() {
+            if input.is_captured() {
+                reset_terminal(!input.is_alternate_screen_entered());
+            }
+            input.shutdown();
         }
     }
 }

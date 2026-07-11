@@ -245,6 +245,25 @@ describe("resize events", () => {
   });
 });
 
+describe("app exit", () => {
+  it("does not render the empty unmount over the final frame", async () => {
+    const root = render(<Div>persistent output</Div>, { fps: 120 });
+    const mockNative = mockNativeInstances[0];
+    if (mockNative === undefined) {
+      throw new Error("expected mock native instance");
+    }
+
+    await commit();
+    const rendersBeforeExit = mockNative.renderCalls;
+
+    root.exit();
+    await root.waitUntilExit();
+
+    expect(mockNative.renderCalls).toBe(rendersBeforeExit);
+    expect(mockNative.stopCalls).toBe(1);
+  });
+});
+
 describe("scroll events", () => {
   it("commits state updates from onScroll before the input pump returns", async () => {
     let scroller: PaintElement | undefined;
