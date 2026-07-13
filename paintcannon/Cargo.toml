@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 [dependencies]
 crossbeam-channel = "0.5"
 crossterm = "0.29"
+csscolorparser = { version = "0.8", default-features = false, features = ["named-colors"] }
 libc = "0.2"
 napi = { version = "3", default-features = false, features = ["napi4", "dyn-symbols"] }
 napi-derive = "3"

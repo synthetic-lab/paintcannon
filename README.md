@@ -16,7 +16,7 @@ PaintCannon supports the following CSS:
 - `visibility: hidden`, which preserves layout space while suppressing paint
   and hit testing
 - `scrollbar-color` and `scrollbar-gutter` styling
-- 24-bit RGB background, border, text, placeholder, and selection coloring with
+- 24-bit RGB and CSS named background, border, text, placeholder, and selection colors with
   256-color and 16-color fallbacks
 - CSS transitions for all color properties
 - Mouse pointer styling (in supported terminals using the kitty protocol)

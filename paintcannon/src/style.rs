@@ -1,3 +1,4 @@
+use csscolorparser::NAMED_COLORS;
 use napi::{Error, Result};
 use taffy::geometry::Point;
 use taffy::prelude::*;
@@ -516,18 +517,22 @@ impl Background {
             return Some(color);
         }
 
-        match value {
-            "default" => Some(Self::Default),
-            "black" => Some(Self::Black),
-            "red" => Some(Self::Red),
-            "green" => Some(Self::Green),
-            "yellow" => Some(Self::Yellow),
-            "blue" => Some(Self::Blue),
-            "magenta" => Some(Self::Magenta),
-            "cyan" => Some(Self::Cyan),
-            "white" => Some(Self::White),
-            _ => None,
+        if value == "default" {
+            return Some(Self::Default);
         }
+
+        let [red, green, blue] = *NAMED_COLORS.get(value.into())?;
+        Some(match (red, green, blue) {
+            (0, 0, 0) => Self::Black,
+            (255, 0, 0) => Self::Red,
+            (0, 128, 0) => Self::Green,
+            (255, 255, 0) => Self::Yellow,
+            (0, 0, 255) => Self::Blue,
+            (255, 0, 255) => Self::Magenta,
+            (0, 255, 255) => Self::Cyan,
+            (255, 255, 255) => Self::White,
+            _ => Self::Rgb(red, green, blue),
+        })
     }
 
     pub(crate) fn rgb(self) -> Option<(u8, u8, u8)> {
@@ -535,7 +540,7 @@ impl Background {
             Self::Default => None,
             Self::Black => Some((0, 0, 0)),
             Self::Red => Some((255, 0, 0)),
-            Self::Green => Some((0, 255, 0)),
+            Self::Green => Some((0, 128, 0)),
             Self::Yellow => Some((255, 255, 0)),
             Self::Blue => Some((0, 0, 255)),
             Self::Magenta => Some((255, 0, 255)),
@@ -1408,6 +1413,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn colors_accept_css_named_colors_with_browser_rgb_values() {
+        assert_eq!(
+            Background::parse("gray").unwrap().rgb(),
+            Some((128, 128, 128))
+        );
+        assert_eq!(Background::parse("green").unwrap().rgb(), Some((0, 128, 0)));
+        assert_eq!(Background::parse("lime").unwrap().rgb(), Some((0, 255, 0)));
+        assert_eq!(
+            Background::parse("rebeccapurple").unwrap().rgb(),
+            Some((102, 51, 153))
+        );
+        assert_eq!(
+            Background::parse("LightGoldenRodYellow").unwrap().rgb(),
+            Some((250, 250, 210))
+        );
+        assert_eq!(Background::parse("not-a-color"), None);
+        assert_eq!(Background::parse("transparent"), None);
+    }
+
+    #[test]
     fn font_weight_only_accepts_terminal_backed_values() {
         assert!(matches!(
             parse_font_weight("bold").unwrap(),
@@ -1464,6 +1489,13 @@ mod tests {
             }
         ));
         assert!(parse_scrollbar_color("#38bdf8").is_err());
+        assert!(matches!(
+            parse_scrollbar_color("tomato darkslategray").unwrap(),
+            ScrollbarColor::Colors {
+                thumb: Background::Rgb(255, 99, 71),
+                track: Background::Rgb(47, 79, 79)
+            }
+        ));
     }
 
     #[test]
