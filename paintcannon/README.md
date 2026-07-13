@@ -55,6 +55,7 @@ PaintCannon supports bubbling events with `stopPropagation()` and `preventDefaul
 - Click events
 - Mouse enter and leave events
 - Keyboard events
+- Text and image paste events
 - Input change events
 - Form submit events
 - Focus and blur events
@@ -62,6 +63,37 @@ PaintCannon supports bubbling events with `stopPropagation()` and `preventDefaul
 - Scroll events
 - Resize events
 - App-level terminal focus and blur events
+
+Pasting text, or pasting or dropping one or more image files, dispatches a bubbling `paste` event
+targeted at the focused element. Text pastes are available from
+`clipboardData.getData("text/plain")` and have an empty `clipboardData.files`. Image pastes have an
+empty text value and expose files through `clipboardData.files`, so image paths are not visible to
+the application or inserted into a focused text control.
+
+Each image is a `PaintFile` object with `name`, `type`, `size`, `lastModified`, `arrayBuffer()`,
+`bytes()`, `text()`, and `stream()`.
+
+By default, text is inserted into the focused input or textarea. Image files are not inserted. Call
+`preventDefault()` when taking over paste handling yourself:
+
+```ts
+input.addEventListener("paste", async event => {
+  if (event.clipboardData.files.length === 0) {
+    return;
+  }
+
+  event.preventDefault();
+  for (const file of event.clipboardData.files) {
+    console.log(file.name, file.type, file.size, await file.bytes());
+  }
+});
+```
+
+PaintCannon detects PNG, JPEG, WebP, and GIF files. For a text-only paste,
+`clipboardData.files` is empty.
+
+Run `npm run demo:paste-images` from the workspace root to paste or drag PNG files into a live
+PaintCannon image renderer.
 
 It also exposes `requestAnimationFrame()` and `cancelAnimationFrame()` so UI code can synchronize
 with PaintCannon's render loop.

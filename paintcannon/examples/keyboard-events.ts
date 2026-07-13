@@ -1,4 +1,4 @@
-import { PaintCannon, type KeyboardEvent } from "../main.ts";
+import { PaintCannon, type ClipboardEvent, type KeyboardEvent } from "../main.ts";
 
 const pc = new PaintCannon({ captureCtrlC: true, fps: 30 });
 
@@ -53,8 +53,15 @@ function onKeyboardEvent(event: KeyboardEvent) {
   }
 }
 
+function onPaste(event: ClipboardEvent) {
+  eventCount += 1;
+  const files = Array.from(event.clipboardData.files, file => `${file.name}:${file.type}`);
+  statusText.nodeValue = `${eventCount}: paste=${JSON.stringify(event.clipboardData.getData("text/plain"))} files=${files.join(",") || "none"}`;
+}
+
 pc.addEventListener("keydown", onKeyboardEvent);
 pc.addEventListener("keyup", onKeyboardEvent);
+pc.addEventListener("paste", onPaste);
 
 function paint() {
   pc.requestAnimationFrame(paint);

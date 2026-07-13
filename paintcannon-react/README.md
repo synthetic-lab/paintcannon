@@ -124,6 +124,7 @@ All host components accept these event props:
 
 - `onKeyDown`
 - `onKeyUp`
+- `onPaste`
 - `onClick`
 - `onMouseEnter`
 - `onMouseLeave`
@@ -135,6 +136,9 @@ All host components accept these event props:
 - `onTransitionStart`
 - `onTransitionEnd`
 - `onScroll`
+
+`onPaste` receives the same `PaintClipboardEvent` as core, including detected terminal image paths
+through `event.clipboardData.files`.
 
 `style` accepts the following CSS property names. Kebab-case and camelCase are
 both supported:

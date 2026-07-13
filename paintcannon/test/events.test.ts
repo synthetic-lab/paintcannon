@@ -1,10 +1,15 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mock } from "antipattern";
 import { PaintCannon, paintCannonDeps, type PaintElement } from "../main.ts";
 import {
   createMockNativeBinding,
+  keyboardInput,
   keyDown,
   mouseEvent,
+  pasteInput,
   type MockNativePaintCannon,
 } from "./mock-native.ts";
 
@@ -40,7 +45,7 @@ describe("core keyboard events", () => {
       events.push(`document:${event.key}:${event.target === child}`);
     });
 
-    mockNative.keyboardEvents.push(keyDown("a"));
+    mockNative.inputEvents.push(keyboardInput(keyDown("a")));
     runKeyboardEventPump(paintCannon);
     paintCannon.stop();
 
@@ -62,7 +67,7 @@ describe("core keyboard events", () => {
       events.push("document");
     });
 
-    mockNative.keyboardEvents.push(keyDown("a"));
+    mockNative.inputEvents.push(keyboardInput(keyDown("a")));
     runKeyboardEventPump(paintCannon);
     paintCannon.stop();
 
@@ -83,7 +88,7 @@ describe("core keyboard events", () => {
       events.push("root");
     });
     input.focus();
-    mockNative.keyboardEvents.push(keyDown("x"));
+    mockNative.inputEvents.push(keyboardInput(keyDown("x")));
     runKeyboardEventPump(paintCannon);
     paintCannon.stop();
 
@@ -104,7 +109,7 @@ describe("core keyboard events", () => {
     });
 
     input.focus();
-    mockNative.keyboardEvents.push(keyDown("x"));
+    mockNative.inputEvents.push(keyboardInput(keyDown("x")));
     runKeyboardEventPump(paintCannon);
     paintCannon.stop();
 
@@ -123,7 +128,7 @@ describe("core keyboard events", () => {
     root.appendChild(input);
 
     input.focus();
-    mockNative.keyboardEvents.push(keyDown("a"), keyDown("b"));
+    mockNative.inputEvents.push(keyboardInput(keyDown("a")), keyboardInput(keyDown("b")));
     runKeyboardEventPump(paintCannon);
     input.cursorPosition = 1;
     input.value = input.value;
@@ -165,11 +170,11 @@ describe("core keyboard events", () => {
     second.addEventListener("focus", () => events.push("second:focus"));
     second.addEventListener("blur", () => events.push("second:blur"));
 
-    mockNative.keyboardEvents.push(keyDown("Tab", { code: "Tab" }));
+    mockNative.inputEvents.push(keyboardInput(keyDown("Tab", { code: "Tab" })));
     runKeyboardEventPump(paintCannon);
-    mockNative.keyboardEvents.push(keyDown("Tab", { code: "Tab" }));
+    mockNative.inputEvents.push(keyboardInput(keyDown("Tab", { code: "Tab" })));
     runKeyboardEventPump(paintCannon);
-    mockNative.keyboardEvents.push(keyDown("Tab", { code: "Tab", shiftKey: true }));
+    mockNative.inputEvents.push(keyboardInput(keyDown("Tab", { code: "Tab", shiftKey: true })));
     runKeyboardEventPump(paintCannon);
     paintCannon.stop();
 
@@ -182,6 +187,106 @@ describe("core keyboard events", () => {
     ]);
     expect(mockNative.textControls.get(first.id)?.focused).toBe(true);
     expect(mockNative.textControls.get(second.id)?.focused).toBe(false);
+  });
+});
+
+describe("core paste events", () => {
+  it("preserves ordering with keyboard events and inserts pasted text by default", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const input = paintCannon.createElement("input");
+    const events: string[] = [];
+    root.appendChild(input);
+    input.focus();
+    input.addEventListener("keydown", event => events.push(`key:${event.key}`));
+    input.addEventListener("paste", event => {
+      events.push(`paste:${event.clipboardData.getData("text/plain")}`);
+      expect(event.clipboardData.getData("application/json")).toBe("");
+    });
+
+    mockNative.inputEvents.push(
+      keyboardInput(keyDown("a")),
+      pasteInput("BC"),
+      keyboardInput(keyDown("d")),
+    );
+    runKeyboardEventPump(paintCannon);
+    paintCannon.stop();
+
+    expect(events).toEqual(["key:a", "paste:BC", "key:d"]);
+    expect(input.value).toBe("aBCd");
+    expect(input.cursorPosition).toBe(4);
+  });
+
+  it("bubbles through ancestors before document listeners and emits one change", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const input = paintCannon.createElement("textarea");
+    const events: string[] = [];
+    root.appendChild(input);
+    input.focus();
+    input.addEventListener("paste", event => {
+      events.push(`input:${event.target === input}:${event.currentTarget === input}`);
+    });
+    root.addEventListener("paste", event => {
+      events.push(`root:${event.target === input}:${event.currentTarget === root}`);
+    });
+    paintCannon.addEventListener("paste", event => {
+      events.push(`document:${event.target === input}`);
+    });
+    input.addEventListener("change", event => events.push(`change:${event.target.value}`));
+
+    mockNative.inputEvents.push(pasteInput("hello\nworld"));
+    runKeyboardEventPump(paintCannon);
+    paintCannon.stop();
+
+    expect(events).toEqual([
+      "input:true:true",
+      "root:true:true",
+      "document:true",
+      "change:hello\nworld",
+    ]);
+    expect(input.value).toBe("hello\nworld");
+  });
+
+  it("lets preventDefault suppress insertion", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const input = paintCannon.createElement("textarea");
+    root.appendChild(input);
+    input.focus();
+    input.addEventListener("paste", event => event.preventDefault());
+
+    mockNative.inputEvents.push(pasteInput("blocked"));
+    runKeyboardEventPump(paintCannon);
+    paintCannon.stop();
+
+    expect(input.value).toBe("");
+  });
+
+  it("exposes terminal image paths as files without exposing or inserting the path text", () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "paintcannon-event-paste-"));
+    try {
+      const filePath = path.join(directory, "pasted image.png");
+      writeFileSync(filePath, Uint8Array.from([1, 2, 3]));
+      const { paintCannon, mockNative, root } = createPaintTree();
+      const input = paintCannon.createElement("input");
+      root.appendChild(input);
+      input.focus();
+      input.addEventListener("paste", event => {
+        expect(event.clipboardData.getData("text/plain")).toBe("");
+        expect(event.clipboardData.types).toEqual(["Files"]);
+        expect(event.clipboardData.files[0]).toMatchObject({
+          name: "pasted image.png",
+          size: 3,
+          type: "image/png",
+        });
+      });
+
+      mockNative.inputEvents.push(pasteInput(`'${filePath}'`));
+      runKeyboardEventPump(paintCannon);
+      paintCannon.stop();
+
+      expect(input.value).toBe("");
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
   });
 });
 
@@ -206,7 +311,7 @@ describe("core submit events", () => {
     });
 
     input.focus();
-    mockNative.keyboardEvents.push(keyDown("Enter", { code: "Enter" }));
+    mockNative.inputEvents.push(keyboardInput(keyDown("Enter", { code: "Enter" })));
     runKeyboardEventPump(paintCannon);
     paintCannon.stop();
 

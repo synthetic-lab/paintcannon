@@ -6,6 +6,7 @@ import type {
   NativePaintCannon,
   NativeScrollbarHit,
   NativeScrollMetrics,
+  NativeTerminalInputEvent,
   NativeTransitionEvent,
   TerminalFocusEvent,
   TerminalMouseEvent,
@@ -55,7 +56,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
   targetIdAtPoint: number | null = null;
   scrollbarHitAtPoint: NativeScrollbarHit | null = null;
   cursorAtPoint: number | null = null;
-  keyboardEvents: NativeKeyboardEvent[] = [];
+  inputEvents: NativeTerminalInputEvent[] = [];
   focusEvents: TerminalFocusEvent[] = [];
   mouseEvents: TerminalMouseEvent[] = [];
   resizeEvents: TerminalResizeEvent[] = [];
@@ -214,9 +215,9 @@ export class MockNativePaintCannon implements NativePaintCannon {
 
   invalidateFrame(): void {}
 
-  drainKeyboardEvents(): NativeKeyboardEvent[] {
-    const events = this.keyboardEvents;
-    this.keyboardEvents = [];
+  drainInputEvents(): NativeTerminalInputEvent[] {
+    const events = this.inputEvents;
+    this.inputEvents = [];
     return events;
   }
 
@@ -359,6 +360,14 @@ export function keyDown(
     repeat: false,
     ...options,
   };
+}
+
+export function keyboardInput(event: NativeKeyboardEvent): NativeTerminalInputEvent {
+  return { keyboard: event };
+}
+
+export function pasteInput(data: string): NativeTerminalInputEvent {
+  return { paste: data };
 }
 
 export function mouseEvent(

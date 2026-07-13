@@ -50,6 +50,7 @@ And the following DOM events and event handlers, with bubbling,
 - Click events
 - Mouse enter and leave events
 - Keyboard events
+- Text and image paste events
 - Input change events
 - Form submit events
 - Focus and blur events

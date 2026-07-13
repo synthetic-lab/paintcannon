@@ -13,7 +13,9 @@ import {
 import { Div, Input, Textarea, render } from "../src/index.ts";
 import {
   createMockNativeBinding,
+  keyboardInput,
   mouseEvent,
+  pasteInput,
   type MockNativePaintCannon,
 } from "../../paintcannon/test/mock-native.ts";
 
@@ -174,6 +176,35 @@ describe("keyboard events", () => {
   });
 });
 
+describe("paste events", () => {
+  it("forwards clipboard events with typed data to host components", async () => {
+    const events: string[] = [];
+    let input: InputElement | undefined;
+    const root = render(
+      <Input
+        ref={element => {
+          input = element;
+        }}
+        onPaste={event => events.push(event.clipboardData.getData("text/plain"))}
+      />,
+      { fps: 120 },
+    );
+
+    await commit();
+    input?.focus();
+    const mockNative = mockNativeInstances[0];
+    if (mockNative === undefined) {
+      throw new Error("expected mock native instance");
+    }
+    mockNative.inputEvents.push(pasteInput("from clipboard"));
+    runKeyboardEventPump(root.paintCannon);
+    root.paintCannon.stop();
+
+    expect(events).toEqual(["from clipboard"]);
+    expect(input?.value).toBe("from clipboard");
+  });
+});
+
 describe("controlled text controls", () => {
   it("supports React-style value plus onChange without manually controlling cursorPosition", async () => {
     const changes: string[] = [];
@@ -203,16 +234,18 @@ describe("controlled text controls", () => {
     }
 
     await commit();
-    mockNative.keyboardEvents.push({
-      type: "keydown",
-      key: "a",
-      code: "KeyA",
-      ctrlKey: false,
-      altKey: false,
-      metaKey: false,
-      shiftKey: false,
-      repeat: false,
-    });
+    mockNative.inputEvents.push(
+      keyboardInput({
+        type: "keydown",
+        key: "a",
+        code: "KeyA",
+        ctrlKey: false,
+        altKey: false,
+        metaKey: false,
+        shiftKey: false,
+        repeat: false,
+      }),
+    );
     runKeyboardEventPump(root.paintCannon);
     await commit();
     root.paintCannon.stop();
