@@ -190,7 +190,7 @@ export type CSSVisibility = "visible" | "hidden";
 export type CSSWhiteSpace = "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
 export type CSSFontWeight = "normal" | "bold";
 export type CSSFontStyle = "normal" | "italic";
-export type CSSTextDecoration = "none" | "underline";
+export type CSSTextDecoration = "none" | "underline" | "line-through";
 export type CSSStyleValue = string | number;
 export type CSSCursor =
   | "auto"

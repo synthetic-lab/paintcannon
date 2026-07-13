@@ -44,6 +44,10 @@ const underlined = sample("The quick brown fox");
 underlined.style.textDecoration = "underline";
 panel.appendChild(sampleRow("underline", underlined));
 
+const struck = sample("The quick brown fox");
+struck.style.textDecoration = "line-through";
+panel.appendChild(sampleRow("line-through", struck));
+
 const combined = sample("Bold italic underlined");
 combined.style.fontWeight = "bold";
 combined.style.fontStyle = "italic";

@@ -53,6 +53,7 @@ pub(crate) struct Cell {
     pub(crate) bold: bool,
     pub(crate) italic: bool,
     pub(crate) underline: bool,
+    pub(crate) strikethrough: bool,
     pub(crate) wide_continuation: bool,
 }
 
@@ -191,6 +192,7 @@ impl Frame {
                     bold: false,
                     italic: false,
                     underline: false,
+                    strikethrough: false,
                     wide_continuation: false,
                 };
             }
@@ -291,6 +293,7 @@ impl Frame {
         self.cells[index].bold = style.bold;
         self.cells[index].italic = style.italic;
         self.cells[index].underline = style.underline;
+        self.cells[index].strikethrough = style.strikethrough;
         self.cells[index].wide_continuation = false;
         if style.background != Background::Default {
             self.cells[index].background = style.background;
@@ -314,6 +317,7 @@ impl Frame {
             self.cells[continuation_index].bold = style.bold;
             self.cells[continuation_index].italic = style.italic;
             self.cells[continuation_index].underline = style.underline;
+            self.cells[continuation_index].strikethrough = style.strikethrough;
             self.cells[continuation_index].wide_continuation = true;
             if style.background != Background::Default {
                 self.cells[continuation_index].background = style.background;
@@ -345,6 +349,7 @@ impl Frame {
         self.cells[index].bold = style.bold;
         self.cells[index].italic = style.italic;
         self.cells[index].underline = style.underline;
+        self.cells[index].strikethrough = style.strikethrough;
         self.cells[index].wide_continuation = false;
         if style.background != Background::Default {
             self.cells[index].background = style.background;
@@ -636,6 +641,7 @@ impl Frame {
         let mut current_bold = false;
         let mut current_italic = false;
         let mut current_underline = false;
+        let mut current_strikethrough = false;
         for col in start_col..end_col {
             let cell = self.cells[row * self.width + col];
             if cell.wide_continuation {
@@ -673,6 +679,14 @@ impl Frame {
                 }
                 current_underline = cell.underline;
             }
+            if cell.strikethrough != current_strikethrough {
+                if cell.strikethrough {
+                    write!(out, "\x1b[9m")?;
+                } else {
+                    write!(out, "\x1b[29m")?;
+                }
+                current_strikethrough = cell.strikethrough;
+            }
             if cell.background != current_background {
                 write!(out, "{}", cell.background.ansi_bg(color_profile))?;
                 current_background = cell.background;
@@ -684,7 +698,10 @@ impl Frame {
             write!(out, "{}", cell.character)?;
         }
 
-        write!(out, "\x1b[27m\x1b[22m\x1b[23m\x1b[24m\x1b[39m\x1b[49m")
+        write!(
+            out,
+            "\x1b[27m\x1b[22m\x1b[23m\x1b[24m\x1b[29m\x1b[39m\x1b[49m"
+        )
     }
 
     fn trailing_empty_rows_start(&self) -> usize {
@@ -721,6 +738,7 @@ impl Frame {
         self.cells[index].bold = false;
         self.cells[index].italic = false;
         self.cells[index].underline = false;
+        self.cells[index].strikethrough = false;
         self.cells[index].wide_continuation = false;
         if selection_background.is_some() {
             self.cells[index].selection_background = selection_background;
@@ -765,6 +783,7 @@ pub(crate) struct GlyphStyle {
     pub(crate) bold: bool,
     pub(crate) italic: bool,
     pub(crate) underline: bool,
+    pub(crate) strikethrough: bool,
 }
 
 impl Default for GlyphStyle {
@@ -776,6 +795,7 @@ impl Default for GlyphStyle {
             bold: false,
             italic: false,
             underline: false,
+            strikethrough: false,
         }
     }
 }
@@ -792,6 +812,7 @@ impl Default for Cell {
             bold: false,
             italic: false,
             underline: false,
+            strikethrough: false,
             wide_continuation: false,
         }
     }
@@ -1165,6 +1186,7 @@ mod tests {
                 bold: true,
                 italic: true,
                 underline: true,
+                strikethrough: true,
                 ..Default::default()
             },
             ClipBounds::unbounded(),
@@ -1177,9 +1199,9 @@ mod tests {
             .unwrap();
         let output = String::from_utf8(bytes).unwrap();
 
-        assert!(output.contains("\x1b[1m\x1b[3m\x1b[4ma"));
-        assert!(output.contains("a\x1b[22m\x1b[23m\x1b[24mb"));
-        assert!(output.ends_with("\x1b[27m\x1b[22m\x1b[23m\x1b[24m\x1b[39m\x1b[49m"));
+        assert!(output.contains("\x1b[1m\x1b[3m\x1b[4m\x1b[9ma"));
+        assert!(output.contains("a\x1b[22m\x1b[23m\x1b[24m\x1b[29mb"));
+        assert!(output.ends_with("\x1b[27m\x1b[22m\x1b[23m\x1b[24m\x1b[29m\x1b[39m\x1b[49m"));
     }
 
     #[test]
@@ -1193,7 +1215,7 @@ mod tests {
             'x',
             1,
             GlyphStyle {
-                bold: true,
+                strikethrough: true,
                 ..Default::default()
             },
             ClipBounds::unbounded(),
@@ -1204,7 +1226,7 @@ mod tests {
             .unwrap();
         let output = String::from_utf8(bytes).unwrap();
 
-        assert!(output.contains("\x1b[1;1H\x1b[1mx"));
+        assert!(output.contains("\x1b[1;1H\x1b[9mx"));
     }
 
     #[test]
