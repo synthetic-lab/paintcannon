@@ -110,6 +110,7 @@ pub(crate) fn paint_arena_with_options(
                 bold: false,
                 italic: false,
                 underline: false,
+                strikethrough: false,
                 visible: true,
                 clip: ClipBounds::unbounded(),
             },
@@ -135,6 +136,7 @@ struct PaintState {
     bold: bool,
     italic: bool,
     underline: bool,
+    strikethrough: bool,
     visible: bool,
     clip: ClipBounds,
 }
@@ -213,6 +215,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             bold: text_state.bold,
             italic: text_state.italic,
             underline: text_state.underline,
+            strikethrough: text_state.strikethrough,
             visible,
             clip: child_clip,
         };
@@ -302,6 +305,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                     bold: false,
                     italic: false,
                     underline: false,
+                    strikethrough: false,
                 },
                 clip,
             );
@@ -361,6 +365,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                     bold: false,
                     italic: false,
                     underline: false,
+                    strikethrough: false,
                 },
                 clip,
             );
@@ -548,6 +553,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             bold: state.bold,
             italic: state.italic,
             underline: state.underline,
+            strikethrough: state.strikethrough,
         };
         for (offset, character) in text.chars().enumerate() {
             self.output
@@ -585,6 +591,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                         bold: fragment_state.bold,
                         italic: fragment_state.italic,
                         underline: fragment_state.underline,
+                        strikethrough: fragment_state.strikethrough,
                     };
                     self.output.frame.write_glyph(
                         rect.left,
@@ -801,6 +808,7 @@ struct TextAttributes {
     bold: bool,
     italic: bool,
     underline: bool,
+    strikethrough: bool,
 }
 
 impl TextAttributes {
@@ -809,6 +817,7 @@ impl TextAttributes {
             bold: state.bold,
             italic: state.italic,
             underline: state.underline,
+            strikethrough: state.strikethrough,
         }
     }
 }
@@ -826,8 +835,18 @@ fn apply_text_style(style: &DivStyle, mut state: PaintState) -> PaintState {
     }
     match style.text_decoration_line {
         CssTextDecorationLine::Inherit => {}
-        CssTextDecorationLine::None => state.underline = false,
-        CssTextDecorationLine::Underline => state.underline = true,
+        CssTextDecorationLine::None => {
+            state.underline = false;
+            state.strikethrough = false;
+        }
+        CssTextDecorationLine::Underline => {
+            state.underline = true;
+            state.strikethrough = false;
+        }
+        CssTextDecorationLine::LineThrough => {
+            state.underline = false;
+            state.strikethrough = true;
+        }
     }
     state
 }
@@ -972,6 +991,7 @@ fn paint_input(
         bold: text_attributes.bold,
         italic: text_attributes.italic,
         underline: text_attributes.underline,
+        strikethrough: text_attributes.strikethrough,
     };
 
     for col in 0..width {
@@ -1000,6 +1020,7 @@ fn paint_input(
                 bold: text_attributes.bold,
                 italic: text_attributes.italic,
                 underline: text_attributes.underline,
+                strikethrough: text_attributes.strikethrough,
             },
             clip,
         );
@@ -1042,6 +1063,7 @@ fn paint_textarea(
         bold: text_attributes.bold,
         italic: text_attributes.italic,
         underline: text_attributes.underline,
+        strikethrough: text_attributes.strikethrough,
     };
     let cursor_position = textarea.focused.then(|| {
         WrappedText::new(&textarea.value, rect.width() as usize)
@@ -1096,6 +1118,7 @@ fn paint_textarea(
                     bold: text_attributes.bold,
                     italic: text_attributes.italic,
                     underline: text_attributes.underline,
+                    strikethrough: text_attributes.strikethrough,
                 },
                 clip,
             );
@@ -1546,6 +1569,65 @@ mod tests {
         assert!(!cell.bold);
         assert!(!cell.italic);
         assert!(!cell.underline);
+    }
+
+    #[test]
+    fn paints_line_through_text_and_clears_underline() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(8.0), CssDimension::Length(1.0));
+        root_style.text_decoration_line = CssTextDecorationLine::Underline;
+        let root = arena.create_element(root_style);
+
+        let mut child_style = DivStyle::default();
+        child_style.display = LayoutDisplay::Inline;
+        child_style.text_decoration_line = CssTextDecorationLine::LineThrough;
+        let child = arena.create_element(child_style);
+        let text = arena.create_text("hi");
+        arena.append_child(child, text);
+        arena.append_child(root, child);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 8, 1, false);
+
+        let cell = output.frame.cell(0, 0).unwrap();
+        assert_eq!(cell.character, 'h');
+        assert!(!cell.underline);
+        assert!(cell.strikethrough);
+    }
+
+    #[test]
+    fn child_can_clear_inherited_line_through() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(8.0), CssDimension::Length(1.0));
+        root_style.text_decoration_line = CssTextDecorationLine::LineThrough;
+        let root = arena.create_element(root_style);
+
+        let mut child_style = block_style(CssDimension::Length(8.0), CssDimension::Length(1.0));
+        child_style.text_decoration_line = CssTextDecorationLine::None;
+        let child = arena.create_element(child_style);
+        let text = arena.create_text("hi");
+        arena.append_child(child, text);
+        arena.append_child(root, child);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 8, 1, false);
+
+        let cell = output.frame.cell(0, 0).unwrap();
+        assert_eq!(cell.character, 'h');
+        assert!(!cell.underline);
+        assert!(!cell.strikethrough);
     }
 
     #[test]

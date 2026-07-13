@@ -613,18 +613,18 @@ describe("core style validation", () => {
     root.style.fontWeight = "bold";
     root.style.fontStyle = "italic";
     root.style.textDecoration = "underline";
-    root.style.textDecorationLine = "none";
+    root.style.textDecorationLine = "line-through";
 
     expect(root.style.fontWeight).toBe("bold");
     expect(root.style.fontStyle).toBe("italic");
     expect(root.style.textDecoration).toBe("underline");
-    expect(root.style.textDecorationLine).toBe("none");
+    expect(root.style.textDecorationLine).toBe("line-through");
     expect(mockNative.styleMutations).toEqual(
       expect.arrayContaining([
         { id: root.id, property: "font-weight", value: "bold" },
         { id: root.id, property: "font-style", value: "italic" },
         { id: root.id, property: "text-decoration", value: "underline" },
-        { id: root.id, property: "text-decoration-line", value: "none" },
+        { id: root.id, property: "text-decoration-line", value: "line-through" },
       ]),
     );
     paintCannon.stop();

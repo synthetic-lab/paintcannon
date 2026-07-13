@@ -204,6 +204,7 @@ pub(crate) enum CssTextDecorationLine {
     Inherit,
     None,
     Underline,
+    LineThrough,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1274,6 +1275,7 @@ pub(crate) fn parse_text_decoration_line(value: &str) -> Result<CssTextDecoratio
         "" | "inherit" => Ok(CssTextDecorationLine::Inherit),
         "none" => Ok(CssTextDecorationLine::None),
         "underline" => Ok(CssTextDecorationLine::Underline),
+        "line-through" => Ok(CssTextDecorationLine::LineThrough),
         value => Err(Error::from_reason(format!(
             "unsupported text-decoration: {value}"
         ))),
@@ -1440,6 +1442,10 @@ mod tests {
         assert!(matches!(
             parse_text_decoration_line("none").unwrap(),
             CssTextDecorationLine::None
+        ));
+        assert!(matches!(
+            parse_text_decoration_line("line-through").unwrap(),
+            CssTextDecorationLine::LineThrough
         ));
         assert!(parse_text_decoration_line("underline dotted").is_err());
     }

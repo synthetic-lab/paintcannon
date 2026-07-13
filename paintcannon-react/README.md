@@ -209,7 +209,7 @@ both supported:
 - `grid-row-end` / `gridRowEnd`
 - `font-style`/`fontStyle` (accepts `"italic"` or `"normal"`)
 - `font-weight`/`fontWeight` (accepts `"bold"` or `"normal"`)
-- `text-decoration`/`textDecoration` (accepts `"underline"` or `"none"`)
+- `text-decoration`/`textDecoration` (accepts `"underline"`, `"line-through"`, or `"none"`)
 
 ### Per-component props:
 
