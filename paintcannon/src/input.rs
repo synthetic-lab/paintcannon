@@ -9,11 +9,11 @@ use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{
-        self as terminal_event, DisableFocusChange, DisableMouseCapture, EnableFocusChange,
-        EnableMouseCapture, Event as TerminalEvent, KeyCode, KeyEvent as TerminalKeyEvent,
-        KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton,
-        MouseEvent as CrosstermMouseEvent, MouseEventKind, PopKeyboardEnhancementFlags,
-        PushKeyboardEnhancementFlags,
+        self as terminal_event, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture,
+        EnableBracketedPaste, EnableFocusChange, EnableMouseCapture, Event as TerminalEvent,
+        KeyCode, KeyEvent as TerminalKeyEvent, KeyEventKind, KeyModifiers,
+        KeyboardEnhancementFlags, MouseButton, MouseEvent as CrosstermMouseEvent, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{
@@ -40,6 +40,19 @@ pub struct KeyboardEvent {
     pub meta_key: bool,
     pub shift_key: bool,
     pub repeat: bool,
+}
+
+#[derive(Clone)]
+#[napi(object)]
+pub struct TerminalInputEvent {
+    pub keyboard: Option<KeyboardEvent>,
+    pub paste: Option<String>,
+}
+
+#[derive(Clone)]
+enum OrderedInputEvent {
+    Keyboard(KeyboardEvent),
+    Paste(String),
 }
 
 #[derive(Clone)]
@@ -71,7 +84,7 @@ pub struct TerminalFocusEvent {
 }
 
 pub(crate) struct TerminalInput {
-    keyboard_events: Arc<Mutex<VecDeque<KeyboardEvent>>>,
+    input_events: Arc<Mutex<VecDeque<OrderedInputEvent>>>,
     mouse_events: Arc<Mutex<VecDeque<TerminalMouseEvent>>>,
     resize_events: Arc<Mutex<VecDeque<TerminalResizeEvent>>>,
     focus_events: Arc<Mutex<VecDeque<TerminalFocusEvent>>>,
@@ -86,6 +99,7 @@ pub(crate) struct TerminalInput {
     alternate_screen_entered: Arc<Mutex<bool>>,
     mouse_capture_enabled: Arc<Mutex<bool>>,
     focus_change_enabled: Arc<Mutex<bool>>,
+    bracketed_paste_enabled: Arc<Mutex<bool>>,
     terminal_captured: Arc<Mutex<bool>>,
     thread: JoinHandle<()>,
 }
@@ -118,6 +132,11 @@ impl TerminalInput {
             set_bool(&focus_change_enabled, true);
         }
 
+        let bracketed_paste_enabled = Arc::new(Mutex::new(false));
+        if execute!(io::stdout(), EnableBracketedPaste).is_ok() {
+            set_bool(&bracketed_paste_enabled, true);
+        }
+
         let kitty_keyboard_enabled =
             !force_compat_mode && supports_keyboard_enhancement().unwrap_or(false);
         let keyboard_enhancement_pushed = Arc::new(Mutex::new(false));
@@ -139,7 +158,7 @@ impl TerminalInput {
             set_bool(&keyboard_enhancement_pushed, true);
         }
 
-        let keyboard_events = Arc::new(Mutex::new(VecDeque::new()));
+        let input_events = Arc::new(Mutex::new(VecDeque::new()));
         let mouse_events = Arc::new(Mutex::new(VecDeque::new()));
         let resize_events = Arc::new(Mutex::new(VecDeque::new()));
         let focus_events = Arc::new(Mutex::new(VecDeque::new()));
@@ -147,7 +166,7 @@ impl TerminalInput {
         let stop = Arc::new(AtomicBool::new(false));
         let synthetic_keyup_delay_ms = Arc::new(Mutex::new(synthetic_keyup_delay_ms));
         let terminal_captured = Arc::new(Mutex::new(true));
-        let thread_keyboard_events = Arc::clone(&keyboard_events);
+        let thread_input_events = Arc::clone(&input_events);
         let thread_mouse_events = Arc::clone(&mouse_events);
         let thread_resize_events = Arc::clone(&resize_events);
         let thread_focus_events = Arc::clone(&focus_events);
@@ -159,6 +178,7 @@ impl TerminalInput {
         let thread_alternate_screen_entered = Arc::clone(&alternate_screen_entered);
         let thread_mouse_capture_enabled = Arc::clone(&mouse_capture_enabled);
         let thread_focus_change_enabled = Arc::clone(&focus_change_enabled);
+        let thread_bracketed_paste_enabled = Arc::clone(&bracketed_paste_enabled);
         let thread_terminal_captured = Arc::clone(&terminal_captured);
 
         let thread = thread::spawn(move || {
@@ -178,6 +198,7 @@ impl TerminalInput {
                                             &thread_terminal_captured,
                                             &thread_mouse_capture_enabled,
                                             &thread_focus_change_enabled,
+                                            &thread_bracketed_paste_enabled,
                                             &thread_keyboard_enhancement_pushed,
                                             &thread_alternate_screen_entered,
                                         );
@@ -189,10 +210,13 @@ impl TerminalInput {
                                     handle_terminal_key_event(
                                         event,
                                         &mut pressed_keys,
-                                        &thread_keyboard_events,
+                                        &thread_input_events,
                                         &thread_synthetic_keyup_delay_ms,
                                         kitty_keyboard_enabled,
                                     );
+                                }
+                                TerminalEvent::Paste(data) => {
+                                    push_paste_event(&thread_input_events, data);
                                 }
                                 TerminalEvent::Mouse(event) => {
                                     handle_terminal_mouse_event(
@@ -229,12 +253,11 @@ impl TerminalInput {
                                         &thread_focused,
                                     );
                                 }
-                                _ => {}
                             }
                         }
                     }
                     Ok(false) => {
-                        synthesize_expired_keyups(&mut pressed_keys, &thread_keyboard_events);
+                        synthesize_expired_keyups(&mut pressed_keys, &thread_input_events);
                     }
                     Err(_) => break,
                 }
@@ -242,14 +265,14 @@ impl TerminalInput {
 
             for (_, pressed_key) in pressed_keys {
                 push_keyboard_event(
-                    &thread_keyboard_events,
+                    &thread_input_events,
                     keyboard_event_from_pressed_key("keyup", false, &pressed_key),
                 );
             }
         });
 
         Some(Self {
-            keyboard_events,
+            input_events,
             mouse_events,
             resize_events,
             focus_events,
@@ -264,17 +287,30 @@ impl TerminalInput {
             alternate_screen_entered,
             mouse_capture_enabled,
             focus_change_enabled,
+            bracketed_paste_enabled,
             terminal_captured,
             thread,
         })
     }
 
-    pub(crate) fn drain(&self) -> Vec<KeyboardEvent> {
-        let Ok(mut events) = self.keyboard_events.lock() else {
+    pub(crate) fn drain(&self) -> Vec<TerminalInputEvent> {
+        let Ok(mut events) = self.input_events.lock() else {
             return Vec::new();
         };
 
-        events.drain(..).collect()
+        events
+            .drain(..)
+            .map(|event| match event {
+                OrderedInputEvent::Keyboard(keyboard) => TerminalInputEvent {
+                    keyboard: Some(keyboard),
+                    paste: None,
+                },
+                OrderedInputEvent::Paste(paste) => TerminalInputEvent {
+                    keyboard: None,
+                    paste: Some(paste),
+                },
+            })
+            .collect()
     }
 
     pub(crate) fn drain_mouse_events(&self) -> Vec<TerminalMouseEvent> {
@@ -326,6 +362,7 @@ impl TerminalInput {
             &self.terminal_captured,
             &self.mouse_capture_enabled,
             &self.focus_change_enabled,
+            &self.bracketed_paste_enabled,
             &self.keyboard_enhancement_pushed,
             &self.alternate_screen_entered,
         );
@@ -359,6 +396,10 @@ impl TerminalInput {
 
         if execute!(io::stdout(), EnableFocusChange).is_ok() {
             set_bool(&self.focus_change_enabled, true);
+        }
+
+        if execute!(io::stdout(), EnableBracketedPaste).is_ok() {
+            set_bool(&self.bracketed_paste_enabled, true);
         }
 
         if self.kitty_keyboard_enabled {
@@ -427,6 +468,7 @@ fn release_terminal_state(
     terminal_captured: &Arc<Mutex<bool>>,
     mouse_capture_enabled: &Arc<Mutex<bool>>,
     focus_change_enabled: &Arc<Mutex<bool>>,
+    bracketed_paste_enabled: &Arc<Mutex<bool>>,
     keyboard_enhancement_pushed: &Arc<Mutex<bool>>,
     alternate_screen_entered: &Arc<Mutex<bool>>,
 ) {
@@ -440,6 +482,9 @@ fn release_terminal_state(
     }
     if swap_bool(focus_change_enabled, false) {
         let _ = execute!(io::stdout(), DisableFocusChange);
+    }
+    if swap_bool(bracketed_paste_enabled, false) {
+        let _ = execute!(io::stdout(), DisableBracketedPaste);
     }
     if swap_bool(keyboard_enhancement_pushed, false) {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
@@ -488,7 +533,7 @@ struct MouseDown {
 fn handle_terminal_key_event(
     event: TerminalKeyEvent,
     pressed_keys: &mut HashMap<String, PressedKey>,
-    events: &Arc<Mutex<VecDeque<KeyboardEvent>>>,
+    events: &Arc<Mutex<VecDeque<OrderedInputEvent>>>,
     synthetic_keyup_delay_ms: &Arc<Mutex<u32>>,
     kitty_keyboard_enabled: bool,
 ) {
@@ -531,7 +576,7 @@ fn handle_terminal_key_event(
 
 fn synthesize_expired_keyups(
     pressed_keys: &mut HashMap<String, PressedKey>,
-    events: &Arc<Mutex<VecDeque<KeyboardEvent>>>,
+    events: &Arc<Mutex<VecDeque<OrderedInputEvent>>>,
 ) {
     let now = Instant::now();
     let released: Vec<String> = pressed_keys
@@ -571,13 +616,25 @@ fn synthetic_keyup_deadline(delay_ms: &Arc<Mutex<u32>>) -> Option<Instant> {
     }
 }
 
-fn push_keyboard_event(events: &Arc<Mutex<VecDeque<KeyboardEvent>>>, event: Option<KeyboardEvent>) {
+fn push_keyboard_event(
+    events: &Arc<Mutex<VecDeque<OrderedInputEvent>>>,
+    event: Option<KeyboardEvent>,
+) {
     let Some(event) = event else {
         return;
     };
 
     if let Ok(mut events) = events.lock() {
-        events.push_back(event);
+        events.push_back(OrderedInputEvent::Keyboard(event));
+        while events.len() > 1024 {
+            events.pop_front();
+        }
+    }
+}
+
+fn push_paste_event(events: &Arc<Mutex<VecDeque<OrderedInputEvent>>>, data: String) {
+    if let Ok(mut events) = events.lock() {
+        events.push_back(OrderedInputEvent::Paste(data));
         while events.len() > 1024 {
             events.pop_front();
         }
@@ -946,6 +1003,42 @@ fn character_code(character: char) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn keyboard_event(key: &str) -> KeyboardEvent {
+        KeyboardEvent {
+            r#type: "keydown".to_string(),
+            key: key.to_string(),
+            code: "Unidentified".to_string(),
+            ctrl_key: false,
+            alt_key: false,
+            meta_key: false,
+            shift_key: false,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn keyboard_and_paste_events_share_one_ordered_queue() {
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+
+        push_keyboard_event(&events, Some(keyboard_event("a")));
+        push_paste_event(&events, "pasted".to_string());
+        push_keyboard_event(&events, Some(keyboard_event("b")));
+
+        let events = events.lock().expect("input events mutex poisoned");
+        assert!(matches!(
+            events.get(0),
+            Some(OrderedInputEvent::Keyboard(event)) if event.key == "a"
+        ));
+        assert!(matches!(
+            events.get(1),
+            Some(OrderedInputEvent::Paste(data)) if data == "pasted"
+        ));
+        assert!(matches!(
+            events.get(2),
+            Some(OrderedInputEvent::Keyboard(event)) if event.key == "b"
+        ));
+    }
 
     #[test]
     fn terminal_focus_events_use_browser_event_names() {

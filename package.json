@@ -37,6 +37,7 @@
     "demo:less": "npm run demo:less --workspace paintcannon",
     "demo:mouse": "npm run demo:mouse --workspace paintcannon",
     "demo:padding": "npm run demo:padding --workspace paintcannon",
+    "demo:paste-images": "npm run demo:paste-images --workspace paintcannon",
     "demo:margin": "npm run demo:margin --workspace paintcannon",
     "demo:overflow": "npm run demo:overflow --workspace paintcannon",
     "demo:pong": "npm run demo:pong --workspace paintcannon",

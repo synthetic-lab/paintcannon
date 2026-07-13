@@ -25,6 +25,8 @@
     "LICENSE",
     "dist/main.js",
     "dist/main.d.ts",
+    "dist/terminal-files.js",
+    "dist/terminal-files.d.ts",
     "dist/napi/index.js",
     "dist/napi/index.d.ts"
   ],
@@ -54,6 +56,7 @@
     "demo:less": "npm run build:debug && node dist/examples/less.js",
     "demo:mouse": "npm run build:debug && node dist/examples/mouse-clicks.js",
     "demo:padding": "npm run build:debug && node dist/examples/padding.js",
+    "demo:paste-images": "npm run build:debug && node dist/examples/paste-images.js",
     "demo:margin": "npm run build:debug && node dist/examples/margin.js",
     "demo:overflow": "npm run build:debug && node dist/examples/overflow.js",
     "demo:pong": "npm run build:debug && node dist/examples/pong.js",
@@ -91,6 +94,7 @@
     "vitest": "^4.1.7"
   },
   "dependencies": {
-    "antipattern": "^0.0.7"
+    "antipattern": "^0.0.7",
+    "shell-quote": "^1.10.0"
   }
 }

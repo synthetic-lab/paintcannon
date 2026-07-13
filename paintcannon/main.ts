@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { registry } from "antipattern";
 import { PaintCannon as NativePaintCannonClass } from "#paintcannon-native";
+import { filesFromTerminalPaste, type PaintFileList } from "./terminal-files.ts";
 import type {
   BatchCommand as NativeBatchCommand,
   BatchIdMapping as NativeBatchIdMapping,
@@ -8,12 +9,15 @@ import type {
   PaintCannon as NativePaintCannon,
   ScrollbarHit as NativeScrollbarHit,
   ScrollMetrics as NativeScrollMetrics,
+  TerminalInputEvent as NativeTerminalInputEvent,
   TerminalFocusEvent,
   TerminalMouseEvent,
   TerminalResizeEvent,
   TerminalSize,
   TransitionEvent as NativeTransitionEvent,
 } from "#paintcannon-native";
+
+export type { PaintFile, PaintFileList, PaintFileType } from "./terminal-files.ts";
 
 export type {
   BatchCommand as NativeBatchCommand,
@@ -23,6 +27,7 @@ export type {
   PaintCannon as NativePaintCannon,
   ScrollbarHit as NativeScrollbarHit,
   ScrollMetrics as NativeScrollMetrics,
+  TerminalInputEvent as NativeTerminalInputEvent,
   TerminalFocusEvent,
   TerminalMouseEvent,
   TerminalResizeEvent,
@@ -46,11 +51,18 @@ export interface PaintCannonOptions {
 
 export type AnimationFrameCallback = (timestamp: number) => void;
 export const KEYBOARD_EVENT_TYPES = ["keydown", "keyup"] as const;
+export const CLIPBOARD_EVENT_TYPES = ["paste"] as const;
 export const PAINT_CANNON_FOCUS_EVENT_TYPES = ["focus", "blur"] as const;
 export type KeyboardEventType = (typeof KEYBOARD_EVENT_TYPES)[number];
+export type ClipboardEventType = (typeof CLIPBOARD_EVENT_TYPES)[number];
 export type PaintCannonFocusEventType = (typeof PAINT_CANNON_FOCUS_EVENT_TYPES)[number];
-export type PaintCannonEventType = KeyboardEventType | PaintCannonFocusEventType | "resize";
+export type PaintCannonEventType =
+  | KeyboardEventType
+  | ClipboardEventType
+  | PaintCannonFocusEventType
+  | "resize";
 export type KeyboardEventListener = (event: PaintKeyboardEvent) => void;
+export type ClipboardEventListener = (event: PaintClipboardEvent) => void;
 export type PaintCannonFocusEventListener = (event: PaintCannonFocusEvent) => void;
 export type ResizeEventListener = (event: PaintResizeEvent) => void;
 export const MOUSE_ELEMENT_EVENT_TYPES = [
@@ -66,6 +78,7 @@ export const TRANSITION_ELEMENT_EVENT_TYPES = ["transitionstart", "transitionend
 const TRANSITION_ELEMENT_EVENT_TYPE_SET = new Set<string>(TRANSITION_ELEMENT_EVENT_TYPES);
 export const ELEMENT_EVENT_TYPES = [
   ...KEYBOARD_EVENT_TYPES,
+  ...CLIPBOARD_EVENT_TYPES,
   ...MOUSE_ELEMENT_EVENT_TYPES,
   ...FOCUS_ELEMENT_EVENT_TYPES,
   ...FORM_ELEMENT_EVENT_TYPES,
@@ -87,6 +100,7 @@ export type ScrollEventListener = (event: PaintScrollEvent) => void;
 export type TransitionEventListener = (event: PaintTransitionEvent) => void;
 type ElementEventListenerFunction =
   | KeyboardEventListener
+  | ClipboardEventListener
   | MouseEventListener
   | FocusEventListener
   | SubmitEventListener
@@ -105,6 +119,10 @@ type ElementEventListenerTuplesFor<
 type KeyboardElementEventListenerTuple = ElementEventListenerTuplesFor<
   typeof KEYBOARD_EVENT_TYPES,
   KeyboardEventListener
+>;
+type ClipboardElementEventListenerTuple = ElementEventListenerTuplesFor<
+  typeof CLIPBOARD_EVENT_TYPES,
+  ClipboardEventListener
 >;
 type MouseElementEventListenerTuple = ElementEventListenerTuplesFor<
   typeof MOUSE_ELEMENT_EVENT_TYPES,
@@ -135,6 +153,7 @@ type ExactElementEventListenerTuple<TEvents extends ElementEventListenerTuple> =
   : never;
 type AllElementEventListenerTuple = ExactElementEventListenerTuple<
   | KeyboardElementEventListenerTuple
+  | ClipboardElementEventListenerTuple
   | MouseElementEventListenerTuple
   | FocusElementEventListenerTuple
   | FormElementEventListenerTuple
@@ -144,6 +163,7 @@ type AllElementEventListenerTuple = ExactElementEventListenerTuple<
 >;
 type BasicElementEventListenerTuple =
   | KeyboardElementEventListenerTuple
+  | ClipboardElementEventListenerTuple
   | MouseElementEventListenerTuple
   | FocusElementEventListenerTuple
   | ChangeElementEventListenerTuple
@@ -250,6 +270,57 @@ export class PaintKeyboardEvent {
 }
 
 export type KeyboardEvent = PaintKeyboardEvent;
+
+export class PaintDataTransfer {
+  readonly types: readonly string[];
+  readonly files: PaintFileList;
+  private readonly text: string;
+
+  constructor(text: string) {
+    this.files = filesFromTerminalPaste(text);
+    this.text = this.files.length > 0 ? "" : text;
+    this.types = Object.freeze(this.files.length > 0 ? ["Files"] : ["text/plain"]);
+  }
+
+  getData(format: string): string {
+    if (this.files.length > 0) {
+      return "";
+    }
+    const normalized = format.toLowerCase();
+    return normalized === "text" || normalized === "text/plain" ? this.text : "";
+  }
+}
+
+export class PaintClipboardEvent {
+  readonly type: ClipboardEventType = "paste";
+  readonly target: PaintElement | undefined;
+  currentTarget: PaintElement | undefined;
+  readonly clipboardData: PaintDataTransfer;
+  defaultPrevented = false;
+  propagationStopped = false;
+
+  constructor(data: string, target?: PaintElement) {
+    this.target = target;
+    this.currentTarget = target;
+    this.clipboardData = new PaintDataTransfer(data);
+  }
+
+  preventDefault(): void {
+    this.defaultPrevented = true;
+  }
+
+  stopPropagation(): void {
+    this.propagationStopped = true;
+  }
+
+  setCurrentTarget(element: PaintElement): void {
+    this.currentTarget = element;
+  }
+}
+
+export type ClipboardEvent = PaintClipboardEvent;
+export type DataTransfer = PaintDataTransfer;
+export type { PaintFile as File, PaintFileList as FileList } from "./terminal-files.ts";
 
 export type NativeBinding = {
   PaintCannon: new (
@@ -377,6 +448,7 @@ export class PaintCannon {
     keydown: new Set(),
     keyup: new Set(),
   };
+  private readonly clipboardEventListeners = new Set<ClipboardEventListener>();
   private readonly focusEventListeners: Record<
     PaintCannonFocusEventType,
     Set<PaintCannonFocusEventListener>
@@ -671,15 +743,21 @@ export class PaintCannon {
   }
 
   addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
+  addEventListener(type: ClipboardEventType, listener: ClipboardEventListener): void;
   addEventListener(type: PaintCannonFocusEventType, listener: PaintCannonFocusEventListener): void;
   addEventListener(type: "resize", listener: ResizeEventListener): void;
   addEventListener(
     type: PaintCannonEventType,
-    listener: KeyboardEventListener | PaintCannonFocusEventListener | ResizeEventListener,
+    listener:
+      | KeyboardEventListener
+      | ClipboardEventListener
+      | PaintCannonFocusEventListener
+      | ResizeEventListener,
   ): void {
     if (
       type !== "keydown" &&
       type !== "keyup" &&
+      type !== "paste" &&
       type !== "focus" &&
       type !== "blur" &&
       type !== "resize"
@@ -693,6 +771,8 @@ export class PaintCannon {
 
     if (type === "resize") {
       this.resizeEventListeners.add(listener as ResizeEventListener);
+    } else if (type === "paste") {
+      this.clipboardEventListeners.add(listener as ClipboardEventListener);
     } else if (type === "focus" || type === "blur") {
       this.focusEventListeners[type].add(listener as PaintCannonFocusEventListener);
     } else {
@@ -702,6 +782,7 @@ export class PaintCannon {
   }
 
   removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
+  removeEventListener(type: ClipboardEventType, listener: ClipboardEventListener): void;
   removeEventListener(
     type: PaintCannonFocusEventType,
     listener: PaintCannonFocusEventListener,
@@ -709,11 +790,16 @@ export class PaintCannon {
   removeEventListener(type: "resize", listener: ResizeEventListener): void;
   removeEventListener(
     type: PaintCannonEventType,
-    listener: KeyboardEventListener | PaintCannonFocusEventListener | ResizeEventListener,
+    listener:
+      | KeyboardEventListener
+      | ClipboardEventListener
+      | PaintCannonFocusEventListener
+      | ResizeEventListener,
   ): void {
     if (
       type !== "keydown" &&
       type !== "keyup" &&
+      type !== "paste" &&
       type !== "focus" &&
       type !== "blur" &&
       type !== "resize"
@@ -723,6 +809,8 @@ export class PaintCannon {
 
     if (type === "resize") {
       this.resizeEventListeners.delete(listener as ResizeEventListener);
+    } else if (type === "paste") {
+      this.clipboardEventListeners.delete(listener as ClipboardEventListener);
     } else if (type === "focus" || type === "blur") {
       this.focusEventListeners[type].delete(listener as PaintCannonFocusEventListener);
     } else {
@@ -816,6 +904,7 @@ export class PaintCannon {
     this.animationFrameCallbacks.clear();
     this.keyboardEventListeners.keydown.clear();
     this.keyboardEventListeners.keyup.clear();
+    this.clipboardEventListeners.clear();
     this.focusEventListeners.focus.clear();
     this.focusEventListeners.blur.clear();
     this.resizeEventListeners.clear();
@@ -1363,41 +1452,24 @@ export class PaintCannon {
       return;
     }
 
-    const events = this.binding.drainKeyboardEvents();
+    const inputEvents: NativeTerminalInputEvent[] = this.binding.drainInputEvents();
     let handledAnyEvent = false;
-    if (events.length > 0) {
-      for (const nativeEvent of events) {
-        const event = new PaintKeyboardEvent(nativeEvent, this.keyboardEventTarget());
+    for (const nativeInput of inputEvents) {
+      if (nativeInput.keyboard !== undefined && nativeInput.paste === undefined) {
+        const event = new PaintKeyboardEvent(nativeInput.keyboard, this.keyboardEventTarget());
         if (this.handleDefaultControlEvent(event)) {
           return;
         }
 
-        if (event.target !== undefined) {
-          this.dispatchKeyboardEvent(event.target, event);
-        }
-
-        const listeners = Array.from(this.keyboardEventListeners[event.type] ?? []);
-        if (!event.propagationStopped) {
-          for (const listener of listeners) {
-            listener(event);
-          }
-        }
-
-        if (!event.defaultPrevented) {
-          const changedInput = this.focusedTextControl;
-          const beforeValue = changedInput?.value;
-          if (this.handleDefaultInputEvent(event)) {
-            handledAnyEvent = true;
-            if (
-              changedInput !== undefined &&
-              beforeValue !== undefined &&
-              changedInput.value !== beforeValue
-            ) {
-              this.dispatchChangeEvent(changedInput);
-            }
-          }
-        }
+        this.dispatchKeyboardInputEvent(event);
+      } else if (nativeInput.paste !== undefined && nativeInput.keyboard === undefined) {
+        this.dispatchPasteInputEvent(
+          new PaintClipboardEvent(nativeInput.paste, this.keyboardEventTarget()),
+        );
+      } else {
+        throw new Error("native input event must contain exactly one input variant");
       }
+
       handledAnyEvent = true;
     }
 
@@ -1445,6 +1517,56 @@ export class PaintCannon {
     return this.keyboardEventListeners.keydown.size + this.keyboardEventListeners.keyup.size;
   }
 
+  private dispatchKeyboardInputEvent(event: PaintKeyboardEvent): void {
+    if (event.target !== undefined) {
+      this.dispatchKeyboardEvent(event.target, event);
+    }
+
+    if (!event.propagationStopped) {
+      for (const listener of Array.from(this.keyboardEventListeners[event.type])) {
+        listener(event);
+      }
+    }
+
+    if (event.defaultPrevented) {
+      return;
+    }
+
+    const changedInput = this.focusedTextControl;
+    const beforeValue = changedInput?.value;
+    if (
+      this.handleDefaultInputEvent(event) &&
+      changedInput !== undefined &&
+      beforeValue !== undefined &&
+      changedInput.value !== beforeValue
+    ) {
+      this.dispatchChangeEvent(changedInput);
+    }
+  }
+
+  private dispatchPasteInputEvent(event: PaintClipboardEvent): void {
+    if (event.target !== undefined) {
+      this.dispatchClipboardEvent(event.target, event);
+    }
+
+    if (!event.propagationStopped) {
+      for (const listener of Array.from(this.clipboardEventListeners)) {
+        listener(event);
+      }
+    }
+
+    if (event.defaultPrevented || this.focusedTextControl === undefined) {
+      return;
+    }
+
+    const input = this.focusedTextControl;
+    const beforeValue = input.value;
+    input.insertText(event.clipboardData.getData("text/plain"));
+    if (input.value !== beforeValue) {
+      this.dispatchChangeEvent(input);
+    }
+  }
+
   private focusListenerCount(): number {
     return this.focusEventListeners.focus.size + this.focusEventListeners.blur.size;
   }
@@ -1452,12 +1574,14 @@ export class PaintCannon {
   private shouldPumpInputEvents(): boolean {
     return (
       this.keyboardListenerCount() > 0 ||
+      this.clipboardEventListeners.size > 0 ||
       this.focusListenerCount() > 0 ||
       this.resizeEventListeners.size > 0 ||
       this.hasElementEventListeners("transitionstart") ||
       this.hasElementEventListeners("transitionend") ||
       this.hasElementEventListeners("keydown") ||
       this.hasElementEventListeners("keyup") ||
+      this.hasElementEventListeners("paste") ||
       this.textControls.size > 0 ||
       !this.captureCtrlZ ||
       this.captureMouse
@@ -1953,6 +2077,23 @@ export class PaintCannon {
       );
       for (const listener of listeners) {
         (listener as KeyboardEventListener)(event);
+        if (event.propagationStopped) {
+          return;
+        }
+      }
+      currentTarget = this.parents.get(currentTarget.id);
+    }
+  }
+
+  private dispatchClipboardEvent(target: PaintElement, event: PaintClipboardEvent): void {
+    let currentTarget: PaintElement | undefined = target;
+    while (currentTarget !== undefined) {
+      event.setCurrentTarget(currentTarget);
+      const listeners = Array.from(
+        this.elementEventListeners.get(currentTarget.id)?.[event.type] ?? [],
+      );
+      for (const listener of listeners) {
+        (listener as ClipboardEventListener)(event);
         if (event.propagationStopped) {
           return;
         }

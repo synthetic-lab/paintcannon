@@ -26,6 +26,7 @@ export type HostComponent<Props, Element extends PaintElement> = React.ForwardRe
 export const EVENT_PROP_NAMES = {
   keydown: "onKeyDown",
   keyup: "onKeyUp",
+  paste: "onPaste",
   click: "onClick",
   mouseenter: "onMouseEnter",
   mouseleave: "onMouseLeave",

@@ -19,7 +19,7 @@ use crate::engine::{
     StyleReset,
 };
 use crate::input::{
-    KeyboardEvent, TerminalFocusEvent, TerminalInput, TerminalMouseEvent, TerminalResizeEvent,
+    TerminalFocusEvent, TerminalInput, TerminalInputEvent, TerminalMouseEvent, TerminalResizeEvent,
 };
 use crate::layout::{ArenaScrollMetrics, ScrollbarAxis};
 use crate::style::{
@@ -695,7 +695,7 @@ impl PaintCannon {
     }
 
     #[napi]
-    pub fn drain_keyboard_events(&self) -> Vec<KeyboardEvent> {
+    pub fn drain_input_events(&self) -> Vec<TerminalInputEvent> {
         self.input
             .as_ref()
             .map(TerminalInput::drain)
