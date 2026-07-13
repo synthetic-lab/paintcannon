@@ -19,8 +19,8 @@ PaintCannon supports the following CSS layout and paint features:
 - Margins and padding, including auto margins
 - Overflow hidden and scroll, with native mouse scrolling
 - `visibility: hidden`, which preserves layout space while suppressing paint and hit testing
-- 24-bit RGB background, border, text, placeholder, and selection coloring with 256-color and
-  16-color fallbacks
+- 24-bit RGB and CSS named background, border, text, placeholder, and selection colors with
+  256-color and 16-color fallbacks
 - CSS transitions for color properties
 - Mouse pointer styling in supported terminals
 - Terminal focus detection via `PaintCannon.hasFocus` and app-level `focus`/`blur` events
