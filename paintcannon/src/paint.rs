@@ -3300,6 +3300,28 @@ mod tests {
     }
 
     #[test]
+    fn paints_textarea_cursor_on_the_row_after_an_exact_soft_wrap() {
+        let mut arena = LayoutArena::new();
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Length(4.0), CssDimension::Length(2.0)),
+            "haha",
+        );
+        arena.set_textarea_value(textarea, "haha", 4);
+        arena.set_textarea_focused(textarea, true);
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+        let output = paint_arena(&arena, textarea, 4, 2, false);
+
+        assert!(output.frame.cell(0, 1).unwrap().reversed);
+    }
+
+    #[test]
     fn empty_textarea_paints_wrapped_placeholder() {
         let mut arena = LayoutArena::new();
         let mut style = block_style(CssDimension::Length(5.0), CssDimension::Length(2.0));

@@ -1753,7 +1753,10 @@ impl LayoutArena {
             LayoutNodeKind::Image(image) => image_natural_size(image),
             LayoutNodeKind::Input(input) => input_natural_size(input),
             LayoutNodeKind::TextArea(textarea) => {
-                let wrap_width = available_space.width.into_option().map(float_to_cells);
+                let wrap_width = known_dimensions
+                    .width
+                    .or_else(|| available_space.width.into_option())
+                    .map(float_to_cells);
                 textarea_natural_size(textarea, wrap_width)
             }
             LayoutNodeKind::Element | LayoutNodeKind::Text(_) => Size::ZERO,
@@ -2075,10 +2078,18 @@ fn input_natural_size(input: &InputLayoutData) -> Size<f32> {
 }
 
 fn textarea_natural_size(textarea: &TextAreaLayoutData, wrap_width: Option<u32>) -> Size<f32> {
+    if let Some(wrap_width) = wrap_width {
+        let wrapped = WrappedText::new(&textarea.value, wrap_width.max(1) as usize);
+        return Size {
+            width: wrapped.max_line_width().max(1) as f32,
+            height: wrapped.row_count().max(1) as f32,
+        };
+    }
+
     let mut cursor = InlineMeasureCursor {
         col: 0,
         row: 0,
-        width: wrap_width.unwrap_or(u32::MAX).max(1),
+        width: u32::MAX,
         max_col: 0,
     };
     measure_inline_text(&textarea.value, CssWhiteSpace::PreWrap, &mut cursor);
@@ -3696,7 +3707,7 @@ mod tests {
 
         let layout = arena.layout(textarea);
         assert_eq!(layout.size.width, 5.0);
-        assert_eq!(layout.size.height, 2.0);
+        assert_eq!(layout.size.height, 3.0);
     }
 
     #[test]
@@ -3717,7 +3728,26 @@ mod tests {
 
         let layout = arena.layout(textarea);
         assert_eq!(layout.size.width, 4.0);
-        assert_eq!(layout.size.height, 2.0);
+        assert_eq!(layout.size.height, 3.0);
+    }
+
+    #[test]
+    fn textarea_exact_wrap_boundary_reserves_a_row_for_the_caret() {
+        let mut arena = LayoutArena::new();
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Length(4.0), CssDimension::Auto),
+            "haha",
+        );
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        assert_eq!(arena.layout(textarea).size.height, 2.0);
     }
 
     #[test]
@@ -3877,7 +3907,7 @@ mod tests {
 
         let layout = arena.layout(row);
         assert_eq!(layout.size.width, 5.0);
-        assert_eq!(layout.size.height, 2.0);
+        assert_eq!(layout.size.height, 3.0);
     }
 
     #[test]

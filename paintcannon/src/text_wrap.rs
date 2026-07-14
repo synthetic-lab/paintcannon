@@ -27,13 +27,14 @@ impl WrappedText {
         let mut index = 0;
 
         while index < chars.len() {
-            cursor_positions.push((row, col));
             let character = chars[index];
             if character == '\r' {
+                cursor_positions.push(normalize_cursor_position(row, col, wrap_width));
                 index += 1;
                 continue;
             }
             if character == '\n' {
+                cursor_positions.push(normalize_cursor_position(row, col, wrap_width));
                 row += 1;
                 col = 0;
                 index += 1;
@@ -52,10 +53,12 @@ impl WrappedText {
                 row += 1;
                 col = 0;
                 if character == ' ' || character == '\t' {
+                    cursor_positions.push((row, col));
                     index += 1;
                     continue;
                 }
             }
+            cursor_positions.push(normalize_cursor_position(row, col, wrap_width));
             if width > 0 {
                 glyphs.push(TextGlyph {
                     character,
@@ -67,12 +70,13 @@ impl WrappedText {
             col += width;
             index += 1;
         }
-        cursor_positions.push((row, col));
+        let end_position = normalize_cursor_position(row, col, wrap_width);
+        cursor_positions.push(end_position);
 
         Self {
             glyphs,
             cursor_positions,
-            end_position: (row, col),
+            end_position,
         }
     }
 
@@ -85,6 +89,14 @@ impl WrappedText {
 
     pub(crate) fn row_count(&self) -> usize {
         self.end_position.0 + 1
+    }
+
+    pub(crate) fn max_line_width(&self) -> usize {
+        self.glyphs
+            .iter()
+            .map(|glyph| glyph.col + glyph.width)
+            .max()
+            .unwrap_or(1)
     }
 
     pub(crate) fn cursor_after_vertical_move(&self, cursor: usize, direction: i32) -> usize {
@@ -116,6 +128,14 @@ impl WrappedText {
     }
 }
 
+fn normalize_cursor_position(row: usize, col: usize, wrap_width: usize) -> (usize, usize) {
+    if col >= wrap_width {
+        (row + 1, 0)
+    } else {
+        (row, col)
+    }
+}
+
 fn next_word_end(chars: &[char], start: usize) -> usize {
     let mut index = start;
     while index < chars.len() && !chars[index].is_whitespace() {
@@ -143,6 +163,7 @@ mod tests {
     fn vertical_move_uses_soft_wrapped_visual_rows() {
         let layout = WrappedText::new("abcd efgh", 6);
 
+        assert_eq!(layout.cursor_position(5), (1, 0));
         assert_eq!(layout.cursor_position(7), (1, 2));
         assert_eq!(layout.cursor_after_vertical_move(7, -1), 2);
         assert_eq!(layout.cursor_after_vertical_move(2, 1), 7);
@@ -163,8 +184,9 @@ mod tests {
         assert_eq!(row_text(0), "haha");
         assert_eq!(row_text(1), "haha");
         assert_eq!(layout.cursor_position(1), (0, 1));
-        assert_eq!(layout.cursor_position(4), (0, 4));
+        assert_eq!(layout.cursor_position(4), (1, 0));
         assert_eq!(layout.cursor_position(5), (1, 1));
+        assert_eq!(layout.row_count(), 3);
     }
 
     #[test]
