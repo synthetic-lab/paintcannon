@@ -280,7 +280,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             return;
         }
 
-        let (thumb_color, _) = style.scrollbar_color.resolve();
+        let (thumb_color, track_color) = style.scrollbar_color.resolve(background);
         let max_scroll = metrics.scroll_height.saturating_sub(metrics.client_height);
         let thumb_height = vertical_scrollbar_thumb_height(rail_height, &metrics);
         let max_thumb_top = rail_height.saturating_sub(thumb_height);
@@ -299,7 +299,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                 rail.top + row as i32,
                 ' ',
                 GlyphStyle {
-                    background: if is_thumb { thumb_color } else { background },
+                    background: if is_thumb { thumb_color } else { track_color },
                     foreground: Background::Default,
                     selection_background: None,
                     bold: false,
@@ -340,7 +340,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             return;
         }
 
-        let (thumb_color, _) = style.scrollbar_color.resolve();
+        let (thumb_color, track_color) = style.scrollbar_color.resolve(background);
         let max_scroll = metrics.scroll_width.saturating_sub(metrics.client_width);
         let thumb_width = horizontal_scrollbar_thumb_width(rail_width, &metrics);
         let max_thumb_left = rail_width.saturating_sub(thumb_width);
@@ -359,7 +359,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                 rail.top,
                 ' ',
                 GlyphStyle {
-                    background: if is_thumb { thumb_color } else { background },
+                    background: if is_thumb { thumb_color } else { track_color },
                     foreground: Background::Default,
                     selection_background: None,
                     bold: false,
@@ -1762,7 +1762,7 @@ mod tests {
         assert_eq!(output.frame.cell(5, 0).unwrap().character, ' ');
         assert_eq!(
             output.frame.cell(5, 0).unwrap().background,
-            Background::Black
+            Background::Green
         );
         assert_eq!(
             output.frame.cell(5, 0).unwrap().foreground,
@@ -1775,6 +1775,56 @@ mod tests {
         );
         assert_eq!(output.frame.cell(5, 2).unwrap().background, Background::Red);
         assert_eq!(output.frame.cell(5, 2).unwrap().selection_order, None);
+    }
+
+    #[test]
+    fn changing_vertical_scrollbar_track_color_repaints_gutter() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.background = Background::Black;
+        viewport_style.scrollbar_color = crate::style::ScrollbarColor::Colors {
+            thumb: Background::Red,
+            track: Background::Black,
+        };
+        let viewport = arena.create_element(viewport_style);
+        let child = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(6.0),
+        ));
+        arena.append_child(viewport, child);
+
+        arena.compute_layout(
+            viewport,
+            Size {
+                width: AvailableSpace::Definite(6.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+        arena.set_scroll_offset(viewport, 0, 3);
+
+        let initial = paint_arena(&arena, viewport, 6, 3, false);
+        assert_eq!(
+            initial.frame.cell(5, 0).unwrap().background,
+            Background::Black
+        );
+
+        let mut updated_style = arena.style(viewport).clone();
+        updated_style.scrollbar_color = crate::style::ScrollbarColor::Colors {
+            thumb: Background::Red,
+            track: Background::Green,
+        };
+        arena.set_style(viewport, updated_style);
+
+        let updated = paint_arena(&arena, viewport, 6, 3, false);
+        assert_eq!(
+            updated.frame.cell(5, 0).unwrap().background,
+            Background::Green
+        );
+        assert_eq!(
+            updated.frame.cell(5, 2).unwrap().background,
+            Background::Red
+        );
     }
 
     #[test]
@@ -1812,7 +1862,7 @@ mod tests {
         assert_eq!(output.frame.cell(0, 2).unwrap().character, ' ');
         assert_eq!(
             output.frame.cell(0, 2).unwrap().background,
-            Background::Black
+            Background::Green
         );
         assert_eq!(
             output.frame.cell(0, 2).unwrap().foreground,
@@ -3297,6 +3347,28 @@ mod tests {
         assert_eq!(output.frame.cell(3, 0).unwrap().character, 'a');
         assert_eq!(output.frame.cell(0, 1).unwrap().character, 'h');
         assert_eq!(output.frame.cell(1, 1).unwrap().character, 'a');
+    }
+
+    #[test]
+    fn paints_textarea_cursor_on_the_row_after_an_exact_soft_wrap() {
+        let mut arena = LayoutArena::new();
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Length(4.0), CssDimension::Length(2.0)),
+            "haha",
+        );
+        arena.set_textarea_value(textarea, "haha", 4);
+        arena.set_textarea_focused(textarea, true);
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+        let output = paint_arena(&arena, textarea, 4, 2, false);
+
+        assert!(output.frame.cell(0, 1).unwrap().reversed);
     }
 
     #[test]
