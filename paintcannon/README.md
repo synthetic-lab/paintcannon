@@ -44,9 +44,6 @@ Positioned elements support `position: static | relative | absolute`, the `top`,
 use the nearest non-static ancestor as their containing block and do not contribute to normal flow.
 Positioned inline elements retain their inline flow position while their painted fragments move.
 
-Run `npm run demo:positioning` from the workspace root to see overlapping positioned elements and
-interactive z-index changes.
-
 Opacity accepts numbers or percentages and is clamped to the CSS range from `0` to `1`. PaintCannon
 queries supporting terminals for their default foreground and background colors so translucent
 content can blend correctly when a color resolves to the terminal default. Run
