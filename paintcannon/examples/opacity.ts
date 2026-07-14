@@ -56,7 +56,11 @@ upper.style.justifyContent = "center";
 upper.style.backgroundColor = "#f97316";
 upper.style.color = "#fff7ed";
 upper.appendChild(pc.createTextNode("UPPER GROUP"));
-upper.appendChild(pc.createTextNode("text and background share one opacity"));
+const upperDescription = pc.createElement("div");
+upperDescription.style.width = 28;
+upperDescription.style.whiteSpace = "normal";
+upperDescription.appendChild(pc.createTextNode("text and background share one opacity"));
+upper.appendChild(upperDescription);
 stage.appendChild(upper);
 
 const status = pc.createTextNode("");
