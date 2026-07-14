@@ -41,6 +41,7 @@
     "demo:positioning": "npm run demo:positioning --workspace paintcannon",
     "demo:margin": "npm run demo:margin --workspace paintcannon",
     "demo:overflow": "npm run demo:overflow --workspace paintcannon",
+    "demo:opacity": "npm run demo:opacity --workspace paintcannon",
     "demo:pong": "npm run demo:pong --workspace paintcannon",
     "demo:native-scroll": "npm run demo:native-scroll --workspace paintcannon",
     "demo:scroll": "npm run demo:scroll --workspace paintcannon",

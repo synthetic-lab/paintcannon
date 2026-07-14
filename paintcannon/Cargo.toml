@@ -15,6 +15,7 @@ napi = { version = "3", default-features = false, features = ["napi4", "dyn-symb
 napi-derive = "3"
 png = "0.18"
 taffy = "0.10"
+terminal-colorsaurus = "1.0"
 termprofile = { version = "0.2", features = ["color-cache", "convert", "terminfo"] }
 unicode-width = "0.2"
 

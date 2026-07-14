@@ -88,6 +88,7 @@ pub(crate) enum StyleMutation {
     Left(CssLengthPercentageAuto),
     ZIndex(CssZIndex),
     Visibility(CssVisibility),
+    Opacity(f32),
     Overflow(LayoutOverflow),
     OverflowX(LayoutOverflow),
     OverflowY(LayoutOverflow),
@@ -183,6 +184,7 @@ pub(crate) enum StyleReset {
     Left,
     ZIndex,
     Visibility,
+    Opacity,
     Overflow,
     OverflowX,
     OverflowY,
@@ -429,6 +431,10 @@ pub(crate) enum EngineCommand {
     SetTruecolorEnabled {
         enabled: bool,
     },
+    SetTerminalColors {
+        foreground: Background,
+        background: Background,
+    },
     InvalidateFrame,
     Shutdown {
         response: Option<Sender<()>>,
@@ -452,6 +458,8 @@ pub(crate) struct PaintEngine {
     selection: SelectionState,
     transitions: TransitionState,
     truecolor_enabled: bool,
+    terminal_foreground: Background,
+    terminal_background: Background,
     current_pointer_shape: Option<&'static str>,
     last_pointer_position: Option<(u32, u32)>,
     scrollbar_selection_suppressed: bool,
@@ -477,6 +485,8 @@ impl PaintEngine {
             selection: SelectionState::default(),
             transitions: TransitionState::default(),
             truecolor_enabled: true,
+            terminal_foreground: Background::White,
+            terminal_background: Background::Black,
             current_pointer_shape: None,
             last_pointer_position: None,
             scrollbar_selection_suppressed: false,
@@ -860,6 +870,11 @@ impl PaintEngine {
         self.truecolor_enabled = enabled;
     }
 
+    pub(crate) fn set_terminal_colors(&mut self, foreground: Background, background: Background) {
+        self.terminal_foreground = foreground;
+        self.terminal_background = background;
+    }
+
     pub(crate) fn set_text(&mut self, node: DomId, text: impl Into<String>) -> bool {
         let Some(node) = self.node_for(node) else {
             return false;
@@ -1215,6 +1230,8 @@ impl PaintEngine {
                 transitions: Some(&self.transitions),
                 now,
                 truecolor_enabled: self.truecolor_enabled,
+                default_foreground: self.terminal_foreground,
+                default_background: self.terminal_background,
             },
         );
         profile_log(
@@ -1624,6 +1641,7 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
         StyleMutation::Left(left) => style.left = left,
         StyleMutation::ZIndex(z_index) => style.z_index = z_index,
         StyleMutation::Visibility(visibility) => style.visibility = visibility,
+        StyleMutation::Opacity(opacity) => style.opacity = opacity,
         StyleMutation::Overflow(overflow) => {
             style.overflow_x = overflow;
             style.overflow_y = overflow;
@@ -1760,6 +1778,7 @@ fn reset_style_property(style: &mut DivStyle, reset: StyleReset) {
         StyleReset::Left => style.left = default.left,
         StyleReset::ZIndex => style.z_index = default.z_index,
         StyleReset::Visibility => style.visibility = default.visibility,
+        StyleReset::Opacity => style.opacity = default.opacity,
         StyleReset::Overflow => {
             style.overflow_x = default.overflow_x;
             style.overflow_y = default.overflow_y;
@@ -2128,6 +2147,12 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         }
         EngineCommand::SetTruecolorEnabled { enabled } => {
             engine.set_truecolor_enabled(enabled);
+        }
+        EngineCommand::SetTerminalColors {
+            foreground,
+            background,
+        } => {
+            engine.set_terminal_colors(foreground, background);
         }
         EngineCommand::InvalidateFrame => engine.invalidate_frame(),
         EngineCommand::Shutdown { response } => {
@@ -3163,6 +3188,26 @@ mod tests {
 
         assert_eq!(engine.layout_passes(), passes);
         assert_eq!(second.cell(0, 0).unwrap().background, Background::Red);
+    }
+
+    #[test]
+    fn opacity_change_repaints_without_recomputing_layout() {
+        let mut engine = PaintEngine::new();
+        let mut style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        style.background = Background::Red;
+        let root = engine.create_element(style);
+        engine.set_root(root);
+
+        engine.render_frame(2, 1).unwrap();
+        let passes = engine.layout_passes();
+        assert!(engine.mutate_style(root, StyleMutation::Opacity(0.5)));
+        let frame = engine.render_frame(2, 1).unwrap();
+
+        assert_eq!(engine.layout_passes(), passes);
+        assert_eq!(
+            frame.cell(0, 0).unwrap().background,
+            Background::Rgb(128, 0, 0)
+        );
     }
 
     #[test]

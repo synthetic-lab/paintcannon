@@ -9,6 +9,9 @@ use std::time::{Duration, Instant};
 use std::os::fd::AsRawFd;
 
 use napi_derive::napi;
+use terminal_colorsaurus::{color_palette, Color, QueryOptions};
+
+use crate::style::Background;
 
 #[napi(object)]
 #[derive(Clone, Copy)]
@@ -52,6 +55,30 @@ pub(crate) fn copy_text_to_clipboard(text: &str) {
 
 pub(crate) fn stdout_is_terminal() -> bool {
     io::stdout().is_terminal()
+}
+
+pub(crate) fn query_terminal_colors() -> (Background, Background) {
+    static COLORS: OnceLock<(Background, Background)> = OnceLock::new();
+
+    *COLORS.get_or_init(|| {
+        if !stdout_is_terminal() {
+            return (Background::White, Background::Black);
+        }
+
+        color_palette(QueryOptions::default())
+            .map(|palette| {
+                (
+                    terminal_color_to_background(&palette.foreground),
+                    terminal_color_to_background(&palette.background),
+                )
+            })
+            .unwrap_or((Background::White, Background::Black))
+    })
+}
+
+fn terminal_color_to_background(color: &Color) -> Background {
+    let (red, green, blue) = color.scale_to_8bit();
+    Background::Rgb(red, green, blue)
 }
 
 pub(crate) fn write_synchronized_output_begin(out: &mut impl Write) -> io::Result<()> {
@@ -246,7 +273,18 @@ fn query_terminal_size_from<T>(_stream: T) -> Option<TerminalSize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_tmux_passthrough, write_terminal_reset};
+    use super::{
+        encode_tmux_passthrough, terminal_color_to_background, write_terminal_reset, Background,
+        Color,
+    };
+
+    #[test]
+    fn terminal_colors_are_scaled_to_eight_bit_rgb() {
+        assert_eq!(
+            terminal_color_to_background(&Color::rgb(u16::MAX, 0x8080, 0)),
+            Background::Rgb(255, 128, 0)
+        );
+    }
 
     #[test]
     fn tmux_passthrough_encoder_matches_kitty_and_tmux_faq_form() {

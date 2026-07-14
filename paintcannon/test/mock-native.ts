@@ -45,6 +45,9 @@ export function createMockNativeBinding(instances: MockNativePaintCannon[] = [])
 
 export class MockNativePaintCannon implements NativePaintCannon {
   readonly kittyKeyboardEnabled = false;
+  interruptedByCtrlC = false;
+  rendererStopped = false;
+  interruptWhenStyleMutationFails = false;
   private focused = true;
   renderCalls = 0;
   renderSyncCalls = 0;
@@ -155,6 +158,12 @@ export class MockNativePaintCannon implements NativePaintCannon {
     this.destroyedNodes.push(id);
   }
   setStyleProperty(id: number, property: string, value: string): void {
+    if (this.rendererStopped) {
+      if (this.interruptWhenStyleMutationFails) {
+        this.interruptedByCtrlC = true;
+      }
+      throw new Error("renderer thread stopped");
+    }
     this.styleMutations.push({ id, property, value });
   }
 

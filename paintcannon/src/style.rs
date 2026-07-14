@@ -18,6 +18,7 @@ pub(crate) struct DivStyle {
     pub(crate) left: CssLengthPercentageAuto,
     pub(crate) z_index: CssZIndex,
     pub(crate) visibility: CssVisibility,
+    pub(crate) opacity: f32,
     pub(crate) flex_direction: LayoutFlexDirection,
     pub(crate) flex_wrap: LayoutFlexWrap,
     pub(crate) flex_basis: CssDimension,
@@ -84,6 +85,7 @@ impl Default for DivStyle {
             left: CssLengthPercentageAuto::Auto,
             z_index: CssZIndex::Auto,
             visibility: CssVisibility::Inherit,
+            opacity: 1.0,
             flex_direction: LayoutFlexDirection::Row,
             flex_wrap: LayoutFlexWrap::NoWrap,
             flex_basis: CssDimension::Auto,
@@ -859,6 +861,19 @@ pub(crate) fn parse_visibility(value: &str) -> Result<CssVisibility> {
     }
 }
 
+pub(crate) fn parse_opacity(value: &str) -> Result<f32> {
+    let value = value.trim();
+    let opacity = if let Some(percent) = value.strip_suffix('%') {
+        percent.parse::<f32>().ok().map(|value| value / 100.0)
+    } else {
+        value.parse::<f32>().ok()
+    }
+    .filter(|value| value.is_finite())
+    .ok_or_else(|| Error::from_reason(format!("invalid opacity: {value}")))?;
+
+    Ok(opacity.clamp(0.0, 1.0))
+}
+
 pub(crate) fn parse_overflow(value: &str) -> Result<LayoutOverflow> {
     match value.trim() {
         "visible" => Ok(LayoutOverflow::Visible),
@@ -1611,5 +1626,15 @@ mod tests {
         ));
         assert!(parse_z_index("1.5").is_err());
         assert!(parse_z_index("front").is_err());
+    }
+
+    #[test]
+    fn opacity_accepts_numbers_and_percentages_and_clamps_computed_value() {
+        assert_eq!(parse_opacity("0.25").unwrap(), 0.25);
+        assert_eq!(parse_opacity("50%").unwrap(), 0.5);
+        assert_eq!(parse_opacity("-1").unwrap(), 0.0);
+        assert_eq!(parse_opacity("150%").unwrap(), 1.0);
+        assert!(parse_opacity("opaque").is_err());
+        assert!(parse_opacity("NaN").is_err());
     }
 }

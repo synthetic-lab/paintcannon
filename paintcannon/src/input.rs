@@ -89,6 +89,7 @@ pub(crate) struct TerminalInput {
     resize_events: Arc<Mutex<VecDeque<TerminalResizeEvent>>>,
     focus_events: Arc<Mutex<VecDeque<TerminalFocusEvent>>>,
     focused: Arc<AtomicBool>,
+    interrupted_by_ctrl_c: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     synthetic_keyup_delay_ms: Arc<Mutex<u32>>,
     kitty_keyboard_enabled: bool,
@@ -163,6 +164,7 @@ impl TerminalInput {
         let resize_events = Arc::new(Mutex::new(VecDeque::new()));
         let focus_events = Arc::new(Mutex::new(VecDeque::new()));
         let focused = Arc::new(AtomicBool::new(true));
+        let interrupted_by_ctrl_c = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let synthetic_keyup_delay_ms = Arc::new(Mutex::new(synthetic_keyup_delay_ms));
         let terminal_captured = Arc::new(Mutex::new(true));
@@ -171,6 +173,7 @@ impl TerminalInput {
         let thread_resize_events = Arc::clone(&resize_events);
         let thread_focus_events = Arc::clone(&focus_events);
         let thread_focused = Arc::clone(&focused);
+        let thread_interrupted_by_ctrl_c = Arc::clone(&interrupted_by_ctrl_c);
         let thread_stop = Arc::clone(&stop);
         let thread_synthetic_keyup_delay_ms = Arc::clone(&synthetic_keyup_delay_ms);
         let thread_renderer_tx = renderer_tx;
@@ -192,6 +195,7 @@ impl TerminalInput {
                             match event {
                                 TerminalEvent::Key(event) => {
                                     if !capture_ctrl_c && is_ctrl_c_event(&event) {
+                                        thread_interrupted_by_ctrl_c.store(true, Ordering::Release);
                                         stop_renderer(thread_renderer_tx.as_ref());
                                         reset_terminal(!get_bool(&thread_alternate_screen_entered));
                                         release_terminal_state(
@@ -277,6 +281,7 @@ impl TerminalInput {
             resize_events,
             focus_events,
             focused,
+            interrupted_by_ctrl_c,
             stop,
             synthetic_keyup_delay_ms,
             kitty_keyboard_enabled,
@@ -345,6 +350,10 @@ impl TerminalInput {
 
     pub(crate) fn has_focus(&self) -> bool {
         self.focused.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn interrupted_by_ctrl_c(&self) -> bool {
+        self.interrupted_by_ctrl_c.load(Ordering::Acquire)
     }
 
     pub(crate) fn set_synthetic_keyup_delay(&self, delay_ms: u32) {

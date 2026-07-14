@@ -1423,18 +1423,50 @@ export class PaintCannon {
   }
 
   private runAnimationFrameTick(): void {
+    if (this.binding.interruptedByCtrlC) {
+      this.stop();
+      return;
+    }
+
     const callbacks = Array.from(this.animationFrameCallbacks.values());
     this.animationFrameCallbacks.clear();
 
     const timestamp = performance.now();
     for (const callback of callbacks) {
-      callback(timestamp);
+      try {
+        callback(timestamp);
+      } catch (error) {
+        if (this.stopAfterCtrlCRendererError(error)) {
+          return;
+        }
+        throw error;
+      }
     }
 
     if (!this.stopped) {
-      this.render();
+      try {
+        this.render();
+      } catch (error) {
+        if (this.stopAfterCtrlCRendererError(error)) {
+          return;
+        }
+        throw error;
+      }
       this.scheduleAnimationFrameTick();
     }
+  }
+
+  private stopAfterCtrlCRendererError(error: unknown): boolean {
+    if (
+      !(error instanceof Error) ||
+      error.message !== "renderer thread stopped" ||
+      !this.binding.interruptedByCtrlC
+    ) {
+      return false;
+    }
+
+    this.stop();
+    return true;
   }
 
   private scheduleKeyboardEventPump(): void {
@@ -3134,6 +3166,14 @@ export class CSSStyleDeclaration {
     this.setProperty("visibility", value);
   }
 
+  get opacity(): string {
+    return this.getPropertyValue("opacity");
+  }
+
+  set opacity(value: string | number) {
+    this.setProperty("opacity", value);
+  }
+
   get overflow(): "visible" | "hidden" | "scroll" | string {
     return this.getPropertyValue("overflow");
   }
@@ -3781,6 +3821,7 @@ export const SUPPORTED_STYLE_PROPERTY_NAMES = [
   "left",
   "z-index",
   "visibility",
+  "opacity",
   "overflow",
   "overflow-x",
   "overflow-y",

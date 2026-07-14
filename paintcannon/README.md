@@ -22,6 +22,7 @@ PaintCannon supports the following CSS layout and paint features:
   including percentage values
 - Overflow hidden and scroll, with native mouse scrolling
 - `visibility: hidden`, which preserves layout space while suppressing paint and hit testing
+- CSS `opacity`, composited once for an element and its descendants as a stacking-context group
 - 24-bit RGB and CSS named background, border, text, placeholder, and selection colors with
   256-color and 16-color fallbacks
 - CSS transitions for color properties
@@ -45,6 +46,11 @@ Positioned inline elements retain their inline flow position while their painted
 
 Run `npm run demo:positioning` from the workspace root to see overlapping positioned elements and
 interactive z-index changes.
+
+Opacity accepts numbers or percentages and is clamped to the CSS range from `0` to `1`. PaintCannon
+queries supporting terminals for their default foreground and background colors so translucent
+content can blend correctly when a color resolves to the terminal default. Run
+`npm run demo:opacity` to see group opacity over overlapping text and backgrounds.
 
 ## Elements
 

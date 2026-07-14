@@ -651,7 +651,10 @@ impl LayoutArena {
         let layout_changed = item.taffy_style != taffy_style
             || item.style.white_space != style.white_space
             || item.style.position != style.position;
-        if item.style.position != style.position || item.style.z_index != style.z_index {
+        if item.style.position != style.position
+            || item.style.z_index != style.z_index
+            || (item.style.opacity < 1.0) != (style.opacity < 1.0)
+        {
             self.stacking_tree_dirty = true;
         }
         item.taffy_style = taffy_style;
@@ -662,7 +665,10 @@ impl LayoutArena {
         } else {
             self.absolute_nodes.remove(&node);
         }
-        if item.style.position != CssPosition::Static || item.style.z_index != CssZIndex::Auto {
+        if item.style.position != CssPosition::Static
+            || item.style.z_index != CssZIndex::Auto
+            || item.style.opacity < 1.0
+        {
             self.stacking_candidates.insert(node);
         } else {
             self.stacking_candidates.remove(&node);
@@ -801,6 +807,7 @@ impl LayoutArena {
         }
         if self.nodes[node_index(id)].style.position != CssPosition::Static
             || self.nodes[node_index(id)].style.z_index != CssZIndex::Auto
+            || self.nodes[node_index(id)].style.opacity < 1.0
         {
             self.stacking_candidates.insert(id);
         }
@@ -817,6 +824,9 @@ impl LayoutArena {
 
     pub(crate) fn creates_stacking_context(&self, node: NodeId) -> bool {
         let item = &self.nodes[node_index(node)];
+        if item.style.opacity < 1.0 {
+            return true;
+        }
         if item.style.z_index == CssZIndex::Auto {
             return false;
         }
@@ -834,7 +844,8 @@ impl LayoutArena {
 
     pub(crate) fn is_stacking_item(&self, node: NodeId) -> bool {
         let item = &self.nodes[node_index(node)];
-        item.style.position != CssPosition::Static
+        item.style.opacity < 1.0
+            || item.style.position != CssPosition::Static
             || (item.style.z_index != CssZIndex::Auto
                 && item.parent.is_some_and(|parent| {
                     matches!(
