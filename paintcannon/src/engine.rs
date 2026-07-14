@@ -435,6 +435,9 @@ pub(crate) enum EngineCommand {
         foreground: Background,
         background: Background,
     },
+    SetTerminalFocused {
+        focused: bool,
+    },
     InvalidateFrame,
     Shutdown {
         response: Option<Sender<()>>,
@@ -460,6 +463,7 @@ pub(crate) struct PaintEngine {
     truecolor_enabled: bool,
     terminal_foreground: Background,
     terminal_background: Background,
+    terminal_focused: bool,
     current_pointer_shape: Option<&'static str>,
     last_pointer_position: Option<(u32, u32)>,
     scrollbar_selection_suppressed: bool,
@@ -487,6 +491,7 @@ impl PaintEngine {
             truecolor_enabled: true,
             terminal_foreground: Background::White,
             terminal_background: Background::Black,
+            terminal_focused: true,
             current_pointer_shape: None,
             last_pointer_position: None,
             scrollbar_selection_suppressed: false,
@@ -875,6 +880,10 @@ impl PaintEngine {
         self.terminal_background = background;
     }
 
+    pub(crate) fn set_terminal_focused(&mut self, focused: bool) {
+        self.terminal_focused = focused;
+    }
+
     pub(crate) fn set_text(&mut self, node: DomId, text: impl Into<String>) -> bool {
         let Some(node) = self.node_for(node) else {
             return false;
@@ -1232,6 +1241,7 @@ impl PaintEngine {
                 truecolor_enabled: self.truecolor_enabled,
                 default_foreground: self.terminal_foreground,
                 default_background: self.terminal_background,
+                terminal_focused: self.terminal_focused,
             },
         );
         profile_log(
@@ -2153,6 +2163,9 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
             background,
         } => {
             engine.set_terminal_colors(foreground, background);
+        }
+        EngineCommand::SetTerminalFocused { focused } => {
+            engine.set_terminal_focused(focused);
         }
         EngineCommand::InvalidateFrame => engine.invalidate_frame(),
         EngineCommand::Shutdown { response } => {
@@ -3358,6 +3371,33 @@ mod tests {
 
         let frame = engine.render_frame(6, 1).unwrap();
         assert!(frame.cell(3, 0).unwrap().reversed);
+    }
+
+    #[test]
+    fn terminal_focus_changes_cursor_without_recomputing_layout() {
+        let mut engine = PaintEngine::new();
+        let input = engine.create_input_with_id(
+            DomId(1),
+            block_style(CssDimension::Length(6.0), CssDimension::Length(1.0)),
+            "abcdef",
+        );
+        engine.set_root(input);
+        engine.set_input_focused(input, true);
+        engine.set_input_value(input, "abcdef", 3);
+
+        let focused_frame = engine.render_frame(6, 1).unwrap();
+        assert!(focused_frame.cell(3, 0).unwrap().reversed);
+        let layout_passes = engine.layout_passes();
+
+        engine.set_terminal_focused(false);
+        let blurred_frame = engine.render_frame(6, 1).unwrap();
+        assert!(!blurred_frame.cell(3, 0).unwrap().reversed);
+        assert_eq!(engine.layout_passes(), layout_passes);
+
+        engine.set_terminal_focused(true);
+        let refocused_frame = engine.render_frame(6, 1).unwrap();
+        assert!(refocused_frame.cell(3, 0).unwrap().reversed);
+        assert_eq!(engine.layout_passes(), layout_passes);
     }
 
     #[test]
