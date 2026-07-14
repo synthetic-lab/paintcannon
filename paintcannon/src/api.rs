@@ -28,11 +28,11 @@ use crate::style::{
     parse_font_style, parse_font_weight, parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks,
     parse_grid_line, parse_grid_placement, parse_grid_template_tracks, parse_image_rendering,
     parse_justify_content, parse_length_percentage, parse_length_percentage_auto,
-    parse_margin_lengths, parse_non_negative_number, parse_overflow, parse_scrollbar_color,
-    parse_scrollbar_gutter, parse_text_decoration_line, parse_transition, parse_visibility,
-    parse_white_space, Background,
+    parse_margin_lengths, parse_non_negative_number, parse_opacity, parse_overflow, parse_position,
+    parse_scrollbar_color, parse_scrollbar_gutter, parse_text_decoration_line, parse_transition,
+    parse_visibility, parse_white_space, parse_z_index, Background,
 };
-use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
+use crate::terminal::{query_terminal_colors, query_terminal_size, reset_terminal, TerminalSize};
 
 const RENDER_QUEUE_CAPACITY: usize = 32 * 1024;
 const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
@@ -132,8 +132,16 @@ impl PaintCannon {
         termprofile::set_color_cache_enabled(true);
         let color_profile = TermProfile::detect(&io::stdout(), DetectorSettings::default());
         let size = query_terminal_size();
+        let (terminal_foreground, terminal_background) = query_terminal_colors();
         let thread = thread::spawn(move || engine_loop(rx));
         let render_pending = Arc::new(AtomicBool::new(false));
+        let _ = tx.send(EngineCommand::SetTruecolorEnabled {
+            enabled: color_profile == TermProfile::TrueColor,
+        });
+        let _ = tx.send(EngineCommand::SetTerminalColors {
+            foreground: terminal_foreground,
+            background: terminal_background,
+        });
         let input = TerminalInput::start(
             DEFAULT_SYNTHETIC_KEYUP_MS,
             force_compat_mode.unwrap_or(false),
@@ -146,9 +154,6 @@ impl PaintCannon {
             .as_ref()
             .map(TerminalInput::kitty_keyboard_enabled)
             .unwrap_or(false);
-        let _ = tx.send(EngineCommand::SetTruecolorEnabled {
-            enabled: color_profile == TermProfile::TrueColor,
-        });
 
         Self {
             tx,
@@ -642,6 +647,13 @@ impl PaintCannon {
             .unwrap_or(true)
     }
 
+    #[napi(getter)]
+    pub fn interrupted_by_ctrl_c(&self) -> bool {
+        self.input
+            .as_ref()
+            .is_some_and(TerminalInput::interrupted_by_ctrl_c)
+    }
+
     #[napi]
     pub fn render(&self) -> Result<()> {
         if self
@@ -966,7 +978,14 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
 
     let mutation = match property {
         "display" => StyleMutation::Display(parse_display(value)?),
+        "position" => StyleMutation::Position(parse_position(value)?),
+        "top" => StyleMutation::Top(parse_length_percentage_auto(value)?),
+        "right" => StyleMutation::Right(parse_length_percentage_auto(value)?),
+        "bottom" => StyleMutation::Bottom(parse_length_percentage_auto(value)?),
+        "left" => StyleMutation::Left(parse_length_percentage_auto(value)?),
+        "z-index" | "zIndex" => StyleMutation::ZIndex(parse_z_index(value)?),
         "visibility" => StyleMutation::Visibility(parse_visibility(value)?),
+        "opacity" => StyleMutation::Opacity(parse_opacity(value)?),
         "overflow" => StyleMutation::Overflow(parse_overflow(value)?),
         "overflow-x" | "overflowX" => StyleMutation::OverflowX(parse_overflow(value)?),
         "overflow-y" | "overflowY" => StyleMutation::OverflowY(parse_overflow(value)?),
@@ -1155,7 +1174,14 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
 fn style_reset(property: &str) -> Result<StyleReset> {
     let reset = match property {
         "display" => StyleReset::Display,
+        "position" => StyleReset::Position,
+        "top" => StyleReset::Top,
+        "right" => StyleReset::Right,
+        "bottom" => StyleReset::Bottom,
+        "left" => StyleReset::Left,
+        "z-index" | "zIndex" => StyleReset::ZIndex,
         "visibility" => StyleReset::Visibility,
+        "opacity" => StyleReset::Opacity,
         "overflow" => StyleReset::Overflow,
         "overflow-x" | "overflowX" => StyleReset::OverflowX,
         "overflow-y" | "overflowY" => StyleReset::OverflowY,
@@ -1347,7 +1373,9 @@ impl Drop for PaintCannon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::{CssDimension, CssVisibility};
+    use crate::style::{
+        CssDimension, CssLengthPercentageAuto, CssPosition, CssVisibility, CssZIndex,
+    };
 
     #[test]
     fn can_fold_style_mutation_into_create_command() {
@@ -1429,6 +1457,56 @@ mod tests {
             } => {}
             _ => panic!("expected visibility style mutation"),
         }
+    }
+
+    #[test]
+    fn opacity_style_command_is_supported() {
+        assert!(matches!(
+            style_command(1, "opacity", "75%").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Opacity(value),
+                ..
+            } if value == 0.75
+        ));
+        assert!(matches!(
+            style_command(1, "opacity", "").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Reset(StyleReset::Opacity),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn positioning_style_commands_are_supported() {
+        assert!(matches!(
+            style_command(1, "position", "absolute").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Position(CssPosition::Absolute),
+                ..
+            }
+        ));
+        assert!(matches!(
+            style_command(1, "left", "25%").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Left(CssLengthPercentageAuto::Percent(value)),
+                ..
+            } if value == 0.25
+        ));
+        assert!(matches!(
+            style_command(1, "zIndex", "-2").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::ZIndex(CssZIndex::Integer(-2)),
+                ..
+            }
+        ));
+        assert!(matches!(
+            style_command(1, "top", "").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Reset(StyleReset::Top),
+                ..
+            }
+        ));
     }
 
     #[test]

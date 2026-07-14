@@ -187,6 +187,7 @@ type EventListenerForTuple<
 export type ClickEventListener = MouseEventListener;
 export type ImageRendering = "ascii" | "half-block";
 export type CSSVisibility = "visible" | "hidden";
+export type CSSPosition = "static" | "relative" | "absolute";
 export type CSSWhiteSpace = "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
 export type CSSFontWeight = "normal" | "bold";
 export type CSSFontStyle = "normal" | "italic";
@@ -1422,18 +1423,50 @@ export class PaintCannon {
   }
 
   private runAnimationFrameTick(): void {
+    if (this.binding.interruptedByCtrlC) {
+      this.stop();
+      return;
+    }
+
     const callbacks = Array.from(this.animationFrameCallbacks.values());
     this.animationFrameCallbacks.clear();
 
     const timestamp = performance.now();
     for (const callback of callbacks) {
-      callback(timestamp);
+      try {
+        callback(timestamp);
+      } catch (error) {
+        if (this.stopAfterCtrlCRendererError(error)) {
+          return;
+        }
+        throw error;
+      }
     }
 
     if (!this.stopped) {
-      this.render();
+      try {
+        this.render();
+      } catch (error) {
+        if (this.stopAfterCtrlCRendererError(error)) {
+          return;
+        }
+        throw error;
+      }
       this.scheduleAnimationFrameTick();
     }
+  }
+
+  private stopAfterCtrlCRendererError(error: unknown): boolean {
+    if (
+      !(error instanceof Error) ||
+      error.message !== "renderer thread stopped" ||
+      !this.binding.interruptedByCtrlC
+    ) {
+      return false;
+    }
+
+    this.stop();
+    return true;
   }
 
   private scheduleKeyboardEventPump(): void {
@@ -3077,12 +3110,68 @@ export class CSSStyleDeclaration {
     this.setProperty("display", value);
   }
 
+  get position(): CSSPosition | string {
+    return this.getPropertyValue("position");
+  }
+
+  set position(value: CSSPosition | string) {
+    this.setProperty("position", value);
+  }
+
+  get top(): string {
+    return this.getPropertyValue("top");
+  }
+
+  set top(value: string | number) {
+    this.setProperty("top", value);
+  }
+
+  get right(): string {
+    return this.getPropertyValue("right");
+  }
+
+  set right(value: string | number) {
+    this.setProperty("right", value);
+  }
+
+  get bottom(): string {
+    return this.getPropertyValue("bottom");
+  }
+
+  set bottom(value: string | number) {
+    this.setProperty("bottom", value);
+  }
+
+  get left(): string {
+    return this.getPropertyValue("left");
+  }
+
+  set left(value: string | number) {
+    this.setProperty("left", value);
+  }
+
+  get zIndex(): string {
+    return this.getPropertyValue("z-index");
+  }
+
+  set zIndex(value: string | number) {
+    this.setProperty("z-index", value);
+  }
+
   get visibility(): CSSVisibility | string {
     return this.getPropertyValue("visibility");
   }
 
   set visibility(value: CSSVisibility | string) {
     this.setProperty("visibility", value);
+  }
+
+  get opacity(): string {
+    return this.getPropertyValue("opacity");
+  }
+
+  set opacity(value: string | number) {
+    this.setProperty("opacity", value);
   }
 
   get overflow(): "visible" | "hidden" | "scroll" | string {
@@ -3725,7 +3814,14 @@ function normalizeStyleName(property: string): CSSStyleProperty {
 
 export const SUPPORTED_STYLE_PROPERTY_NAMES = [
   "display",
+  "position",
+  "top",
+  "right",
+  "bottom",
+  "left",
+  "z-index",
   "visibility",
+  "opacity",
   "overflow",
   "overflow-x",
   "overflow-y",

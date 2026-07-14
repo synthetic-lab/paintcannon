@@ -11,7 +11,14 @@ use termprofile::{
 #[derive(Clone)]
 pub(crate) struct DivStyle {
     pub(crate) display: LayoutDisplay,
+    pub(crate) position: CssPosition,
+    pub(crate) top: CssLengthPercentageAuto,
+    pub(crate) right: CssLengthPercentageAuto,
+    pub(crate) bottom: CssLengthPercentageAuto,
+    pub(crate) left: CssLengthPercentageAuto,
+    pub(crate) z_index: CssZIndex,
     pub(crate) visibility: CssVisibility,
+    pub(crate) opacity: f32,
     pub(crate) flex_direction: LayoutFlexDirection,
     pub(crate) flex_wrap: LayoutFlexWrap,
     pub(crate) flex_basis: CssDimension,
@@ -71,7 +78,14 @@ impl Default for DivStyle {
     fn default() -> Self {
         Self {
             display: LayoutDisplay::Block,
+            position: CssPosition::Static,
+            top: CssLengthPercentageAuto::Auto,
+            right: CssLengthPercentageAuto::Auto,
+            bottom: CssLengthPercentageAuto::Auto,
+            left: CssLengthPercentageAuto::Auto,
+            z_index: CssZIndex::Auto,
             visibility: CssVisibility::Inherit,
+            opacity: 1.0,
             flex_direction: LayoutFlexDirection::Row,
             flex_wrap: LayoutFlexWrap::NoWrap,
             flex_basis: CssDimension::Auto,
@@ -135,6 +149,28 @@ pub(crate) enum LayoutDisplay {
     Block,
     Flex,
     Grid,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CssPosition {
+    Static,
+    Relative,
+    Absolute,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CssZIndex {
+    Auto,
+    Integer(i32),
+}
+
+impl CssZIndex {
+    pub(crate) fn value(self) -> i32 {
+        match self {
+            Self::Auto => 0,
+            Self::Integer(value) => value,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -624,6 +660,20 @@ impl DivStyle {
                 LayoutDisplay::Flex => Display::Flex,
                 LayoutDisplay::Grid => Display::Grid,
             },
+            position: match self.position {
+                CssPosition::Static | CssPosition::Relative => Position::Relative,
+                CssPosition::Absolute => Position::Absolute,
+            },
+            inset: if self.position == CssPosition::Static {
+                Rect::auto()
+            } else {
+                Rect {
+                    left: self.left.to_taffy(),
+                    right: self.right.to_taffy(),
+                    top: self.top.to_taffy(),
+                    bottom: self.bottom.to_taffy(),
+                }
+            },
             flex_direction: match self.flex_direction {
                 LayoutFlexDirection::Row => FlexDirection::Row,
                 LayoutFlexDirection::Column => FlexDirection::Column,
@@ -779,6 +829,27 @@ pub(crate) fn parse_display(value: &str) -> Result<LayoutDisplay> {
     }
 }
 
+pub(crate) fn parse_position(value: &str) -> Result<CssPosition> {
+    match value.trim() {
+        "static" => Ok(CssPosition::Static),
+        "relative" => Ok(CssPosition::Relative),
+        "absolute" => Ok(CssPosition::Absolute),
+        value => Err(Error::from_reason(format!("unsupported position: {value}"))),
+    }
+}
+
+pub(crate) fn parse_z_index(value: &str) -> Result<CssZIndex> {
+    let value = value.trim();
+    if value == "auto" {
+        return Ok(CssZIndex::Auto);
+    }
+
+    value
+        .parse::<i32>()
+        .map(CssZIndex::Integer)
+        .map_err(|_| Error::from_reason(format!("invalid z-index: {value}")))
+}
+
 pub(crate) fn parse_visibility(value: &str) -> Result<CssVisibility> {
     match value.trim() {
         "" | "inherit" => Ok(CssVisibility::Inherit),
@@ -788,6 +859,19 @@ pub(crate) fn parse_visibility(value: &str) -> Result<CssVisibility> {
             "unsupported visibility: {value}"
         ))),
     }
+}
+
+pub(crate) fn parse_opacity(value: &str) -> Result<f32> {
+    let value = value.trim();
+    let opacity = if let Some(percent) = value.strip_suffix('%') {
+        percent.parse::<f32>().ok().map(|value| value / 100.0)
+    } else {
+        value.parse::<f32>().ok()
+    }
+    .filter(|value| value.is_finite())
+    .ok_or_else(|| Error::from_reason(format!("invalid opacity: {value}")))?;
+
+    Ok(opacity.clamp(0.0, 1.0))
 }
 
 pub(crate) fn parse_overflow(value: &str) -> Result<LayoutOverflow> {
@@ -1513,5 +1597,44 @@ mod tests {
             ScrollbarGutter::Stable
         ));
         assert!(parse_scrollbar_gutter("stable both-edges").is_err());
+    }
+
+    #[test]
+    fn position_accepts_only_the_supported_css_positioning_modes() {
+        assert!(matches!(
+            parse_position("static").unwrap(),
+            CssPosition::Static
+        ));
+        assert!(matches!(
+            parse_position("relative").unwrap(),
+            CssPosition::Relative
+        ));
+        assert!(matches!(
+            parse_position("absolute").unwrap(),
+            CssPosition::Absolute
+        ));
+        assert!(parse_position("fixed").is_err());
+        assert!(parse_position("sticky").is_err());
+    }
+
+    #[test]
+    fn z_index_accepts_auto_and_signed_integers() {
+        assert!(matches!(parse_z_index("auto").unwrap(), CssZIndex::Auto));
+        assert!(matches!(
+            parse_z_index("-12").unwrap(),
+            CssZIndex::Integer(-12)
+        ));
+        assert!(parse_z_index("1.5").is_err());
+        assert!(parse_z_index("front").is_err());
+    }
+
+    #[test]
+    fn opacity_accepts_numbers_and_percentages_and_clamps_computed_value() {
+        assert_eq!(parse_opacity("0.25").unwrap(), 0.25);
+        assert_eq!(parse_opacity("50%").unwrap(), 0.5);
+        assert_eq!(parse_opacity("-1").unwrap(), 0.0);
+        assert_eq!(parse_opacity("150%").unwrap(), 1.0);
+        assert!(parse_opacity("opaque").is_err());
+        assert!(parse_opacity("NaN").is_err());
     }
 }

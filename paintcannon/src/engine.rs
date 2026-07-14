@@ -23,10 +23,10 @@ use crate::selection::{
 use crate::style::{
     Background, BorderStyle, ColorTransitionProperty, CssDimension, CssFontStyle, CssFontWeight,
     CssGridLine, CssGridPlacement, CssGridTemplateTrack, CssLengthPercentage,
-    CssLengthPercentageAuto, CssTextDecorationLine, CssTrackSizing, CssVisibility, CssWhiteSpace,
-    CursorStyle, DivStyle, ImageRendering, LayoutAlignItems, LayoutDisplay, LayoutFlexDirection,
-    LayoutFlexWrap, LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, ScrollbarColor,
-    ScrollbarGutter, TransitionSpec,
+    CssLengthPercentageAuto, CssPosition, CssTextDecorationLine, CssTrackSizing, CssVisibility,
+    CssWhiteSpace, CssZIndex, CursorStyle, DivStyle, ImageRendering, LayoutAlignItems,
+    LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap, LayoutGridAutoFlow, LayoutJustifyContent,
+    LayoutOverflow, ScrollbarColor, ScrollbarGutter, TransitionSpec,
 };
 use crate::terminal::{copy_text_to_clipboard, query_terminal_size, write_pointer_shape};
 use crate::transition::{TransitionEvent, TransitionEventType, TransitionState};
@@ -81,7 +81,14 @@ pub(crate) struct ScrollbarHit {
 pub(crate) enum StyleMutation {
     Reset(StyleReset),
     Display(LayoutDisplay),
+    Position(CssPosition),
+    Top(CssLengthPercentageAuto),
+    Right(CssLengthPercentageAuto),
+    Bottom(CssLengthPercentageAuto),
+    Left(CssLengthPercentageAuto),
+    ZIndex(CssZIndex),
     Visibility(CssVisibility),
+    Opacity(f32),
     Overflow(LayoutOverflow),
     OverflowX(LayoutOverflow),
     OverflowY(LayoutOverflow),
@@ -170,7 +177,14 @@ pub(crate) enum StyleMutation {
 
 pub(crate) enum StyleReset {
     Display,
+    Position,
+    Top,
+    Right,
+    Bottom,
+    Left,
+    ZIndex,
     Visibility,
+    Opacity,
     Overflow,
     OverflowX,
     OverflowY,
@@ -417,6 +431,10 @@ pub(crate) enum EngineCommand {
     SetTruecolorEnabled {
         enabled: bool,
     },
+    SetTerminalColors {
+        foreground: Background,
+        background: Background,
+    },
     InvalidateFrame,
     Shutdown {
         response: Option<Sender<()>>,
@@ -440,6 +458,8 @@ pub(crate) struct PaintEngine {
     selection: SelectionState,
     transitions: TransitionState,
     truecolor_enabled: bool,
+    terminal_foreground: Background,
+    terminal_background: Background,
     current_pointer_shape: Option<&'static str>,
     last_pointer_position: Option<(u32, u32)>,
     scrollbar_selection_suppressed: bool,
@@ -465,6 +485,8 @@ impl PaintEngine {
             selection: SelectionState::default(),
             transitions: TransitionState::default(),
             truecolor_enabled: true,
+            terminal_foreground: Background::White,
+            terminal_background: Background::Black,
             current_pointer_shape: None,
             last_pointer_position: None,
             scrollbar_selection_suppressed: false,
@@ -831,7 +853,8 @@ impl PaintEngine {
         );
         self.layout_dirty = self.layout_dirty
             || previous.to_taffy() != style.to_taffy()
-            || previous.white_space != style.white_space;
+            || previous.white_space != style.white_space
+            || previous.position != style.position;
         self.arena.set_style(node, style);
     }
 
@@ -845,6 +868,11 @@ impl PaintEngine {
 
     pub(crate) fn set_truecolor_enabled(&mut self, enabled: bool) {
         self.truecolor_enabled = enabled;
+    }
+
+    pub(crate) fn set_terminal_colors(&mut self, foreground: Background, background: Background) {
+        self.terminal_foreground = foreground;
+        self.terminal_background = background;
     }
 
     pub(crate) fn set_text(&mut self, node: DomId, text: impl Into<String>) -> bool {
@@ -1111,6 +1139,7 @@ impl PaintEngine {
         }
         let textarea_scroll_start = Instant::now();
         self.arena.ensure_dirty_textareas_visible();
+        self.arena.prepare_paint(root);
         profile_log(
             "ensure_dirty_textareas_visible",
             textarea_scroll_start.elapsed(),
@@ -1158,6 +1187,14 @@ impl PaintEngine {
                         "dirty_textarea_visits",
                         layout_profile.dirty_textarea_visits.to_string(),
                     ),
+                    (
+                        "absolute_layout_visits",
+                        layout_profile.absolute_layout_visits.to_string(),
+                    ),
+                    (
+                        "stacking_tree_visits",
+                        layout_profile.stacking_tree_visits.to_string(),
+                    ),
                     ("taffy_ms", ns_to_ms(layout_profile.taffy_ns)),
                     (
                         "dirty_descendants_ms",
@@ -1193,6 +1230,8 @@ impl PaintEngine {
                 transitions: Some(&self.transitions),
                 now,
                 truecolor_enabled: self.truecolor_enabled,
+                default_foreground: self.terminal_foreground,
+                default_background: self.terminal_background,
             },
         );
         profile_log(
@@ -1595,7 +1634,14 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
     match mutation {
         StyleMutation::Reset(reset) => reset_style_property(style, reset),
         StyleMutation::Display(display) => style.display = display,
+        StyleMutation::Position(position) => style.position = position,
+        StyleMutation::Top(top) => style.top = top,
+        StyleMutation::Right(right) => style.right = right,
+        StyleMutation::Bottom(bottom) => style.bottom = bottom,
+        StyleMutation::Left(left) => style.left = left,
+        StyleMutation::ZIndex(z_index) => style.z_index = z_index,
         StyleMutation::Visibility(visibility) => style.visibility = visibility,
+        StyleMutation::Opacity(opacity) => style.opacity = opacity,
         StyleMutation::Overflow(overflow) => {
             style.overflow_x = overflow;
             style.overflow_y = overflow;
@@ -1725,7 +1771,14 @@ fn reset_style_property(style: &mut DivStyle, reset: StyleReset) {
     let default = DivStyle::default();
     match reset {
         StyleReset::Display => style.display = default.display,
+        StyleReset::Position => style.position = default.position,
+        StyleReset::Top => style.top = default.top,
+        StyleReset::Right => style.right = default.right,
+        StyleReset::Bottom => style.bottom = default.bottom,
+        StyleReset::Left => style.left = default.left,
+        StyleReset::ZIndex => style.z_index = default.z_index,
         StyleReset::Visibility => style.visibility = default.visibility,
+        StyleReset::Opacity => style.opacity = default.opacity,
         StyleReset::Overflow => {
             style.overflow_x = default.overflow_x;
             style.overflow_y = default.overflow_y;
@@ -2094,6 +2147,12 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         }
         EngineCommand::SetTruecolorEnabled { enabled } => {
             engine.set_truecolor_enabled(enabled);
+        }
+        EngineCommand::SetTerminalColors {
+            foreground,
+            background,
+        } => {
+            engine.set_terminal_colors(foreground, background);
         }
         EngineCommand::InvalidateFrame => engine.invalidate_frame(),
         EngineCommand::Shutdown { response } => {
@@ -3099,6 +3158,56 @@ mod tests {
 
         assert_eq!(engine.layout_passes(), passes);
         assert!(frame.cell(0, 0).unwrap().bold);
+    }
+
+    #[test]
+    fn z_index_change_reorders_paint_without_recomputing_layout() {
+        let mut engine = PaintEngine::new();
+        let mut root_style = block_style(CssDimension::Length(4.0), CssDimension::Length(2.0));
+        root_style.position = CssPosition::Relative;
+        let root = engine.create_element(root_style);
+        let mut red_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        red_style.position = CssPosition::Absolute;
+        red_style.z_index = CssZIndex::Integer(1);
+        red_style.background = Background::Red;
+        let red = engine.create_element(red_style);
+        let mut blue_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        blue_style.position = CssPosition::Absolute;
+        blue_style.z_index = CssZIndex::Integer(2);
+        blue_style.background = Background::Blue;
+        let blue = engine.create_element(blue_style);
+        engine.append_child(root, red);
+        engine.append_child(root, blue);
+        engine.set_root(root);
+
+        let first = engine.render_frame(4, 2).unwrap();
+        assert_eq!(first.cell(0, 0).unwrap().background, Background::Blue);
+        let passes = engine.layout_passes();
+        assert!(engine.mutate_style(red, StyleMutation::ZIndex(CssZIndex::Integer(3))));
+        let second = engine.render_frame(4, 2).unwrap();
+
+        assert_eq!(engine.layout_passes(), passes);
+        assert_eq!(second.cell(0, 0).unwrap().background, Background::Red);
+    }
+
+    #[test]
+    fn opacity_change_repaints_without_recomputing_layout() {
+        let mut engine = PaintEngine::new();
+        let mut style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        style.background = Background::Red;
+        let root = engine.create_element(style);
+        engine.set_root(root);
+
+        engine.render_frame(2, 1).unwrap();
+        let passes = engine.layout_passes();
+        assert!(engine.mutate_style(root, StyleMutation::Opacity(0.5)));
+        let frame = engine.render_frame(2, 1).unwrap();
+
+        assert_eq!(engine.layout_passes(), passes);
+        assert_eq!(
+            frame.cell(0, 0).unwrap().background,
+            Background::Rgb(128, 0, 0)
+        );
     }
 
     #[test]

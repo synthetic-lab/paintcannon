@@ -37,6 +37,9 @@ pub(crate) struct Frame {
     width: usize,
     height: usize,
     cells: Vec<Cell>,
+    painted: Vec<bool>,
+    foreground_painted: Vec<bool>,
+    background_painted: Vec<bool>,
     selection_units: Vec<SelectionUnit>,
     next_selection_order: usize,
     capture_hidden_selection_units: bool,
@@ -142,6 +145,9 @@ impl Frame {
             width,
             height,
             cells: vec![Cell::default(); width.saturating_mul(height)],
+            painted: vec![false; width.saturating_mul(height)],
+            foreground_painted: vec![false; width.saturating_mul(height)],
+            background_painted: vec![false; width.saturating_mul(height)],
             selection_units: Vec::new(),
             next_selection_order: 0,
             capture_hidden_selection_units,
@@ -154,6 +160,47 @@ impl Frame {
 
     pub(crate) fn height(&self) -> usize {
         self.height
+    }
+
+    pub(crate) fn layer(&self) -> Self {
+        let mut layer = self.clone();
+        layer.painted.fill(false);
+        layer.foreground_painted.fill(false);
+        layer.background_painted.fill(false);
+        layer
+    }
+
+    pub(crate) fn composite_layer(
+        &mut self,
+        layer: Self,
+        opacity: f32,
+        default_foreground: Background,
+        default_background: Background,
+    ) {
+        debug_assert_eq!(self.width, layer.width);
+        debug_assert_eq!(self.height, layer.height);
+
+        for index in 0..self.cells.len() {
+            if !layer.painted[index] {
+                continue;
+            }
+            let (cell, foreground_painted, background_painted) = composite_cell(
+                self.cells[index],
+                layer.cells[index],
+                layer.foreground_painted[index],
+                layer.background_painted[index],
+                opacity,
+                default_foreground,
+                default_background,
+            );
+            self.cells[index] = cell;
+            self.foreground_painted[index] |= foreground_painted;
+            self.background_painted[index] |= background_painted;
+            self.painted[index] |= foreground_painted || background_painted;
+        }
+
+        self.selection_units = layer.selection_units;
+        self.next_selection_order = layer.next_selection_order;
     }
 
     #[cfg(test)]
@@ -171,6 +218,28 @@ impl Frame {
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
+        self.fill_rect_internal(rect, background, selection_background, clip, None);
+    }
+
+    pub(crate) fn fill_box_background(
+        &mut self,
+        rect: ClipRect,
+        style: &DivStyle,
+        background: Background,
+        selection_background: Option<Background>,
+        clip: ClipBounds,
+    ) {
+        self.fill_rect_internal(rect, background, selection_background, clip, Some(style));
+    }
+
+    fn fill_rect_internal(
+        &mut self,
+        rect: ClipRect,
+        background: Background,
+        selection_background: Option<Background>,
+        clip: ClipBounds,
+        box_style: Option<&DivStyle>,
+    ) {
         if background == Background::Default && selection_background.is_none() {
             return;
         }
@@ -178,10 +247,16 @@ impl Frame {
         let Some(bounds) = self.visible_rect(rect, clip) else {
             return;
         };
+        let chunky_style = box_style.filter(|style| has_chunky_rounded_corner(style));
 
         for row in bounds.top as usize..bounds.bottom as usize {
             let start = row * self.width;
             for col in bounds.left as usize..bounds.right as usize {
+                if chunky_style.is_some_and(|style| {
+                    is_chunky_rounded_corner(rect, style, col as i32, row as i32)
+                }) {
+                    continue;
+                }
                 self.cells[start + col] = Cell {
                     background,
                     character: ' ',
@@ -195,62 +270,10 @@ impl Frame {
                     strikethrough: false,
                     wide_continuation: false,
                 };
+                self.painted[start + col] = true;
+                self.background_painted[start + col] = true;
             }
         }
-    }
-
-    pub(crate) fn clear_chunky_rounded_corners(
-        &mut self,
-        rect: ClipRect,
-        style: &DivStyle,
-        clip: ClipBounds,
-    ) {
-        if !has_chunky_rounded_corner(style) {
-            return;
-        }
-
-        let left = rect.left;
-        let right = rect.right - 1;
-        let top = rect.top;
-        let bottom = rect.bottom - 1;
-        if left > right || top > bottom {
-            return;
-        }
-
-        if style.border_top == BorderStyle::ChunkyRounded
-            && style.border_left == BorderStyle::ChunkyRounded
-        {
-            self.clear_cell(left, top, clip);
-        }
-        if style.border_top == BorderStyle::ChunkyRounded
-            && style.border_right == BorderStyle::ChunkyRounded
-            && right != left
-        {
-            self.clear_cell(right, top, clip);
-        }
-        if style.border_bottom == BorderStyle::ChunkyRounded
-            && style.border_left == BorderStyle::ChunkyRounded
-            && bottom != top
-        {
-            self.clear_cell(left, bottom, clip);
-        }
-        if style.border_bottom == BorderStyle::ChunkyRounded
-            && style.border_right == BorderStyle::ChunkyRounded
-            && right != left
-            && bottom != top
-        {
-            self.clear_cell(right, bottom, clip);
-        }
-    }
-
-    pub(crate) fn clear_cell(&mut self, x: i32, y: i32, clip: ClipBounds) {
-        let Some(index) = self.cell_index(x, y) else {
-            return;
-        };
-        if !clip.contains(x, y) {
-            return;
-        }
-        self.cells[index] = Cell::default();
     }
 
     pub(crate) fn set_reversed(&mut self, x: i32, y: i32, reversed: bool, clip: ClipBounds) {
@@ -261,6 +284,9 @@ impl Frame {
             return;
         }
         self.cells[index].reversed = reversed;
+        self.painted[index] = true;
+        self.foreground_painted[index] = true;
+        self.background_painted[index] = true;
     }
 
     pub(crate) fn write_glyph(
@@ -295,8 +321,11 @@ impl Frame {
         self.cells[index].underline = style.underline;
         self.cells[index].strikethrough = style.strikethrough;
         self.cells[index].wide_continuation = false;
+        self.painted[index] = true;
+        self.foreground_painted[index] = true;
         if style.background != Background::Default {
             self.cells[index].background = style.background;
+            self.background_painted[index] = true;
         }
         if style.selection_background.is_some() {
             self.cells[index].selection_background = style.selection_background;
@@ -319,8 +348,11 @@ impl Frame {
             self.cells[continuation_index].underline = style.underline;
             self.cells[continuation_index].strikethrough = style.strikethrough;
             self.cells[continuation_index].wide_continuation = true;
+            self.painted[continuation_index] = true;
+            self.foreground_painted[continuation_index] = true;
             if style.background != Background::Default {
                 self.cells[continuation_index].background = style.background;
+                self.background_painted[continuation_index] = true;
             }
             if style.selection_background.is_some() {
                 self.cells[continuation_index].selection_background = style.selection_background;
@@ -351,8 +383,11 @@ impl Frame {
         self.cells[index].underline = style.underline;
         self.cells[index].strikethrough = style.strikethrough;
         self.cells[index].wide_continuation = false;
+        self.painted[index] = true;
+        self.foreground_painted[index] = true;
         if style.background != Background::Default {
             self.cells[index].background = style.background;
+            self.background_painted[index] = true;
         }
         if style.selection_background.is_some() {
             self.cells[index].selection_background = style.selection_background;
@@ -740,6 +775,8 @@ impl Frame {
         self.cells[index].underline = false;
         self.cells[index].strikethrough = false;
         self.cells[index].wide_continuation = false;
+        self.painted[index] = true;
+        self.foreground_painted[index] = true;
         if selection_background.is_some() {
             self.cells[index].selection_background = selection_background;
         }
@@ -773,6 +810,91 @@ impl Frame {
         });
         order
     }
+}
+
+fn composite_cell(
+    backdrop: Cell,
+    source: Cell,
+    source_foreground_painted: bool,
+    source_background_painted: bool,
+    opacity: f32,
+    default_foreground: Background,
+    default_background: Background,
+) -> (Cell, bool, bool) {
+    let opacity = opacity.clamp(0.0, 1.0);
+    if opacity == 0.0 || (!source_foreground_painted && !source_background_painted) {
+        return (backdrop, false, false);
+    }
+
+    let (backdrop_foreground, backdrop_background) =
+        visual_colors(backdrop, default_foreground, default_background);
+    let (source_foreground, source_background) =
+        visual_colors(source, default_foreground, default_background);
+    let source_has_ink = !source.character.is_whitespace() || source.wide_continuation;
+
+    if source_has_ink && source_foreground_painted {
+        let mut result = source;
+        result.foreground = blend_rgb(source_foreground, backdrop_background, opacity);
+        if source_background_painted {
+            result.background = blend_rgb(source_background, backdrop_background, opacity);
+        } else {
+            result.background = visual_background(backdrop);
+        }
+        result.reversed = false;
+        (result, true, source_background_painted)
+    } else if source_background_painted {
+        let mut result = backdrop;
+        result.foreground = blend_rgb(source_background, backdrop_foreground, opacity);
+        result.background = blend_rgb(source_background, backdrop_background, opacity);
+        result.reversed = false;
+        (result, true, true)
+    } else {
+        (backdrop, false, false)
+    }
+}
+
+fn visual_background(cell: Cell) -> Background {
+    if cell.reversed {
+        cell.foreground
+    } else {
+        cell.background
+    }
+}
+
+fn visual_colors(
+    cell: Cell,
+    default_foreground: Background,
+    default_background: Background,
+) -> ((u8, u8, u8), (u8, u8, u8)) {
+    let foreground = resolve_rgb(cell.foreground, default_foreground, (255, 255, 255));
+    let background = resolve_rgb(cell.background, default_background, (0, 0, 0));
+    if cell.reversed {
+        (background, foreground)
+    } else {
+        (foreground, background)
+    }
+}
+
+fn resolve_rgb(
+    color: Background,
+    terminal_default: Background,
+    fallback: (u8, u8, u8),
+) -> (u8, u8, u8) {
+    color
+        .rgb()
+        .or_else(|| terminal_default.rgb())
+        .unwrap_or(fallback)
+}
+
+fn blend_rgb(source: (u8, u8, u8), backdrop: (u8, u8, u8), opacity: f32) -> Background {
+    let blend = |source: u8, backdrop: u8| {
+        (f32::from(source) * opacity + f32::from(backdrop) * (1.0 - opacity)).round() as u8
+    };
+    Background::Rgb(
+        blend(source.0, backdrop.0),
+        blend(source.1, backdrop.1),
+        blend(source.2, backdrop.2),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -858,6 +980,37 @@ fn has_chunky_rounded_corner(style: &DivStyle) -> bool {
         || (style.border_bottom == BorderStyle::ChunkyRounded
             && (style.border_left == BorderStyle::ChunkyRounded
                 || style.border_right == BorderStyle::ChunkyRounded))
+}
+
+fn is_chunky_rounded_corner(rect: ClipRect, style: &DivStyle, x: i32, y: i32) -> bool {
+    let left = rect.left;
+    let right = rect.right - 1;
+    let top = rect.top;
+    let bottom = rect.bottom - 1;
+    if left > right || top > bottom {
+        return false;
+    }
+
+    (x == left
+        && y == top
+        && style.border_top == BorderStyle::ChunkyRounded
+        && style.border_left == BorderStyle::ChunkyRounded)
+        || (right != left
+            && x == right
+            && y == top
+            && style.border_top == BorderStyle::ChunkyRounded
+            && style.border_right == BorderStyle::ChunkyRounded)
+        || (bottom != top
+            && x == left
+            && y == bottom
+            && style.border_bottom == BorderStyle::ChunkyRounded
+            && style.border_left == BorderStyle::ChunkyRounded)
+        || (right != left
+            && bottom != top
+            && x == right
+            && y == bottom
+            && style.border_bottom == BorderStyle::ChunkyRounded
+            && style.border_right == BorderStyle::ChunkyRounded)
 }
 
 #[derive(Clone, Copy)]
@@ -972,6 +1125,187 @@ mod tests {
     }
 
     #[test]
+    fn translucent_background_blends_over_both_colors_of_existing_text() {
+        let backdrop = Cell {
+            character: 'X',
+            foreground: Background::Rgb(200, 0, 0),
+            background: Background::Rgb(0, 0, 200),
+            ..Cell::default()
+        };
+        let source = Cell {
+            background: Background::Rgb(0, 200, 0),
+            ..Cell::default()
+        };
+
+        let (cell, foreground_painted, background_painted) = composite_cell(
+            backdrop,
+            source,
+            false,
+            true,
+            0.5,
+            Background::White,
+            Background::Black,
+        );
+
+        assert_eq!(cell.character, 'X');
+        assert_eq!(cell.foreground, Background::Rgb(100, 100, 0));
+        assert_eq!(cell.background, Background::Rgb(0, 100, 100));
+        assert!(foreground_painted);
+        assert!(background_painted);
+    }
+
+    #[test]
+    fn translucent_foreground_blends_with_the_lower_background() {
+        let backdrop = Cell {
+            background: Background::Rgb(0, 0, 255),
+            ..Cell::default()
+        };
+        let source = Cell {
+            character: 'X',
+            foreground: Background::Rgb(255, 0, 0),
+            ..Cell::default()
+        };
+
+        let (cell, foreground_painted, background_painted) = composite_cell(
+            backdrop,
+            source,
+            true,
+            false,
+            0.5,
+            Background::White,
+            Background::Black,
+        );
+
+        assert_eq!(cell.character, 'X');
+        assert_eq!(cell.foreground, Background::Rgb(128, 0, 128));
+        assert_eq!(cell.background, Background::Rgb(0, 0, 255));
+        assert!(foreground_painted);
+        assert!(!background_painted);
+    }
+
+    #[test]
+    fn opacity_resolves_default_colors_from_the_terminal_palette() {
+        let source = Cell {
+            character: 'X',
+            ..Cell::default()
+        };
+
+        let cell = composite_cell(
+            Cell::default(),
+            source,
+            true,
+            false,
+            0.5,
+            Background::Rgb(10, 20, 30),
+            Background::Rgb(40, 50, 60),
+        )
+        .0;
+
+        assert_eq!(cell.foreground, Background::Rgb(25, 35, 45));
+        assert_eq!(cell.background, Background::Default);
+    }
+
+    #[test]
+    fn upper_foreground_always_discards_lower_foreground() {
+        let source = Cell {
+            character: 'X',
+            foreground: Background::White,
+            ..Cell::default()
+        };
+        let first_backdrop = Cell {
+            character: 'X',
+            foreground: Background::Red,
+            background: Background::Blue,
+            ..Cell::default()
+        };
+        let second_backdrop = Cell {
+            character: 'Y',
+            foreground: Background::Green,
+            background: Background::Blue,
+            ..Cell::default()
+        };
+
+        let first = composite_cell(
+            first_backdrop,
+            source,
+            true,
+            false,
+            0.5,
+            Background::White,
+            Background::Black,
+        )
+        .0;
+        let second = composite_cell(
+            second_backdrop,
+            source,
+            true,
+            false,
+            0.5,
+            Background::White,
+            Background::Black,
+        )
+        .0;
+
+        assert_eq!(first.character, 'X');
+        assert_eq!(second.character, 'X');
+        assert_eq!(first.foreground, second.foreground);
+    }
+
+    #[test]
+    fn undecorated_whitespace_has_no_foreground_coverage() {
+        let backdrop = Cell {
+            character: 'X',
+            foreground: Background::Red,
+            background: Background::Blue,
+            ..Cell::default()
+        };
+        let source = Cell {
+            character: ' ',
+            foreground: Background::White,
+            ..Cell::default()
+        };
+
+        assert_eq!(
+            composite_cell(
+                backdrop,
+                source,
+                true,
+                false,
+                0.5,
+                Background::White,
+                Background::Black,
+            ),
+            (backdrop, false, false)
+        );
+    }
+
+    #[test]
+    fn nested_opacity_multiplies_group_alpha() {
+        let mut frame = Frame::new(1, 1, false);
+        frame.fill_rect(
+            ClipRect::new(0, 0, 1, 1),
+            Background::Blue,
+            None,
+            ClipBounds::unbounded(),
+        );
+        let mut outer = frame.layer();
+        let mut inner = outer.layer();
+        inner.fill_rect(
+            ClipRect::new(0, 0, 1, 1),
+            Background::Red,
+            None,
+            ClipBounds::unbounded(),
+        );
+        outer.composite_layer(inner, 0.5, Background::White, Background::Black);
+        frame.composite_layer(outer, 0.5, Background::White, Background::Black);
+
+        assert_eq!(
+            frame.cell(0, 0).unwrap().background,
+            Background::Rgb(64, 0, 192)
+        );
+    }
+
+    #[test]
     fn fill_rect_respects_clip_bounds() {
         let mut frame = Frame::new(5, 3, false);
         assert_eq!(frame.width(), 5);
@@ -1051,7 +1385,7 @@ mod tests {
     }
 
     #[test]
-    fn chunky_rounded_corners_can_clear_background_bleed() {
+    fn chunky_rounded_box_background_preserves_underlying_corner_cells() {
         let mut frame = Frame::new(4, 3, false);
         let mut style = DivStyle::default();
         style.border_top = BorderStyle::ChunkyRounded;
@@ -1065,9 +1399,11 @@ mod tests {
             None,
             ClipBounds::unbounded(),
         );
-        frame.clear_chunky_rounded_corners(
+        frame.fill_box_background(
             ClipRect::new(0, 0, 4, 3),
             &style,
+            Background::Red,
+            None,
             ClipBounds::unbounded(),
         );
         frame.stroke_border(
@@ -1082,7 +1418,9 @@ mod tests {
         assert_eq!(frame.cell(3, 0).unwrap().character, '🭌');
         assert_eq!(frame.cell(0, 2).unwrap().character, '🭒');
         assert_eq!(frame.cell(3, 2).unwrap().character, '🭝');
-        assert_eq!(frame.cell(0, 0).unwrap().background, Background::Default);
+        assert_eq!(frame.cell(0, 0).unwrap().background, Background::Blue);
+        assert_eq!(frame.cell(1, 0).unwrap().background, Background::Red);
+        assert_eq!(frame.cell(1, 1).unwrap().background, Background::Red);
     }
 
     #[test]

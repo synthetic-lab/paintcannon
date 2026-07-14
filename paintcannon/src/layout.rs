@@ -3,13 +3,14 @@ use std::{collections::HashSet, time::Instant};
 use taffy::{
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
     compute_hidden_layout, compute_leaf_layout, compute_root_layout, AvailableSpace, Cache,
-    CacheTree, CoreStyle, Layout, LayoutInput, LayoutOutput, LayoutPartialTree, MaybeMath,
-    MaybeResolve, NodeId, Point, Rect, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, Style,
-    TraversePartialTree, TraverseTree,
+    CacheTree, CoreStyle, Layout, LayoutInput, LayoutOutput, LayoutPartialTree, Line, MaybeMath,
+    MaybeResolve, NodeId, Point, Rect, RequestedAxis, ResolveOrZero, RoundTree, RunMode, Size,
+    SizingMode, Style, TraversePartialTree, TraverseTree,
 };
 
 use crate::style::{
-    BorderStyle, CssDimension, CssWhiteSpace, DivStyle, LayoutDisplay, LayoutOverflow,
+    BorderStyle, CssDimension, CssLengthPercentageAuto, CssPosition, CssWhiteSpace, CssZIndex,
+    DivStyle, LayoutDisplay, LayoutOverflow,
 };
 use crate::text::{character_cell_width, parse_text_for_single_line, parse_text_for_white_space};
 use crate::text_wrap::WrappedText;
@@ -53,11 +54,15 @@ pub(crate) struct LayoutArena {
     nodes: Vec<LayoutNode>,
     free_nodes: Vec<usize>,
     scroll_nodes: HashSet<NodeId>,
+    absolute_nodes: HashSet<NodeId>,
+    stacking_candidates: HashSet<NodeId>,
     dirty_textareas: HashSet<NodeId>,
     layout_passes: u64,
     layout_mode_stack: Vec<RunMode>,
     profile: LayoutProfileStats,
     last_root_layout: Option<(NodeId, Size<AvailableSpace>)>,
+    stacking_tree_dirty: bool,
+    stacking_tree_populated: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -72,6 +77,8 @@ pub(crate) struct LayoutProfileStats {
     pub(crate) visible_overflow_visits: u64,
     pub(crate) scroll_clamp_visits: u64,
     pub(crate) dirty_textarea_visits: u64,
+    pub(crate) absolute_layout_visits: u64,
+    pub(crate) stacking_tree_visits: u64,
     pub(crate) taffy_ns: u128,
     pub(crate) dirty_descendants_ns: u128,
     pub(crate) visible_overflow_ns: u128,
@@ -92,6 +99,10 @@ struct LayoutNode {
     taffy_style: Style,
     children: Vec<NodeId>,
     parent: Option<NodeId>,
+    stacking_children: Vec<NodeId>,
+    has_relative_inline_descendants: bool,
+    has_inline_stacking_contexts: bool,
+    inline_static_position: Option<Point<u32>>,
     layout: Layout,
     cache: Cache,
     layout_dirty: bool,
@@ -229,11 +240,15 @@ impl LayoutArena {
             nodes: Vec::new(),
             free_nodes: Vec::new(),
             scroll_nodes: HashSet::new(),
+            absolute_nodes: HashSet::new(),
+            stacking_candidates: HashSet::new(),
             dirty_textareas: HashSet::new(),
             layout_passes: 0,
             layout_mode_stack: Vec::new(),
             profile: LayoutProfileStats::default(),
             last_root_layout: None,
+            stacking_tree_dirty: true,
+            stacking_tree_populated: false,
         }
     }
 
@@ -247,7 +262,9 @@ impl LayoutArena {
     }
 
     pub(crate) fn reserve_children(&mut self, node: NodeId, additional: usize) {
-        self.nodes[node_index(node)].children.reserve(additional);
+        let item = &mut self.nodes[node_index(node)];
+        item.children.reserve(additional);
+        item.stacking_children.reserve(additional);
     }
 
     pub(crate) fn create_text(&mut self, text: impl Into<String>) -> NodeId {
@@ -532,6 +549,7 @@ impl LayoutArena {
         }
         self.nodes[node_index(parent)].children.push(child);
         self.nodes[node_index(child)].parent = Some(parent);
+        self.stacking_tree_dirty = true;
         self.clear_cache_from(parent);
     }
 
@@ -563,6 +581,7 @@ impl LayoutArena {
             .unwrap_or(children.len());
         children.insert(index, child);
         self.nodes[child_index].parent = Some(parent);
+        self.stacking_tree_dirty = true;
         self.clear_cache_from(parent);
     }
 
@@ -571,6 +590,7 @@ impl LayoutArena {
         if let Some(index) = children.iter().position(|id| *id == child) {
             children.remove(index);
             self.nodes[node_index(child)].parent = None;
+            self.stacking_tree_dirty = true;
             self.clear_cache_subtree(child);
             self.clear_cache_from(parent);
         }
@@ -593,12 +613,15 @@ impl LayoutArena {
                 self.nodes[child_index].parent = None;
             }
         }
+        self.stacking_tree_dirty = true;
         self.clear_cache_from(parent);
     }
 
     pub(crate) fn remove_node(&mut self, node: NodeId) {
         let index = node_index(node);
         self.scroll_nodes.remove(&node);
+        self.absolute_nodes.remove(&node);
+        self.stacking_candidates.remove(&node);
         self.dirty_textareas.remove(&node);
         let item = &mut self.nodes[index];
         debug_assert!(item.occupied, "layout node removed twice");
@@ -608,6 +631,7 @@ impl LayoutArena {
         item.taffy_style = item.style.to_taffy();
         item.children.clear();
         item.parent = None;
+        item.stacking_children.clear();
         item.layout = Layout::new();
         item.cache.clear();
         item.layout_dirty = true;
@@ -617,26 +641,57 @@ impl LayoutArena {
         item.fragments.clear();
         item.measure_cache = InlineMeasureCache::default();
         item.visible_overflow_size = Size::ZERO;
+        self.stacking_tree_dirty = true;
         self.free_nodes.push(index);
     }
 
     pub(crate) fn set_style(&mut self, node: NodeId, style: DivStyle) {
         let item = &mut self.nodes[node_index(node)];
-        item.taffy_style = style.to_taffy();
+        let taffy_style = style.to_taffy();
+        let layout_changed = item.taffy_style != taffy_style
+            || item.style.white_space != style.white_space
+            || item.style.position != style.position;
+        if item.style.position != style.position
+            || item.style.z_index != style.z_index
+            || (item.style.opacity < 1.0) != (style.opacity < 1.0)
+        {
+            self.stacking_tree_dirty = true;
+        }
+        item.taffy_style = taffy_style;
         item.style = style;
+        let is_absolute = item.style.position == CssPosition::Absolute;
+        if is_absolute {
+            self.absolute_nodes.insert(node);
+        } else {
+            self.absolute_nodes.remove(&node);
+        }
+        if item.style.position != CssPosition::Static
+            || item.style.z_index != CssZIndex::Auto
+            || item.style.opacity < 1.0
+        {
+            self.stacking_candidates.insert(node);
+        } else {
+            self.stacking_candidates.remove(&node);
+        }
         self.update_scroll_node(node);
-        self.clear_cache_subtree_and_ancestors(node);
+        if layout_changed {
+            self.clear_cache_subtree_and_ancestors(node);
+        }
     }
 
     pub(crate) fn compute_layout(&mut self, root: NodeId, available: Size<AvailableSpace>) {
         self.layout_passes += 1;
         self.profile = LayoutProfileStats::default();
+        if self.stacking_tree_dirty {
+            self.rebuild_stacking_tree(root);
+        }
         if self.last_root_layout != Some((root, available)) {
             self.mark_post_layout_subtree_dirty(root);
             self.last_root_layout = Some((root, available));
         }
         let taffy_start = Instant::now();
         compute_root_layout(self, root, available);
+        self.layout_absolute_nodes(root);
         self.profile.taffy_ns = taffy_start.elapsed().as_nanos();
         let dirty_descendants_start = Instant::now();
         self.ensure_dirty_descendants_are_laid_out(root);
@@ -715,6 +770,7 @@ impl LayoutArena {
     }
 
     fn push_node(&mut self, kind: LayoutNodeKind, style: DivStyle) -> NodeId {
+        let is_absolute = style.position == CssPosition::Absolute;
         let node = LayoutNode {
             occupied: true,
             kind,
@@ -722,6 +778,10 @@ impl LayoutArena {
             style,
             children: Vec::new(),
             parent: None,
+            stacking_children: Vec::new(),
+            has_relative_inline_descendants: false,
+            has_inline_stacking_contexts: false,
+            inline_static_position: None,
             layout: Layout::new(),
             cache: Cache::new(),
             layout_dirty: true,
@@ -742,8 +802,435 @@ impl LayoutArena {
             self.nodes.push(node);
             id
         };
+        if is_absolute {
+            self.absolute_nodes.insert(id);
+        }
+        if self.nodes[node_index(id)].style.position != CssPosition::Static
+            || self.nodes[node_index(id)].style.z_index != CssZIndex::Auto
+            || self.nodes[node_index(id)].style.opacity < 1.0
+        {
+            self.stacking_candidates.insert(id);
+        }
         self.update_scroll_node(id);
+        self.stacking_tree_dirty = true;
         id
+    }
+
+    pub(crate) fn prepare_paint(&mut self, root: NodeId) {
+        if self.stacking_tree_dirty {
+            self.rebuild_stacking_tree(root);
+        }
+    }
+
+    pub(crate) fn creates_stacking_context(&self, node: NodeId) -> bool {
+        let item = &self.nodes[node_index(node)];
+        if item.style.opacity < 1.0 {
+            return true;
+        }
+        if item.style.z_index == CssZIndex::Auto {
+            return false;
+        }
+        if item.style.position != CssPosition::Static {
+            return true;
+        }
+
+        item.parent.is_some_and(|parent| {
+            matches!(
+                self.nodes[node_index(parent)].style.display,
+                LayoutDisplay::Flex | LayoutDisplay::Grid
+            )
+        })
+    }
+
+    pub(crate) fn is_stacking_item(&self, node: NodeId) -> bool {
+        let item = &self.nodes[node_index(node)];
+        item.style.opacity < 1.0
+            || item.style.position != CssPosition::Static
+            || (item.style.z_index != CssZIndex::Auto
+                && item.parent.is_some_and(|parent| {
+                    matches!(
+                        self.nodes[node_index(parent)].style.display,
+                        LayoutDisplay::Flex | LayoutDisplay::Grid
+                    )
+                }))
+    }
+
+    pub(crate) fn stacking_children(&self, node: NodeId) -> &[NodeId] {
+        &self.nodes[node_index(node)].stacking_children
+    }
+
+    fn rebuild_stacking_tree(&mut self, root: NodeId) {
+        if self.stacking_candidates.is_empty() && !self.stacking_tree_populated {
+            self.stacking_tree_dirty = false;
+            return;
+        }
+        for node in &mut self.nodes {
+            if node.occupied {
+                node.stacking_children.clear();
+                node.has_inline_stacking_contexts = false;
+            }
+        }
+        if self.stacking_candidates.is_empty() {
+            self.stacking_tree_populated = false;
+            self.stacking_tree_dirty = false;
+            return;
+        }
+        self.rebuild_stacking_subtree(root, root);
+        let z_indices = self
+            .nodes
+            .iter()
+            .map(|node| node.style.z_index.value())
+            .collect::<Vec<_>>();
+        for node in &mut self.nodes {
+            if node.stacking_children.len() > 1 {
+                node.stacking_children
+                    .sort_by_key(|child| z_indices[node_index(*child)]);
+            }
+        }
+        self.stacking_tree_populated = true;
+        self.stacking_tree_dirty = false;
+    }
+
+    fn rebuild_stacking_subtree(&mut self, node: NodeId, stacking_context: NodeId) {
+        self.profile.stacking_tree_visits += 1;
+        let child_count = self.nodes[node_index(node)].children.len();
+        for child_index in 0..child_count {
+            let child = self.nodes[node_index(node)].children[child_index];
+            if self.is_stacking_item(child) {
+                if let Some(inline_context) = self.inline_formatting_context(child) {
+                    self.nodes[node_index(inline_context)].has_inline_stacking_contexts = true;
+                }
+                self.nodes[node_index(stacking_context)]
+                    .stacking_children
+                    .push(child);
+                let descendant_context = if self.creates_stacking_context(child) {
+                    child
+                } else {
+                    stacking_context
+                };
+                self.rebuild_stacking_subtree(child, descendant_context);
+            } else {
+                self.rebuild_stacking_subtree(child, stacking_context);
+            }
+        }
+    }
+
+    fn layout_absolute_nodes(&mut self, root: NodeId) {
+        let mut absolute_nodes = self
+            .absolute_nodes
+            .iter()
+            .filter_map(|node| {
+                let mut current = self.nodes[node_index(*node)].parent;
+                let mut containing_block = None;
+                let mut depth = 0usize;
+                let mut belongs_to_root = false;
+                while let Some(ancestor) = current {
+                    depth += 1;
+                    if containing_block.is_none()
+                        && self.nodes[node_index(ancestor)].style.position != CssPosition::Static
+                    {
+                        containing_block = Some(ancestor);
+                    }
+                    if ancestor == root {
+                        belongs_to_root = true;
+                        break;
+                    }
+                    current = self.nodes[node_index(ancestor)].parent;
+                }
+                belongs_to_root.then_some((depth, *node, containing_block.unwrap_or(root)))
+            })
+            .collect::<Vec<_>>();
+        absolute_nodes.sort_by_key(|(depth, _, _)| *depth);
+        self.profile.absolute_layout_visits += absolute_nodes.len() as u64;
+
+        for (_, child, containing_block) in absolute_nodes {
+            let parent = self.nodes[node_index(child)]
+                .parent
+                .expect("absolute nodes attached below the root have a parent");
+            let static_origin = if self.nodes[node_index(child)].layout_dirty {
+                if let (Some(inline_context), Some(position)) = (
+                    self.inline_formatting_context(child),
+                    self.nodes[node_index(child)].inline_static_position,
+                ) {
+                    let context_layout = self.layout(inline_context);
+                    let context_origin = self.absolute_layout_origin(inline_context);
+                    Point {
+                        x: context_origin.x
+                            + context_layout.border.left
+                            + context_layout.padding.left
+                            + position.x as f32,
+                        y: context_origin.y
+                            + context_layout.border.top
+                            + context_layout.padding.top
+                            + position.y as f32,
+                    }
+                } else {
+                    let parent_layout = self.layout(parent);
+                    let parent_origin = self.absolute_layout_origin(parent);
+                    Point {
+                        x: parent_origin.x + parent_layout.border.left + parent_layout.padding.left,
+                        y: parent_origin.y + parent_layout.border.top + parent_layout.padding.top,
+                    }
+                }
+            } else {
+                self.absolute_layout_origin(child)
+            };
+            let containing_origin = self.absolute_layout_origin(containing_block);
+            let static_position = Point {
+                x: static_origin.x - containing_origin.x,
+                y: static_origin.y - containing_origin.y,
+            };
+            self.layout_absolute_child(containing_block, child, static_position);
+        }
+    }
+
+    fn layout_absolute_child(
+        &mut self,
+        containing_block: NodeId,
+        child: NodeId,
+        static_position: Point<f32>,
+    ) {
+        let containing_layout = self.layout(containing_block);
+        let containing_origin = self.absolute_layout_origin(containing_block);
+        let parent_origin = if let Some(parent) = self.nodes[node_index(child)].parent {
+            self.absolute_layout_origin(parent)
+        } else {
+            Point { x: 0.0, y: 0.0 }
+        };
+        let area_offset = Point {
+            x: containing_layout.border.left,
+            y: containing_layout.border.top,
+        };
+        let area_size = Size {
+            width: (containing_layout.size.width
+                - containing_layout.border.horizontal_axis_sum()
+                - containing_layout.scrollbar_size.width)
+                .max(0.0),
+            height: (containing_layout.size.height
+                - containing_layout.border.vertical_axis_sum()
+                - containing_layout.scrollbar_size.height)
+                .max(0.0),
+        };
+        let style = self.nodes[node_index(child)].taffy_style.clone();
+        let aspect_ratio = style.aspect_ratio;
+        let margin = style
+            .margin
+            .map(|margin| margin.resolve_to_option(area_size.width, |_, _| 0.0));
+        let padding = style
+            .padding
+            .resolve_or_zero(Some(area_size.width), |_, _| 0.0);
+        let border = style
+            .border
+            .resolve_or_zero(Some(area_size.width), |_, _| 0.0);
+        let padding_border_sum = (padding + border).sum_axes();
+        let box_sizing_adjustment = if style.box_sizing == taffy::BoxSizing::ContentBox {
+            padding_border_sum
+        } else {
+            Size::ZERO
+        };
+        let left = style.inset.left.maybe_resolve(area_size.width, |_, _| 0.0);
+        let right = style.inset.right.maybe_resolve(area_size.width, |_, _| 0.0);
+        let top = style.inset.top.maybe_resolve(area_size.height, |_, _| 0.0);
+        let bottom = style
+            .inset
+            .bottom
+            .maybe_resolve(area_size.height, |_, _| 0.0);
+        let style_size = style
+            .size
+            .maybe_resolve(area_size, |_, _| 0.0)
+            .maybe_apply_aspect_ratio(aspect_ratio)
+            .maybe_add(box_sizing_adjustment);
+        let min_size = style
+            .min_size
+            .maybe_resolve(area_size, |_, _| 0.0)
+            .maybe_apply_aspect_ratio(aspect_ratio)
+            .maybe_add(box_sizing_adjustment)
+            .or(padding_border_sum.map(Some))
+            .maybe_max(padding_border_sum);
+        let max_size = style
+            .max_size
+            .maybe_resolve(area_size, |_, _| 0.0)
+            .maybe_apply_aspect_ratio(aspect_ratio)
+            .maybe_add(box_sizing_adjustment);
+        let mut known_dimensions = style_size.maybe_clamp(min_size, max_size);
+
+        if let (None, Some(left), Some(right)) = (known_dimensions.width, left, right) {
+            known_dimensions.width = Some(
+                (area_size.width
+                    - margin.left.unwrap_or(0.0)
+                    - margin.right.unwrap_or(0.0)
+                    - left
+                    - right)
+                    .max(0.0),
+            );
+            known_dimensions = known_dimensions
+                .maybe_apply_aspect_ratio(aspect_ratio)
+                .maybe_clamp(min_size, max_size);
+        }
+        if let (None, Some(top), Some(bottom)) = (known_dimensions.height, top, bottom) {
+            known_dimensions.height = Some(
+                (area_size.height
+                    - margin.top.unwrap_or(0.0)
+                    - margin.bottom.unwrap_or(0.0)
+                    - top
+                    - bottom)
+                    .max(0.0),
+            );
+            known_dimensions = known_dimensions
+                .maybe_apply_aspect_ratio(aspect_ratio)
+                .maybe_clamp(min_size, max_size);
+        }
+
+        let available_space = Size {
+            width: AvailableSpace::Definite(
+                area_size.width.maybe_clamp(min_size.width, max_size.width),
+            ),
+            height: AvailableSpace::Definite(
+                area_size
+                    .height
+                    .maybe_clamp(min_size.height, max_size.height),
+            ),
+        };
+        let measured_size = self
+            .compute_child_layout(
+                child,
+                LayoutInput {
+                    known_dimensions,
+                    parent_size: area_size.map(Some),
+                    available_space,
+                    sizing_mode: SizingMode::ContentSize,
+                    axis: RequestedAxis::Both,
+                    run_mode: RunMode::ComputeSize,
+                    vertical_margins_are_collapsible: Line::FALSE,
+                },
+            )
+            .size;
+        let final_size = known_dimensions
+            .unwrap_or(measured_size)
+            .maybe_clamp(min_size, max_size);
+        let layout_output = self.compute_child_layout(
+            child,
+            LayoutInput {
+                known_dimensions: final_size.map(Some),
+                parent_size: area_size.map(Some),
+                available_space,
+                sizing_mode: SizingMode::ContentSize,
+                axis: RequestedAxis::Both,
+                run_mode: RunMode::PerformLayout,
+                vertical_margins_are_collapsible: Line::FALSE,
+            },
+        );
+        let non_auto_margin = Rect {
+            left: if left.is_some() {
+                margin.left.unwrap_or(0.0)
+            } else {
+                0.0
+            },
+            right: if right.is_some() {
+                margin.right.unwrap_or(0.0)
+            } else {
+                0.0
+            },
+            top: if top.is_some() {
+                margin.top.unwrap_or(0.0)
+            } else {
+                0.0
+            },
+            bottom: if bottom.is_some() {
+                margin.bottom.unwrap_or(0.0)
+            } else {
+                0.0
+            },
+        };
+        let absolute_auto_margin_space = Point {
+            x: right
+                .map(|right| area_size.width - right - left.unwrap_or(0.0))
+                .unwrap_or(final_size.width),
+            y: bottom
+                .map(|bottom| area_size.height - bottom - top.unwrap_or(0.0))
+                .unwrap_or(final_size.height),
+        };
+        let free_space = Size {
+            width: absolute_auto_margin_space.x
+                - final_size.width
+                - non_auto_margin.horizontal_axis_sum(),
+            height: absolute_auto_margin_space.y
+                - final_size.height
+                - non_auto_margin.vertical_axis_sum(),
+        };
+        let horizontal_auto_margin_count =
+            margin.left.is_none() as u8 + margin.right.is_none() as u8;
+        let vertical_auto_margin_count = margin.top.is_none() as u8 + margin.bottom.is_none() as u8;
+        let auto_margin = Size {
+            width: if horizontal_auto_margin_count == 2
+                && (style_size.width.is_none()
+                    || style_size.width.unwrap_or(0.0) >= free_space.width)
+            {
+                0.0
+            } else if horizontal_auto_margin_count > 0 {
+                free_space.width / horizontal_auto_margin_count as f32
+            } else {
+                0.0
+            },
+            height: if vertical_auto_margin_count == 2
+                && (style_size.height.is_none()
+                    || style_size.height.unwrap_or(0.0) >= free_space.height)
+            {
+                0.0
+            } else if vertical_auto_margin_count > 0 {
+                free_space.height / vertical_auto_margin_count as f32
+            } else {
+                0.0
+            },
+        };
+        let resolved_margin = Rect {
+            left: margin.left.unwrap_or(auto_margin.width),
+            right: margin.right.unwrap_or(auto_margin.width),
+            top: margin.top.unwrap_or(auto_margin.height),
+            bottom: margin.bottom.unwrap_or(auto_margin.height),
+        };
+        let x = match (left, right) {
+            (Some(left), _) => left + resolved_margin.left,
+            (None, Some(right)) => {
+                area_size.width - final_size.width - right - resolved_margin.right
+            }
+            (None, None) => static_position.x + resolved_margin.left - area_offset.x,
+        };
+        let y = match (top, bottom) {
+            (Some(top), _) => top + resolved_margin.top,
+            (None, Some(bottom)) => {
+                area_size.height - final_size.height - bottom - resolved_margin.bottom
+            }
+            (None, None) => static_position.y + resolved_margin.top - area_offset.y,
+        };
+        let scrollbar_size = Size {
+            width: if style.overflow.y == taffy::Overflow::Scroll {
+                style.scrollbar_width
+            } else {
+                0.0
+            },
+            height: if style.overflow.x == taffy::Overflow::Scroll {
+                style.scrollbar_width
+            } else {
+                0.0
+            },
+        };
+        self.set_unrounded_layout(
+            child,
+            &Layout {
+                order: 0,
+                size: final_size,
+                content_size: layout_output.content_size,
+                scrollbar_size,
+                location: Point {
+                    x: containing_origin.x + area_offset.x + x - parent_origin.x,
+                    y: containing_origin.y + area_offset.y + y - parent_origin.y,
+                },
+                padding,
+                border,
+                margin: resolved_margin,
+            },
+        );
     }
 
     fn update_scroll_node(&mut self, node: NodeId) {
@@ -761,6 +1248,69 @@ impl LayoutArena {
 
     pub(crate) fn inline_fragments(&self, node: NodeId) -> &[InlineFragment] {
         &self.nodes[node_index(node)].fragments
+    }
+
+    pub(crate) fn inline_formatting_context(&self, node: NodeId) -> Option<NodeId> {
+        let mut context = None;
+        let mut current = self.nodes[node_index(node)].parent;
+        while let Some(ancestor) = current {
+            if self.is_inline_context(ancestor) {
+                context = Some(ancestor);
+            }
+            current = self.nodes[node_index(ancestor)].parent;
+        }
+        context
+    }
+
+    pub(crate) fn inline_fragment_stacking_context(
+        &self,
+        inline_context: NodeId,
+        fragment_node: NodeId,
+    ) -> Option<NodeId> {
+        if !self.nodes[node_index(inline_context)].has_inline_stacking_contexts {
+            return None;
+        }
+
+        let mut current = Some(fragment_node);
+        while let Some(node) = current {
+            if node == inline_context {
+                break;
+            }
+            if self.is_stacking_item(node) {
+                return Some(node);
+            }
+            current = self.nodes[node_index(node)].parent;
+        }
+        None
+    }
+
+    pub(crate) fn inline_fragment_relative_offset(
+        &self,
+        inline_context: NodeId,
+        fragment_node: NodeId,
+    ) -> Point<i32> {
+        if !self.nodes[node_index(inline_context)].has_relative_inline_descendants {
+            return Point { x: 0, y: 0 };
+        }
+
+        let containing_size = self.layout(inline_context).content_box_size();
+        let mut offset = Point { x: 0.0, y: 0.0 };
+        let mut current = Some(fragment_node);
+        while let Some(node) = current {
+            if node == inline_context {
+                break;
+            }
+            let style = &self.nodes[node_index(node)].style;
+            if style.position == CssPosition::Relative {
+                offset.x += relative_axis_offset(style.left, style.right, containing_size.width);
+                offset.y += relative_axis_offset(style.top, style.bottom, containing_size.height);
+            }
+            current = self.nodes[node_index(node)].parent;
+        }
+        Point {
+            x: offset.x.round() as i32,
+            y: offset.y.round() as i32,
+        }
     }
 
     fn snapped_layout(&self, node: NodeId) -> Layout {
@@ -829,31 +1379,29 @@ impl LayoutArena {
         origin
     }
 
-    fn absolute_paint_layout_origin(&self, node: NodeId) -> Point<f32> {
-        let mut origin = Point { x: 0.0, y: 0.0 };
-        let mut path = Vec::new();
-        let mut current = Some(node);
-        while let Some(node_id) = current {
-            path.push(node_id);
-            current = self.nodes[node_index(node_id)].parent;
-        }
+    fn child_layout_offset(&self, parent: NodeId, child: NodeId) -> Point<f32> {
+        debug_assert_eq!(self.nodes[node_index(child)].parent, Some(parent));
+        self.layout(child).location
+    }
 
-        let last_index = path.len().saturating_sub(1);
-        for (index, node_id) in path.into_iter().rev().enumerate() {
-            let layout = self.layout(node_id);
-            origin.x += layout.location.x;
-            origin.y += layout.location.y;
-            if index != last_index {
-                let item = &self.nodes[node_index(node_id)];
-                if item.style.overflow_x == LayoutOverflow::Scroll {
-                    origin.x -= item.scroll_left as f32;
-                }
-                if item.style.overflow_y == LayoutOverflow::Scroll {
-                    origin.y -= item.scroll_top as f32;
-                }
+    fn absolute_paint_layout_origin(&self, node: NodeId) -> Point<f32> {
+        let mut origin = self.absolute_layout_origin(node);
+        let mut current = self.nodes[node_index(node)].parent;
+        while let Some(ancestor) = current {
+            let item = &self.nodes[node_index(ancestor)];
+            if item.style.overflow_x == LayoutOverflow::Scroll {
+                origin.x -= item.scroll_left as f32;
             }
+            if item.style.overflow_y == LayoutOverflow::Scroll {
+                origin.y -= item.scroll_top as f32;
+            }
+            current = item.parent;
         }
         origin
+    }
+
+    pub(crate) fn absolute_paint_origin(&self, node: NodeId) -> Point<f32> {
+        self.absolute_paint_layout_origin(node)
     }
 
     fn absolute_border_rect(&self, node: NodeId) -> AbsoluteRect {
@@ -927,6 +1475,7 @@ impl LayoutArena {
             for child_index in 0..child_count {
                 let child = self.nodes[index].children[child_index];
                 let child_layout = self.layout(child);
+                let child_offset = self.child_layout_offset(node_id, child);
                 let child_style = &self.nodes[node_index(child)].style;
                 let child_overflow = self.nodes[node_index(child)].visible_overflow_size;
                 let child_width = if child_style.overflow_x == LayoutOverflow::Visible {
@@ -940,11 +1489,10 @@ impl LayoutArena {
                     child_layout.size.height
                 };
                 scroll_width = scroll_width.max(float_to_cells(
-                    child_layout.location.x + child_width - padding_origin.x + layout.padding.right,
+                    child_offset.x + child_width - padding_origin.x + layout.padding.right,
                 ));
                 scroll_height = scroll_height.max(float_to_cells(
-                    child_layout.location.y + child_height - padding_origin.y
-                        + layout.padding.bottom,
+                    child_offset.y + child_height - padding_origin.y + layout.padding.bottom,
                 ));
             }
         }
@@ -1052,6 +1600,7 @@ impl LayoutArena {
             for child_index in 0..child_count {
                 let child = self.nodes[index].children[child_index];
                 let child_layout = self.layout(child);
+                let child_offset = self.child_layout_offset(node_id, child);
                 let child_style = &self.nodes[node_index(child)].style;
                 let child_overflow = self.nodes[node_index(child)].visible_overflow_size;
                 let child_width = if child_style.overflow_x == LayoutOverflow::Visible {
@@ -1065,11 +1614,10 @@ impl LayoutArena {
                     child_layout.size.height
                 };
                 scroll_width = scroll_width.max(float_to_cells(
-                    child_layout.location.x + child_width - padding_origin.x + layout.padding.right,
+                    child_offset.x + child_width - padding_origin.x + layout.padding.right,
                 ));
                 scroll_height = scroll_height.max(float_to_cells(
-                    child_layout.location.y + child_height - padding_origin.y
-                        + layout.padding.bottom,
+                    child_offset.y + child_height - padding_origin.y + layout.padding.bottom,
                 ));
             }
         }
@@ -1259,6 +1807,7 @@ impl LayoutArena {
             for child_index in 0..child_count {
                 let child = self.nodes[node_index(node)].children[child_index];
                 let child_layout = self.layout(child);
+                let child_offset = self.child_layout_offset(node, child);
                 let child_style = &self.nodes[node_index(child)].style;
                 let child_overflow = self.nodes[node_index(child)].visible_overflow_size;
                 let propagated_width = if child_style.overflow_x == LayoutOverflow::Visible {
@@ -1271,8 +1820,8 @@ impl LayoutArena {
                 } else {
                     child_layout.size.height
                 };
-                size.width = size.width.max(child_layout.location.x + propagated_width);
-                size.height = size.height.max(child_layout.location.y + propagated_height);
+                size.width = size.width.max(child_offset.x + propagated_width);
+                size.height = size.height.max(child_offset.y + propagated_height);
             }
         }
 
@@ -1336,6 +1885,9 @@ impl LayoutArena {
         let mut has_inline = false;
         for child in children {
             let node = &self.nodes[node_index(*child)];
+            if node.style.position == CssPosition::Absolute {
+                continue;
+            }
             match &node.kind {
                 LayoutNodeKind::Text(_) => has_inline = true,
                 LayoutNodeKind::Element if node.style.display == LayoutDisplay::Inline => {
@@ -1566,6 +2118,9 @@ impl LayoutArena {
         inherited_white_space: CssWhiteSpace,
     ) -> ContentWidths {
         let index = node_index(node_id);
+        if self.nodes[index].style.position == CssPosition::Absolute {
+            return ContentWidths { min: 0.0, max: 0.0 };
+        }
         match &self.nodes[index].kind {
             LayoutNodeKind::Text(text) => text_content_widths(text, inherited_white_space),
             LayoutNodeKind::Element if self.nodes[index].style.display == LayoutDisplay::Inline => {
@@ -1632,6 +2187,9 @@ impl LayoutArena {
         cursor: &mut InlineMeasureCursor,
     ) {
         let index = node_index(node);
+        if self.nodes[index].style.position == CssPosition::Absolute {
+            return;
+        }
         match &self.nodes[index].kind {
             LayoutNodeKind::Text(text) => measure_inline_text(text, inherited_white_space, cursor),
             LayoutNodeKind::Element if self.nodes[index].style.display == LayoutDisplay::Inline => {
@@ -1671,6 +2229,8 @@ impl LayoutArena {
             width: width.max(1),
             max_col: 0,
             selection_order: 0,
+            has_relative_descendants: false,
+            absolute_positions: Vec::new(),
             fragments: Vec::with_capacity(fragment_capacity),
         };
         let child_count = self.nodes[index].children.len();
@@ -1678,6 +2238,10 @@ impl LayoutArena {
             let child = self.nodes[index].children[child_index];
             self.layout_inline_node(child, white_space, None, &mut cursor);
         }
+        for (absolute, position) in cursor.absolute_positions {
+            self.nodes[node_index(absolute)].inline_static_position = Some(position);
+        }
+        self.nodes[index].has_relative_inline_descendants = cursor.has_relative_descendants;
         self.nodes[index].fragments = cursor.fragments;
         self.nodes[index].fragments_dirty = false;
     }
@@ -1686,6 +2250,9 @@ impl LayoutArena {
         let child_count = self.nodes[node_index(node)].children.len();
         for child_index in 0..child_count {
             let child = self.nodes[node_index(node)].children[child_index];
+            if self.nodes[node_index(child)].style.position == CssPosition::Absolute {
+                continue;
+            }
             self.nodes[node_index(child)].layout_dirty = false;
             self.nodes[node_index(child)].fragments_dirty = false;
             if matches!(self.nodes[node_index(child)].kind, LayoutNodeKind::Element) {
@@ -1702,6 +2269,19 @@ impl LayoutArena {
         cursor: &mut InlineLayoutCursor,
     ) {
         let item = &self.nodes[node_index(node)];
+        if item.style.position == CssPosition::Absolute {
+            cursor.absolute_positions.push((
+                node,
+                Point {
+                    x: cursor.col,
+                    y: cursor.row,
+                },
+            ));
+            return;
+        }
+        if item.style.position == CssPosition::Relative {
+            cursor.has_relative_descendants = true;
+        }
         match &item.kind {
             LayoutNodeKind::Text(text) => {
                 layout_inline_text(node, hit_target, text, inherited_white_space, cursor)
@@ -1984,7 +2564,28 @@ struct InlineLayoutCursor {
     width: u32,
     max_col: u32,
     selection_order: usize,
+    has_relative_descendants: bool,
+    absolute_positions: Vec<(NodeId, Point<u32>)>,
     fragments: Vec<InlineFragment>,
+}
+
+fn relative_axis_offset(
+    start: CssLengthPercentageAuto,
+    end: CssLengthPercentageAuto,
+    basis: f32,
+) -> f32 {
+    match resolve_length_percentage_auto(start, basis) {
+        Some(value) => value,
+        None => -resolve_length_percentage_auto(end, basis).unwrap_or(0.0),
+    }
+}
+
+fn resolve_length_percentage_auto(value: CssLengthPercentageAuto, basis: f32) -> Option<f32> {
+    match value {
+        CssLengthPercentageAuto::Auto => None,
+        CssLengthPercentageAuto::Length(value) => Some(value),
+        CssLengthPercentageAuto::Percent(value) => Some(value * basis),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2620,7 +3221,7 @@ mod tests {
     use super::*;
     use crate::style::{
         BorderStyle, CssDimension, CssGridTemplateTrack, CssLengthPercentage,
-        CssLengthPercentageAuto, CssTrackSizing, CssWhiteSpace, LayoutAlignItems,
+        CssLengthPercentageAuto, CssPosition, CssTrackSizing, CssWhiteSpace, LayoutAlignItems,
         LayoutFlexDirection, LayoutJustifyContent, LayoutOverflow, ScrollbarGutter,
     };
 
@@ -2636,6 +3237,263 @@ mod tests {
             CssDimension::Length(width),
             CssDimension::Length(height),
         ))
+    }
+
+    #[test]
+    fn relative_position_offsets_paint_box_without_changing_sibling_flow() {
+        let mut arena = LayoutArena::new();
+        let root = fixed_box(&mut arena, 10.0, 8.0);
+        let mut positioned_style =
+            block_style(CssDimension::Length(4.0), CssDimension::Length(2.0));
+        positioned_style.position = CssPosition::Relative;
+        positioned_style.left = CssLengthPercentageAuto::Length(2.0);
+        positioned_style.top = CssLengthPercentageAuto::Length(1.0);
+        let positioned = arena.create_element(positioned_style);
+        let sibling = fixed_box(&mut arena, 4.0, 2.0);
+        arena.append_child(root, positioned);
+        arena.append_child(root, sibling);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(8.0),
+            },
+        );
+
+        assert_eq!(arena.layout(positioned).location, Point { x: 2.0, y: 1.0 });
+        assert_eq!(arena.layout(sibling).location, Point { x: 0.0, y: 2.0 });
+    }
+
+    #[test]
+    fn absolute_descendant_uses_nearest_non_static_ancestor_and_leaves_flow() {
+        let mut arena = LayoutArena::new();
+        let root = fixed_box(&mut arena, 20.0, 10.0);
+        let mut containing_style =
+            block_style(CssDimension::Length(12.0), CssDimension::Length(6.0));
+        containing_style.position = CssPosition::Relative;
+        let containing = arena.create_element(containing_style);
+        let wrapper =
+            arena.create_element(block_style(CssDimension::Length(5.0), CssDimension::Auto));
+        let flow_child = fixed_box(&mut arena, 5.0, 2.0);
+        let mut absolute_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        absolute_style.position = CssPosition::Absolute;
+        absolute_style.left = CssLengthPercentageAuto::Percent(0.5);
+        absolute_style.top = CssLengthPercentageAuto::Length(1.0);
+        let absolute = arena.create_element(absolute_style);
+
+        arena.append_child(root, containing);
+        arena.append_child(containing, wrapper);
+        arena.append_child(wrapper, flow_child);
+        arena.append_child(wrapper, absolute);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(20.0),
+                height: AvailableSpace::Definite(10.0),
+            },
+        );
+
+        assert_eq!(arena.parent(absolute), Some(wrapper));
+        assert_eq!(arena.layout(wrapper).size.height, 2.0);
+        assert_eq!(arena.layout(absolute).location, Point { x: 6.0, y: 1.0 });
+        assert_eq!(
+            arena.child_layout_offset(wrapper, absolute),
+            Point { x: 6.0, y: 1.0 }
+        );
+    }
+
+    #[test]
+    fn absolute_child_is_laid_out_when_containing_block_has_inline_content() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(12.0), CssDimension::Length(5.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let text = arena.create_text("inline content");
+        let mut absolute_style = block_style(CssDimension::Length(3.0), CssDimension::Length(1.0));
+        absolute_style.position = CssPosition::Absolute;
+        absolute_style.right = CssLengthPercentageAuto::Length(1.0);
+        absolute_style.bottom = CssLengthPercentageAuto::Length(1.0);
+        let absolute = arena.create_element(absolute_style);
+        arena.append_child(root, text);
+        arena.append_child(root, absolute);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(12.0),
+                height: AvailableSpace::Definite(5.0),
+            },
+        );
+
+        assert_eq!(
+            arena.layout(absolute).size,
+            Size {
+                width: 3.0,
+                height: 1.0
+            }
+        );
+        assert_eq!(arena.layout(absolute).location, Point { x: 8.0, y: 3.0 });
+        assert_eq!(arena.inline_fragments(root).len(), "inline content".len());
+    }
+
+    #[test]
+    fn absolute_descendant_with_auto_insets_keeps_its_static_position() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(10.0), CssDimension::Length(8.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let spacer = fixed_box(&mut arena, 10.0, 2.0);
+        let wrapper = fixed_box(&mut arena, 10.0, 2.0);
+        let mut absolute_style = block_style(CssDimension::Length(3.0), CssDimension::Length(1.0));
+        absolute_style.position = CssPosition::Absolute;
+        let absolute = arena.create_element(absolute_style);
+
+        arena.append_child(root, spacer);
+        arena.append_child(root, wrapper);
+        arena.append_child(wrapper, absolute);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(8.0),
+            },
+        );
+
+        assert_eq!(arena.layout(wrapper).location.y, 2.0);
+        assert_eq!(arena.absolute_layout_origin(absolute).y, 2.0);
+    }
+
+    #[test]
+    fn absolute_percentage_size_resolves_against_containing_block() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(12.0), CssDimension::Length(6.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let wrapper = fixed_box(&mut arena, 4.0, 2.0);
+        let mut absolute_style =
+            block_style(CssDimension::Percent(0.5), CssDimension::Percent(0.5));
+        absolute_style.position = CssPosition::Absolute;
+        absolute_style.left = CssLengthPercentageAuto::Length(0.0);
+        absolute_style.top = CssLengthPercentageAuto::Length(0.0);
+        let absolute = arena.create_element(absolute_style);
+        arena.append_child(root, wrapper);
+        arena.append_child(wrapper, absolute);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(12.0),
+                height: AvailableSpace::Definite(6.0),
+            },
+        );
+
+        assert_eq!(
+            arena.layout(absolute).size,
+            Size {
+                width: 6.0,
+                height: 3.0
+            }
+        );
+    }
+
+    #[test]
+    fn absolute_inline_descendant_uses_inline_static_position() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(8.0), CssDimension::Length(2.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let before = arena.create_text("abc");
+        let mut absolute_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        absolute_style.position = CssPosition::Absolute;
+        let absolute = arena.create_element(absolute_style);
+        let after = arena.create_text("d");
+        arena.append_child(root, before);
+        arena.append_child(root, absolute);
+        arena.append_child(root, after);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+
+        assert_eq!(
+            arena.absolute_layout_origin(absolute),
+            Point { x: 3.0, y: 0.0 }
+        );
+        assert_eq!(
+            arena
+                .inline_fragments(root)
+                .iter()
+                .filter(|fragment| matches!(fragment.kind, InlineFragmentKind::Text { .. }))
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn absolute_positioning_lays_out_replaced_node_types() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(10.0), CssDimension::Length(5.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+
+        let absolute_style = |top| {
+            let mut style = block_style(CssDimension::Length(3.0), CssDimension::Length(1.0));
+            style.position = CssPosition::Absolute;
+            style.left = CssLengthPercentageAuto::Length(2.0);
+            style.top = CssLengthPercentageAuto::Length(top);
+            style
+        };
+        let image = arena.create_image(absolute_style(0.0), 6, 2, 2, 2);
+        let input = arena.create_input(absolute_style(1.0), "input");
+        let textarea = arena.create_textarea(absolute_style(2.0), "textarea");
+        arena.append_child(root, image);
+        arena.append_child(root, input);
+        arena.append_child(root, textarea);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(5.0),
+            },
+        );
+
+        assert_eq!(arena.layout(image).location, Point { x: 2.0, y: 0.0 });
+        assert_eq!(arena.layout(input).location, Point { x: 2.0, y: 1.0 });
+        assert_eq!(arena.layout(textarea).location, Point { x: 2.0, y: 2.0 });
+    }
+
+    #[test]
+    fn absolute_auto_margins_center_between_opposing_insets() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(10.0), CssDimension::Length(3.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let mut child_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        child_style.position = CssPosition::Absolute;
+        child_style.left = CssLengthPercentageAuto::Length(0.0);
+        child_style.right = CssLengthPercentageAuto::Length(0.0);
+        child_style.margin_left = CssLengthPercentageAuto::Auto;
+        child_style.margin_right = CssLengthPercentageAuto::Auto;
+        let child = arena.create_element(child_style);
+        arena.append_child(root, child);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        assert_eq!(arena.layout(child).location.x, 4.0);
+        assert_eq!(arena.layout(child).margin.left, 4.0);
+        assert_eq!(arena.layout(child).margin.right, 4.0);
     }
 
     fn image_scroll_demo_image_block(arena: &mut LayoutArena, label: &str) -> NodeId {
@@ -4408,6 +5266,9 @@ mod tests {
         let metrics = arena.scroll_metrics(viewport).unwrap();
         assert_eq!(metrics.client_height, 5);
         assert_eq!(metrics.scroll_height, 10_000);
+        let profile = arena.profile_stats();
+        assert_eq!(profile.absolute_layout_visits, 0);
+        assert_eq!(profile.stacking_tree_visits, 0);
     }
 
     #[test]

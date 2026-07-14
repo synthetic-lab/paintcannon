@@ -16,11 +16,13 @@ PaintCannon supports the following CSS layout and paint features:
 - Grid
 - Block layout
 - Inline layout
+- Relative and absolute positioning with CSS stacking contexts and `z-index`
 - Margins and padding, including auto margins
 - Width and height constraints with `min-width`, `max-width`, `min-height`, and `max-height`,
   including percentage values
 - Overflow hidden and scroll, with native mouse scrolling
 - `visibility: hidden`, which preserves layout space while suppressing paint and hit testing
+- CSS `opacity`, composited once for an element and its descendants as a stacking-context group
 - 24-bit RGB and CSS named background, border, text, placeholder, and selection colors with
   256-color and 16-color fallbacks
 - CSS transitions for color properties
@@ -36,6 +38,16 @@ PaintCannon also exposes terminal-specific border styles:
 - `rounded`
 - `chunky-rounded`
 - `ascii`
+
+Positioned elements support `position: static | relative | absolute`, the `top`, `right`,
+`bottom`, and `left` inset properties, and integer or `auto` `z-index` values. Absolute elements
+use the nearest non-static ancestor as their containing block and do not contribute to normal flow.
+Positioned inline elements retain their inline flow position while their painted fragments move.
+
+Opacity accepts numbers or percentages and is clamped to the CSS range from `0` to `1`. PaintCannon
+queries supporting terminals for their default foreground and background colors so translucent
+content can blend correctly when a color resolves to the terminal default. Run
+`npm run demo:opacity` to see group opacity over overlapping text and backgrounds.
 
 ## Elements
 

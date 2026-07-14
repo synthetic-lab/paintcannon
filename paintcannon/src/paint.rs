@@ -9,9 +9,9 @@ use crate::layout::{
     LayoutNodeKind, TextAreaLayoutData,
 };
 use crate::style::{
-    Background, ColorTransitionProperty, CssFontStyle, CssFontWeight, CssTextDecorationLine,
-    CssVisibility, DivStyle, ImageRendering, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap,
-    LayoutOverflow,
+    Background, ColorTransitionProperty, CssFontStyle, CssFontWeight, CssPosition,
+    CssTextDecorationLine, CssVisibility, DivStyle, ImageRendering, LayoutDisplay,
+    LayoutFlexDirection, LayoutFlexWrap, LayoutOverflow,
 };
 use crate::text::parse_text_for_single_line;
 use crate::text_wrap::WrappedText;
@@ -36,6 +36,8 @@ pub(crate) struct PaintOptions<'a> {
     pub(crate) transitions: Option<&'a TransitionState>,
     pub(crate) now: Instant,
     pub(crate) truecolor_enabled: bool,
+    pub(crate) default_foreground: Background,
+    pub(crate) default_background: Background,
 }
 
 impl PaintOutput {
@@ -76,6 +78,8 @@ pub(crate) fn paint_arena(
             transitions: None,
             now: Instant::now(),
             truecolor_enabled: false,
+            default_foreground: Background::White,
+            default_background: Background::Black,
         },
     )
 }
@@ -99,7 +103,7 @@ pub(crate) fn paint_arena_with_options(
             capture_hidden_selection_units,
             output: &mut output,
         };
-        painter.paint_node(
+        painter.paint_stacking_context(
             root,
             PaintState {
                 parent_x: 0,
@@ -143,18 +147,59 @@ struct PaintState {
 
 impl<'a, 'out> Painter<'a, 'out> {
     fn paint_node(&mut self, id: NodeId, state: PaintState) {
+        self.paint_node_internal(id, state, false);
+    }
+
+    fn paint_stacking_context(&mut self, id: NodeId, state: PaintState) {
+        let opacity = self.arena.style(id).opacity;
+        if opacity < 1.0 {
+            let layer = self.output.frame.layer();
+            let backdrop = std::mem::replace(&mut self.output.frame, layer);
+            self.paint_node_internal(id, state, true);
+            let layer = std::mem::replace(&mut self.output.frame, backdrop);
+            self.output.frame.composite_layer(
+                layer,
+                opacity,
+                self.options.default_foreground,
+                self.options.default_background,
+            );
+            return;
+        }
+        self.paint_node_internal(id, state, true);
+    }
+
+    fn paint_node_internal(&mut self, id: NodeId, state: PaintState, stacking_context: bool) {
+        if stacking_context {
+            if let Some(inline_context) = self.arena.inline_formatting_context(id) {
+                self.paint_inline_stacking_context(id, inline_context, state);
+                return;
+            }
+        }
+
         let layout = self.arena.layout(id);
-        let bounds = snapped_layout_rect(
-            state.parent_x,
-            state.parent_y,
-            layout.location.x,
-            layout.location.y,
-            layout.size.width,
-            layout.size.height,
-        );
+        let bounds = if stacking_context {
+            let origin = self.arena.absolute_paint_origin(id);
+            snapped_layout_rect(
+                0,
+                0,
+                origin.x,
+                origin.y,
+                layout.size.width,
+                layout.size.height,
+            )
+        } else {
+            snapped_layout_rect(
+                state.parent_x,
+                state.parent_y,
+                layout.location.x,
+                layout.location.y,
+                layout.size.width,
+                layout.size.height,
+            )
+        };
 
         match self.arena.kind(id) {
-            LayoutNodeKind::Element => self.paint_element(id, bounds, state),
+            LayoutNodeKind::Element => self.paint_element(id, bounds, state, stacking_context),
             LayoutNodeKind::Text(text) => self.paint_text(text, bounds.left, bounds.top, state),
             LayoutNodeKind::Image(image) => self.paint_image_node(id, image, bounds, state),
             LayoutNodeKind::Input(input) => self.paint_input_node(id, input, bounds, state),
@@ -164,7 +209,13 @@ impl<'a, 'out> Painter<'a, 'out> {
         }
     }
 
-    fn paint_element(&mut self, id: NodeId, bounds: ClipRect, state: PaintState) {
+    fn paint_element(
+        &mut self,
+        id: NodeId,
+        bounds: ClipRect,
+        state: PaintState,
+        stacking_context: bool,
+    ) {
         let style = self.arena.style(id);
         let visible = effective_visibility(style.visibility, state.visible);
         let layout = self.arena.layout(id);
@@ -189,15 +240,13 @@ impl<'a, 'out> Painter<'a, 'out> {
         let content = content_box_rect(bounds, layout);
         let scrollport = scrollport_rect(bounds, layout);
         if visible {
-            self.output.frame.fill_rect(
+            self.output.frame.fill_box_background(
                 bounds,
+                style,
                 painted_background,
                 selection_background,
                 state.clip,
             );
-            self.output
-                .frame
-                .clear_chunky_rounded_corners(bounds, style, state.clip);
         }
 
         let child_clip = child_clip_for(style.overflow_x, style.overflow_y, scrollport, state.clip);
@@ -220,20 +269,32 @@ impl<'a, 'out> Painter<'a, 'out> {
             clip: child_clip,
         };
 
+        if stacking_context {
+            self.paint_stacking_children(id, child_state, |z_index| z_index < 0);
+        }
+
         if self.arena.inline_fragments(id).is_empty() {
             let children = self.arena.children(id);
             let child_range =
                 self.visible_child_range(style, children, child_state.parent_y, child_clip);
             for child in &children[child_range] {
+                if self.arena.is_stacking_item(*child) {
+                    continue;
+                }
                 self.paint_node(*child, child_state);
             }
         } else {
             self.paint_inline_fragments(
                 id,
-                content.left - bounds.left,
-                content.top - bounds.top,
+                child_state.parent_x + content.left - bounds.left,
+                child_state.parent_y + content.top - bounds.top,
                 child_state,
+                None,
             );
+        }
+
+        if stacking_context {
+            self.paint_stacking_children(id, child_state, |z_index| z_index >= 0);
         }
 
         if visible {
@@ -249,6 +310,151 @@ impl<'a, 'out> Painter<'a, 'out> {
                 selection_background,
                 state.clip,
             );
+        }
+    }
+
+    fn paint_stacking_children(
+        &mut self,
+        context: NodeId,
+        context_child_state: PaintState,
+        include: impl Fn(i32) -> bool,
+    ) {
+        for child in self.arena.stacking_children(context) {
+            let z_index = self.arena.style(*child).z_index.value();
+            if !include(z_index) {
+                continue;
+            }
+            let state = self.stacking_child_state(context, *child, context_child_state);
+            self.paint_stacking_context(*child, state);
+        }
+    }
+
+    fn paint_inline_stacking_context(
+        &mut self,
+        id: NodeId,
+        inline_context: NodeId,
+        state: PaintState,
+    ) {
+        let context_state = self.inline_element_child_state(id, state);
+        self.paint_stacking_children(id, context_state, |z_index| z_index < 0);
+
+        let layout = self.arena.layout(inline_context);
+        let origin = self.arena.absolute_paint_origin(inline_context);
+        let bounds = snapped_layout_rect(
+            0,
+            0,
+            origin.x,
+            origin.y,
+            layout.size.width,
+            layout.size.height,
+        );
+        let content = content_box_rect(bounds, layout);
+        let context_style = self.arena.style(inline_context);
+        let (scroll_left, scroll_top) = self.arena.scroll_offset(inline_context);
+        let base_x = content.left - scroll_offset_cells(context_style.overflow_x, scroll_left);
+        let base_y = content.top - scroll_offset_cells(context_style.overflow_y, scroll_top);
+        self.paint_inline_fragments(inline_context, base_x, base_y, state, Some(id));
+
+        self.paint_stacking_children(id, context_state, |z_index| z_index >= 0);
+    }
+
+    fn stacking_child_state(
+        &self,
+        context: NodeId,
+        child: NodeId,
+        mut state: PaintState,
+    ) -> PaintState {
+        let mut ancestors = Vec::new();
+        let mut current = self.arena.parent(child);
+        while let Some(ancestor) = current {
+            if ancestor == context {
+                break;
+            }
+            ancestors.push(ancestor);
+            current = self.arena.parent(ancestor);
+        }
+
+        for ancestor in ancestors.into_iter().rev() {
+            if matches!(self.arena.kind(ancestor), LayoutNodeKind::Element) {
+                state = if self.arena.inline_formatting_context(ancestor).is_some() {
+                    self.inline_element_child_state(ancestor, state)
+                } else {
+                    self.element_child_state(ancestor, state)
+                };
+            }
+        }
+        state
+    }
+
+    fn inline_element_child_state(&self, id: NodeId, mut state: PaintState) -> PaintState {
+        let style = self.arena.style(id);
+        let visible = effective_visibility(style.visibility, state.visible);
+        if visible {
+            state.background = effective_background(
+                self.paint_color(
+                    id,
+                    ColorTransitionProperty::BackgroundColor,
+                    style.background,
+                ),
+                state.background,
+            );
+        }
+        state.foreground = effective_background(
+            self.paint_color(id, ColorTransitionProperty::Color, style.color),
+            state.foreground,
+        );
+        state.selection_background = style.selection_background.or(state.selection_background);
+        state = apply_text_style(style, state);
+        state.visible = visible;
+        state
+    }
+
+    fn element_child_state(&self, id: NodeId, state: PaintState) -> PaintState {
+        let style = self.arena.style(id);
+        let visible = effective_visibility(style.visibility, state.visible);
+        let layout = self.arena.layout(id);
+        let origin = self.arena.absolute_paint_origin(id);
+        let bounds = snapped_layout_rect(
+            0,
+            0,
+            origin.x,
+            origin.y,
+            layout.size.width,
+            layout.size.height,
+        );
+        let background = effective_background(
+            self.paint_color(
+                id,
+                ColorTransitionProperty::BackgroundColor,
+                style.background,
+            ),
+            state.background,
+        );
+        let foreground = effective_background(
+            self.paint_color(id, ColorTransitionProperty::Color, style.color),
+            state.foreground,
+        );
+        let selection_background = style.selection_background.or(state.selection_background);
+        let text_state = apply_text_style(style, state);
+        let scrollport = scrollport_rect(bounds, layout);
+        let clip = child_clip_for(style.overflow_x, style.overflow_y, scrollport, state.clip);
+        let (scroll_left, scroll_top) = self.arena.scroll_offset(id);
+        PaintState {
+            parent_x: bounds.left - scroll_offset_cells(style.overflow_x, scroll_left),
+            parent_y: bounds.top - scroll_offset_cells(style.overflow_y, scroll_top),
+            background: if visible {
+                background
+            } else {
+                state.background
+            },
+            selection_background,
+            foreground,
+            bold: text_state.bold,
+            italic: text_state.italic,
+            underline: text_state.underline,
+            strikethrough: text_state.strikethrough,
+            visible,
+            clip,
         }
     }
 
@@ -397,12 +603,13 @@ impl<'a, 'out> Painter<'a, 'out> {
         let child_clip = child_clip_for(style.overflow_x, style.overflow_y, content, state.clip);
 
         push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
-        self.output
-            .frame
-            .fill_rect(bounds, background, selection_background, state.clip);
-        self.output
-            .frame
-            .clear_chunky_rounded_corners(bounds, style, state.clip);
+        self.output.frame.fill_box_background(
+            bounds,
+            style,
+            background,
+            selection_background,
+            state.clip,
+        );
         paint_image(
             &mut self.output.frame,
             image,
@@ -453,12 +660,13 @@ impl<'a, 'out> Painter<'a, 'out> {
         let content = content_box_rect(bounds, layout);
 
         push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
-        self.output
-            .frame
-            .fill_rect(bounds, background, selection_background, state.clip);
-        self.output
-            .frame
-            .clear_chunky_rounded_corners(bounds, style, state.clip);
+        self.output.frame.fill_box_background(
+            bounds,
+            style,
+            background,
+            selection_background,
+            state.clip,
+        );
         paint_input(
             &mut self.output.frame,
             input,
@@ -513,12 +721,13 @@ impl<'a, 'out> Painter<'a, 'out> {
         let (_, scroll_top) = self.arena.scroll_offset(id);
 
         push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
-        self.output
-            .frame
-            .fill_rect(bounds, background, selection_background, state.clip);
-        self.output
-            .frame
-            .clear_chunky_rounded_corners(bounds, style, state.clip);
+        self.output.frame.fill_box_background(
+            bounds,
+            style,
+            background,
+            selection_background,
+            state.clip,
+        );
         paint_textarea(
             &mut self.output.frame,
             textarea,
@@ -562,11 +771,28 @@ impl<'a, 'out> Painter<'a, 'out> {
         }
     }
 
-    fn paint_inline_fragments(&mut self, id: NodeId, x: i32, y: i32, state: PaintState) {
+    fn paint_inline_fragments(
+        &mut self,
+        id: NodeId,
+        x: i32,
+        y: i32,
+        state: PaintState,
+        stacking_context: Option<NodeId>,
+    ) {
         for fragment in self.arena.inline_fragments(id) {
+            if self
+                .arena
+                .inline_fragment_stacking_context(id, fragment.node)
+                != stacking_context
+            {
+                continue;
+            }
+            let relative_offset = self
+                .arena
+                .inline_fragment_relative_offset(id, fragment.node);
             let rect = ClipRect::new(
-                state.parent_x + x + fragment.x as i32,
-                state.parent_y + y + fragment.y as i32,
+                x + fragment.x as i32 + relative_offset.x,
+                y + fragment.y as i32 + relative_offset.y,
                 fragment.width as i32,
                 fragment.height as i32,
             );
@@ -686,7 +912,12 @@ impl<'a, 'out> Painter<'a, 'out> {
         parent_y: i32,
         clip: ClipBounds,
     ) -> Range<usize> {
-        if self.capture_hidden_selection_units || !can_cull_vertical_children(style) {
+        if self.capture_hidden_selection_units
+            || !can_cull_vertical_children(style)
+            || children
+                .iter()
+                .any(|child| self.arena.style(*child).position != CssPosition::Static)
+        {
             return 0..children.len();
         }
 
@@ -1302,8 +1533,8 @@ mod tests {
 
     use crate::style::{
         BorderStyle, CssDimension, CssFontStyle, CssFontWeight, CssLengthPercentage,
-        CssTextDecorationLine, CssVisibility, ImageRendering, LayoutAlignItems, LayoutDisplay,
-        LayoutFlexDirection,
+        CssLengthPercentageAuto, CssPosition, CssTextDecorationLine, CssVisibility, CssZIndex,
+        ImageRendering, LayoutAlignItems, LayoutDisplay, LayoutFlexDirection,
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
@@ -1311,6 +1542,408 @@ mod tests {
         style.width = width;
         style.height = height;
         style
+    }
+
+    fn absolute_style(z_index: i32, background: Background) -> DivStyle {
+        let mut style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        style.position = CssPosition::Absolute;
+        style.top = CssLengthPercentageAuto::Length(0.0);
+        style.left = CssLengthPercentageAuto::Length(0.0);
+        style.z_index = CssZIndex::Integer(z_index);
+        style.background = background;
+        style
+    }
+
+    #[test]
+    fn z_index_orders_overlapping_boxes_and_hit_regions() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(5.0), CssDimension::Length(3.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let high = arena.create_element(absolute_style(2, Background::Blue));
+        let low = arena.create_element(absolute_style(1, Background::Red));
+        arena.append_child(root, high);
+        arena.append_child(root, low);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 5, 3, false);
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().background,
+            Background::Blue
+        );
+        assert_eq!(output.target_at(0, 0), Some(high));
+    }
+
+    #[test]
+    fn chunky_rounded_corner_preserves_overlapped_background() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(5.0), CssDimension::Length(3.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let lower = arena.create_element(absolute_style(1, Background::Red));
+
+        let mut upper_style = absolute_style(2, Background::Blue);
+        upper_style.border_color = Background::Green;
+        upper_style.border_top = BorderStyle::ChunkyRounded;
+        upper_style.border_right = BorderStyle::ChunkyRounded;
+        upper_style.border_bottom = BorderStyle::ChunkyRounded;
+        upper_style.border_left = BorderStyle::ChunkyRounded;
+        let upper = arena.create_element(upper_style);
+
+        arena.append_child(root, lower);
+        arena.append_child(root, upper);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 5, 3, false);
+        let corner = output.frame.cell(0, 0).unwrap();
+        assert_eq!(corner.character, '🭁');
+        assert_eq!(corner.foreground, Background::Green);
+        assert_eq!(corner.background, Background::Red);
+    }
+
+    #[test]
+    fn opacity_blends_an_overlapping_box_with_the_lower_background() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let lower = arena.create_element(absolute_style(1, Background::Blue));
+        let mut upper_style = absolute_style(2, Background::Red);
+        upper_style.opacity = 0.5;
+        let upper = arena.create_element(upper_style);
+        arena.append_child(root, lower);
+        arena.append_child(root, upper);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(3.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 3, 2, false);
+
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().background,
+            Background::Rgb(128, 0, 128)
+        );
+        assert_eq!(output.target_at(0, 0), Some(upper));
+    }
+
+    #[test]
+    fn inline_opacity_blends_text_with_its_background() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(3.0), CssDimension::Length(1.0));
+        root_style.background = Background::Blue;
+        let root = arena.create_element(root_style);
+        let mut span_style = DivStyle::default();
+        span_style.display = LayoutDisplay::Inline;
+        span_style.color = Background::Red;
+        span_style.opacity = 0.5;
+        let span = arena.create_element(span_style);
+        let text = arena.create_text("X");
+        arena.append_child(root, span);
+        arena.append_child(span, text);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(3.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 3, 1, false);
+        let cell = output.frame.cell(0, 0).unwrap();
+
+        assert_eq!(cell.character, 'X');
+        assert_eq!(cell.foreground, Background::Rgb(128, 0, 128));
+        assert_eq!(cell.background, Background::Rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn opacity_applies_once_to_an_element_and_its_descendants() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let lower = arena.create_element(absolute_style(1, Background::Blue));
+        let mut group_style = absolute_style(2, Background::Red);
+        group_style.opacity = 0.5;
+        let group = arena.create_element(group_style);
+        let mut child_style = block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
+        child_style.background = Background::Red;
+        let child = arena.create_element(child_style);
+        arena.append_child(root, lower);
+        arena.append_child(root, group);
+        arena.append_child(group, child);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(3.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 3, 2, false);
+
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().background,
+            Background::Rgb(128, 0, 128)
+        );
+    }
+
+    #[test]
+    fn opacity_creates_a_stacking_context_for_high_z_index_descendants() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let mut lower_context_style = absolute_style(1, Background::Default);
+        lower_context_style.opacity = 0.5;
+        let lower_context = arena.create_element(lower_context_style);
+        let high_descendant = arena.create_element(absolute_style(999, Background::Blue));
+        let higher_context = arena.create_element(absolute_style(2, Background::Red));
+        arena.append_child(root, lower_context);
+        arena.append_child(lower_context, high_descendant);
+        arena.append_child(root, higher_context);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(3.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 3, 2, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().background, Background::Red);
+        assert_eq!(output.target_at(0, 0), Some(higher_context));
+    }
+
+    #[test]
+    fn zero_opacity_remains_hit_testable_without_changing_pixels() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let lower = arena.create_element(absolute_style(1, Background::Blue));
+        let mut upper_style = absolute_style(2, Background::Red);
+        upper_style.opacity = 0.0;
+        let upper = arena.create_element(upper_style);
+        arena.append_child(root, lower);
+        arena.append_child(root, upper);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(3.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 3, 2, false);
+
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().background,
+            Background::Blue
+        );
+        assert_eq!(output.target_at(0, 0), Some(upper));
+    }
+
+    #[test]
+    fn nested_stacking_context_cannot_escape_parent_context() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(5.0), CssDimension::Length(3.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let lower_context = arena.create_element(absolute_style(1, Background::Default));
+        let high_descendant = arena.create_element(absolute_style(999, Background::Blue));
+        let higher_context = arena.create_element(absolute_style(2, Background::Red));
+        arena.append_child(root, lower_context);
+        arena.append_child(lower_context, high_descendant);
+        arena.append_child(root, higher_context);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 5, 3, false);
+        assert_eq!(output.frame.cell(0, 0).unwrap().background, Background::Red);
+        assert_eq!(output.target_at(0, 0), Some(higher_context));
+    }
+
+    #[test]
+    fn positioned_descendant_escapes_ancestor_that_is_not_a_stacking_context() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(5.0), CssDimension::Length(3.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let wrapper = arena.create_element(block_style(
+            CssDimension::Length(3.0),
+            CssDimension::Length(2.0),
+        ));
+        let high_descendant = arena.create_element(absolute_style(3, Background::Blue));
+        let lower_sibling = arena.create_element(absolute_style(2, Background::Red));
+        arena.append_child(root, wrapper);
+        arena.append_child(wrapper, high_descendant);
+        arena.append_child(root, lower_sibling);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 5, 3, false);
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().background,
+            Background::Blue
+        );
+        assert_eq!(output.target_at(0, 0), Some(high_descendant));
+    }
+
+    #[test]
+    fn positioned_auto_z_index_paints_above_later_in_flow_content() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(block_style(
+            CssDimension::Length(4.0),
+            CssDimension::Length(4.0),
+        ));
+        let mut positioned_style =
+            block_style(CssDimension::Length(4.0), CssDimension::Length(2.0));
+        positioned_style.position = CssPosition::Relative;
+        positioned_style.top = CssLengthPercentageAuto::Length(2.0);
+        positioned_style.background = Background::Blue;
+        let positioned = arena.create_element(positioned_style);
+        let mut in_flow_style = block_style(CssDimension::Length(4.0), CssDimension::Length(2.0));
+        in_flow_style.background = Background::Red;
+        let in_flow = arena.create_element(in_flow_style);
+        arena.append_child(root, positioned);
+        arena.append_child(root, in_flow);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::Definite(4.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 4, 4, false);
+        assert_eq!(
+            output.frame.cell(0, 2).unwrap().background,
+            Background::Blue
+        );
+        assert_eq!(output.target_at(0, 2), Some(positioned));
+    }
+
+    #[test]
+    fn positioned_auto_z_index_does_not_isolate_descendant_z_index() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(5.0), CssDimension::Length(3.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+        let mut wrapper_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        wrapper_style.position = CssPosition::Relative;
+        let wrapper = arena.create_element(wrapper_style);
+        let high_descendant = arena.create_element(absolute_style(3, Background::Blue));
+        let lower_sibling = arena.create_element(absolute_style(2, Background::Red));
+        arena.append_child(root, wrapper);
+        arena.append_child(wrapper, high_descendant);
+        arena.append_child(root, lower_sibling);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 5, 3, false);
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().background,
+            Background::Blue
+        );
+        assert_eq!(output.target_at(0, 0), Some(high_descendant));
+    }
+
+    #[test]
+    fn positioned_stacking_item_keeps_dom_ancestor_overflow_clip() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(8.0), CssDimension::Length(3.0));
+        root_style.position = CssPosition::Relative;
+        root_style.background = Background::Black;
+        let root = arena.create_element(root_style);
+        let mut wrapper_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        wrapper_style.overflow_x = LayoutOverflow::Hidden;
+        wrapper_style.overflow_y = LayoutOverflow::Hidden;
+        let wrapper = arena.create_element(wrapper_style);
+        let mut outside_style = absolute_style(1, Background::Blue);
+        outside_style.left = CssLengthPercentageAuto::Length(4.0);
+        let outside = arena.create_element(outside_style);
+        arena.append_child(root, wrapper);
+        arena.append_child(wrapper, outside);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(3.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 8, 3, false);
+        assert_eq!(
+            output.frame.cell(4, 0).unwrap().background,
+            Background::Black
+        );
+        assert_ne!(output.target_at(4, 0), Some(outside));
+    }
+
+    #[test]
+    fn z_index_orders_static_flex_items() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        root_style.display = LayoutDisplay::Flex;
+        let root = arena.create_element(root_style);
+        let mut high_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        high_style.z_index = CssZIndex::Integer(2);
+        high_style.background = Background::Blue;
+        let high = arena.create_element(high_style);
+        let mut low_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        low_style.z_index = CssZIndex::Integer(1);
+        low_style.margin_left = CssLengthPercentageAuto::Length(-3.0);
+        low_style.background = Background::Red;
+        let low = arena.create_element(low_style);
+        arena.append_child(root, high);
+        arena.append_child(root, low);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(3.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 3, 2, false);
+        assert_eq!(
+            output.frame.cell(0, 0).unwrap().background,
+            Background::Blue
+        );
+        assert_eq!(output.target_at(0, 0), Some(high));
     }
 
     #[test]
@@ -1468,6 +2101,74 @@ mod tests {
         assert_eq!(output.frame.cell(3, 0).unwrap().character, 'k');
         assert_ne!(output.target_at(0, 0), Some(hidden));
         assert_eq!(output.target_at(2, 0), Some(visible));
+    }
+
+    #[test]
+    fn relative_inline_span_offsets_its_fragments_without_changing_inline_flow() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(block_style(
+            CssDimension::Length(5.0),
+            CssDimension::Length(1.0),
+        ));
+
+        let mut shifted_style = DivStyle::default();
+        shifted_style.display = LayoutDisplay::Inline;
+        shifted_style.position = CssPosition::Relative;
+        shifted_style.left = CssLengthPercentageAuto::Length(2.0);
+        let shifted = arena.create_element(shifted_style);
+        let shifted_text = arena.create_text("A");
+        arena.append_child(shifted, shifted_text);
+        let following_text = arena.create_text("B");
+        arena.append_child(root, shifted);
+        arena.append_child(root, following_text);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 5, 1, false);
+
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, ' ');
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, 'B');
+        assert_eq!(output.frame.cell(2, 0).unwrap().character, 'A');
+        assert_eq!(output.target_at(2, 0), Some(shifted));
+    }
+
+    #[test]
+    fn positioned_inline_span_uses_z_index_for_fragment_paint_order() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(block_style(
+            CssDimension::Length(4.0),
+            CssDimension::Length(1.0),
+        ));
+
+        let mut top_style = DivStyle::default();
+        top_style.display = LayoutDisplay::Inline;
+        top_style.position = CssPosition::Relative;
+        top_style.left = CssLengthPercentageAuto::Length(1.0);
+        top_style.z_index = CssZIndex::Integer(1);
+        let top = arena.create_element(top_style);
+        let top_text = arena.create_text("A");
+        arena.append_child(top, top_text);
+        let following_text = arena.create_text("B");
+        arena.append_child(root, top);
+        arena.append_child(root, following_text);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        arena.prepare_paint(root);
+        let output = paint_arena(&arena, root, 4, 1, false);
+
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, 'A');
+        assert_eq!(output.target_at(1, 0), Some(top));
     }
 
     #[test]
@@ -2168,7 +2869,7 @@ mod tests {
         let top_left = output.frame.cell(0, 0).unwrap();
         assert_eq!(top_left.character, '🭁');
         assert_eq!(top_left.foreground, Background::Green);
-        assert_eq!(top_left.background, Background::Default);
+        assert_eq!(top_left.background, Background::Blue);
         assert_eq!(output.frame.cell(2, 0).unwrap().background, Background::Red);
         assert_eq!(output.frame.cell(0, 2).unwrap().background, Background::Red);
         assert_eq!(output.frame.cell(1, 1).unwrap().background, Background::Red);
@@ -2369,6 +3070,8 @@ mod tests {
                 transitions: None,
                 now: Instant::now(),
                 truecolor_enabled: false,
+                default_foreground: Background::White,
+                default_background: Background::Black,
             },
             capture_hidden_selection_units: false,
             output: &mut output,

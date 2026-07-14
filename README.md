@@ -11,12 +11,14 @@ PaintCannon supports the following CSS:
 - Grid
 - Block
 - Inline
+- Relative and absolute positioning with CSS stacking contexts and `z-index`
 - Margins and padding, including auto margins
 - Width and height constraints with `min-width`, `max-width`, `min-height`, and `max-height`,
   including percentage values
 - Overflow hidden and scroll, with native mouse scrolling
 - `visibility: hidden`, which preserves layout space while suppressing paint
   and hit testing
+- CSS `opacity`, composited once for an element and its descendants as a stacking-context group
 - `scrollbar-color` and `scrollbar-gutter` styling
 - 24-bit RGB and CSS named background, border, text, placeholder, and selection colors with
   256-color and 16-color fallbacks

@@ -559,6 +559,96 @@ describe("core resize events", () => {
   });
 });
 
+describe("core animation lifecycle", () => {
+  it("stops an in-flight animation callback cleanly after native Ctrl-C shutdown", () => {
+    const paintCannon = new PaintCannon();
+    const mockNative = currentMockNative();
+    const element = paintCannon.createElement("div");
+    let callbackCalls = 0;
+    const internals = paintCannon as unknown as {
+      animationFrameCallbacks: Map<number, (timestamp: number) => void>;
+      runAnimationFrameTick(): void;
+    };
+    internals.animationFrameCallbacks.set(1, () => {
+      callbackCalls += 1;
+      element.style.opacity = 0.5;
+    });
+    mockNative.interruptedByCtrlC = true;
+    mockNative.rendererStopped = true;
+
+    try {
+      expect(() => internals.runAnimationFrameTick()).not.toThrow();
+      expect(mockNative.stopCalls).toBe(1);
+      expect(callbackCalls).toBe(0);
+    } finally {
+      paintCannon.stop();
+    }
+  });
+
+  it("still surfaces renderer failures not caused by Ctrl-C", () => {
+    const paintCannon = new PaintCannon();
+    const mockNative = currentMockNative();
+    const element = paintCannon.createElement("div");
+    const internals = paintCannon as unknown as {
+      animationFrameCallbacks: Map<number, (timestamp: number) => void>;
+      runAnimationFrameTick(): void;
+    };
+    internals.animationFrameCallbacks.set(1, () => {
+      element.style.opacity = 0.5;
+    });
+    mockNative.rendererStopped = true;
+
+    try {
+      expect(() => internals.runAnimationFrameTick()).toThrow("renderer thread stopped");
+      expect(mockNative.stopCalls).toBe(0);
+    } finally {
+      paintCannon.stop();
+    }
+  });
+
+  it("handles Ctrl-C racing with an already-running animation callback", () => {
+    const paintCannon = new PaintCannon();
+    const mockNative = currentMockNative();
+    const element = paintCannon.createElement("div");
+    const internals = paintCannon as unknown as {
+      animationFrameCallbacks: Map<number, (timestamp: number) => void>;
+      runAnimationFrameTick(): void;
+    };
+    internals.animationFrameCallbacks.set(1, () => {
+      element.style.opacity = 0.5;
+    });
+    mockNative.rendererStopped = true;
+    mockNative.interruptWhenStyleMutationFails = true;
+
+    try {
+      expect(() => internals.runAnimationFrameTick()).not.toThrow();
+      expect(mockNative.stopCalls).toBe(1);
+    } finally {
+      paintCannon.stop();
+    }
+  });
+
+  it("still surfaces user callback errors during Ctrl-C shutdown", () => {
+    const paintCannon = new PaintCannon();
+    const mockNative = currentMockNative();
+    const internals = paintCannon as unknown as {
+      animationFrameCallbacks: Map<number, (timestamp: number) => void>;
+      runAnimationFrameTick(): void;
+    };
+    internals.animationFrameCallbacks.set(1, () => {
+      mockNative.interruptedByCtrlC = true;
+      throw new Error("user callback failed");
+    });
+
+    try {
+      expect(() => internals.runAnimationFrameTick()).toThrow("user callback failed");
+      expect(mockNative.stopCalls).toBe(0);
+    } finally {
+      paintCannon.stop();
+    }
+  });
+});
+
 describe("core app focus events", () => {
   it("dispatches terminal focus reports as PaintCannon focus and blur events", () => {
     const paintCannon = new PaintCannon({ fps: 120 });
@@ -588,6 +678,38 @@ describe("core app focus events", () => {
 });
 
 describe("core style validation", () => {
+  it("supports positioned layout and z-index properties", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+
+    root.style.position = "absolute";
+    root.style.top = "10%";
+    root.style.right = 2;
+    root.style.bottom = "auto";
+    root.style.left = -1;
+    root.style.zIndex = -3;
+    root.style.opacity = 0.5;
+
+    expect(root.style.position).toBe("absolute");
+    expect(root.style.top).toBe("10%");
+    expect(root.style.right).toBe("2");
+    expect(root.style.bottom).toBe("auto");
+    expect(root.style.left).toBe("-1");
+    expect(root.style.zIndex).toBe("-3");
+    expect(root.style.opacity).toBe("0.5");
+    expect(mockNative.styleMutations).toEqual(
+      expect.arrayContaining([
+        { id: root.id, property: "position", value: "absolute" },
+        { id: root.id, property: "top", value: "10%" },
+        { id: root.id, property: "right", value: "2" },
+        { id: root.id, property: "bottom", value: "auto" },
+        { id: root.id, property: "left", value: "-1" },
+        { id: root.id, property: "z-index", value: "-3" },
+        { id: root.id, property: "opacity", value: "0.5" },
+      ]),
+    );
+    paintCannon.stop();
+  });
+
   it("supports width and height constraints and rejects unsupported style keys", () => {
     const { paintCannon, mockNative, root } = createPaintTree();
 
