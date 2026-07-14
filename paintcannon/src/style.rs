@@ -167,9 +167,9 @@ pub(crate) enum ScrollbarColor {
 }
 
 impl ScrollbarColor {
-    pub(crate) fn resolve(self) -> (Background, Background) {
+    pub(crate) fn resolve(self, automatic_track: Background) -> (Background, Background) {
         match self {
-            Self::Auto => (Background::White, Background::Default),
+            Self::Auto => (Background::White, automatic_track),
             Self::Colors { thumb, track } => (thumb, track),
         }
     }
