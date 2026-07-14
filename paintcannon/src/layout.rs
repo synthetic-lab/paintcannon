@@ -432,6 +432,23 @@ impl LayoutArena {
         Some(next)
     }
 
+    pub(crate) fn textarea_cursor_visual_position(&self, node: NodeId) -> Option<(u32, u32)> {
+        let LayoutNodeKind::TextArea(textarea) = &self.nodes[node_index(node)].kind else {
+            return None;
+        };
+        let wrap_width = float_to_cells(self.layout(node).content_box_size().width) as usize;
+        if wrap_width == 0 {
+            return None;
+        }
+
+        let (row, column) =
+            WrappedText::new(&textarea.value, wrap_width).cursor_position(textarea.cursor as usize);
+        Some((
+            row.min(u32::MAX as usize) as u32,
+            column.min(u32::MAX as usize) as u32,
+        ))
+    }
+
     pub(crate) fn set_text_control_cursor_at_point(
         &mut self,
         node: NodeId,
@@ -4614,6 +4631,42 @@ mod tests {
     }
 
     #[test]
+    fn textarea_cursor_visual_position_uses_resolved_soft_wrap_width() {
+        let mut arena = LayoutArena::new();
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Length(4.0), CssDimension::Auto),
+            "hahahaha",
+        );
+        arena.set_textarea_value(textarea, "hahahaha", 4);
+        assert_eq!(arena.textarea_cursor_visual_position(textarea), None);
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        assert_eq!(
+            arena.textarea_cursor_visual_position(textarea),
+            Some((1, 0))
+        );
+
+        arena.set_textarea_value(textarea, "hahahaha", 5);
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        assert_eq!(
+            arena.textarea_cursor_visual_position(textarea),
+            Some((1, 1))
+        );
+    }
+
+    #[test]
     fn textarea_unknown_width_measurement_matches_its_returned_width() {
         let mut arena = LayoutArena::new();
         let textarea = arena.create_textarea(
@@ -4817,6 +4870,7 @@ mod tests {
         style.border_bottom = BorderStyle::Rounded;
         style.border_left = BorderStyle::Rounded;
         let textarea = arena.create_textarea(style, "abcdefg");
+        arena.set_textarea_value(textarea, "abcdefg", 6);
 
         arena.compute_layout(
             textarea,
@@ -4829,6 +4883,10 @@ mod tests {
         let layout = arena.layout(textarea);
         assert_eq!(layout.size.width, 8.0);
         assert_eq!(layout.size.height, 4.0);
+        assert_eq!(
+            arena.textarea_cursor_visual_position(textarea),
+            Some((1, 0))
+        );
     }
 
     #[test]

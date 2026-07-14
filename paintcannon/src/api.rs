@@ -64,6 +64,13 @@ pub struct ScrollMetrics {
 
 #[derive(Clone, Debug)]
 #[napi(object)]
+pub struct CursorVisualPosition {
+    pub row: u32,
+    pub column: u32,
+}
+
+#[derive(Clone, Debug)]
+#[napi(object)]
 pub struct ScrollbarHit {
     pub target_id: u32,
     pub axis: String,
@@ -296,6 +303,25 @@ impl PaintCannon {
         })?;
         response_rx
             .recv()
+            .map_err(|_| Error::from_reason("renderer thread stopped"))
+    }
+
+    #[napi]
+    pub fn get_text_area_cursor_visual_position(
+        &self,
+        id: u32,
+    ) -> Result<Option<CursorVisualPosition>> {
+        let (response_tx, response_rx) = bounded(1);
+        let (width, height) = self.layout_size();
+        self.send(EngineCommand::GetTextAreaCursorVisualPosition {
+            node: DomId(id),
+            width,
+            height,
+            response: response_tx,
+        })?;
+        response_rx
+            .recv()
+            .map(|position| position.map(|(row, column)| CursorVisualPosition { row, column }))
             .map_err(|_| Error::from_reason("renderer thread stopped"))
     }
 

@@ -361,6 +361,12 @@ pub(crate) enum EngineCommand {
         height: usize,
         response: Sender<Option<u32>>,
     },
+    GetTextAreaCursorVisualPosition {
+        node: DomId,
+        width: usize,
+        height: usize,
+        response: Sender<Option<(u32, u32)>>,
+    },
     SetTextControlCursorAtPoint {
         node: DomId,
         x: u32,
@@ -1029,6 +1035,17 @@ impl PaintEngine {
         let node = self.node_for(node)?;
         self.ensure_layout_for_size(width, height);
         self.arena.move_textarea_cursor_vertically(node, direction)
+    }
+
+    pub(crate) fn textarea_cursor_visual_position_for_size(
+        &mut self,
+        node: DomId,
+        width: usize,
+        height: usize,
+    ) -> Option<(u32, u32)> {
+        let node = self.node_for(node)?;
+        self.ensure_layout_for_size(width, height);
+        self.arena.textarea_cursor_visual_position(node)
     }
 
     pub(crate) fn set_text_control_cursor_at_point_for_size(
@@ -2044,6 +2061,15 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
             let _ = response.send(
                 engine.move_textarea_cursor_vertically_for_size(node, direction, width, height),
             );
+        }
+        EngineCommand::GetTextAreaCursorVisualPosition {
+            node,
+            width,
+            height,
+            response,
+        } => {
+            let _ =
+                response.send(engine.textarea_cursor_visual_position_for_size(node, width, height));
         }
         EngineCommand::SetTextControlCursorAtPoint {
             node,
@@ -3351,6 +3377,29 @@ mod tests {
 
         let frame = engine.render_frame(6, 3).unwrap();
         assert!(frame.cell(2, 0).unwrap().reversed);
+    }
+
+    #[test]
+    fn textarea_cursor_visual_position_query_uses_current_layout_without_relayout() {
+        let mut engine = PaintEngine::new();
+        let textarea = engine.create_textarea(
+            block_style(CssDimension::Length(4.0), CssDimension::Auto),
+            "hahahaha",
+        );
+        engine.set_root(textarea);
+        engine.set_textarea_value(textarea, "hahahaha", 5);
+
+        assert_eq!(
+            engine.textarea_cursor_visual_position_for_size(textarea, 8, 4),
+            Some((1, 1))
+        );
+        let layout_passes = engine.layout_passes();
+
+        assert_eq!(
+            engine.textarea_cursor_visual_position_for_size(textarea, 8, 4),
+            Some((1, 1))
+        );
+        assert_eq!(engine.layout_passes(), layout_passes);
     }
 
     #[test]
