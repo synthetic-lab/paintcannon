@@ -12,6 +12,8 @@ PaintCannon supports the following CSS:
 - Block
 - Inline
 - Margins and padding, including auto margins
+- Width and height constraints with `min-width`, `max-width`, `min-height`, and `max-height`,
+  including percentage values
 - Overflow hidden and scroll, with native mouse scrolling
 - `visibility: hidden`, which preserves layout space while suppressing paint
   and hit testing

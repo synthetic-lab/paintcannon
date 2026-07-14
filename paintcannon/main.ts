@@ -3349,6 +3349,22 @@ export class CSSStyleDeclaration {
     this.setProperty("height", value);
   }
 
+  get minWidth(): string {
+    return this.getPropertyValue("min-width");
+  }
+
+  set minWidth(value: string | number) {
+    this.setProperty("min-width", value);
+  }
+
+  get maxWidth(): string {
+    return this.getPropertyValue("max-width");
+  }
+
+  set maxWidth(value: string | number) {
+    this.setProperty("max-width", value);
+  }
+
   get minHeight(): string {
     return this.getPropertyValue("min-height");
   }
@@ -3744,6 +3760,8 @@ export const SUPPORTED_STYLE_PROPERTY_NAMES = [
   "margin-left",
   "width",
   "height",
+  "min-width",
+  "max-width",
   "min-height",
   "max-height",
   "white-space",

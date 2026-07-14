@@ -3030,6 +3030,54 @@ mod tests {
     }
 
     #[test]
+    fn min_width_expands_an_explicitly_smaller_child() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(block_style(
+            CssDimension::Length(10.0),
+            CssDimension::Length(1.0),
+        ));
+
+        let mut child_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        child_style.min_width = CssDimension::Length(5.0);
+        let child = arena.create_element(child_style);
+        arena.append_child(root, child);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+
+        assert_eq!(arena.layout(child).size.width, 5.0);
+    }
+
+    #[test]
+    fn percent_max_width_constrains_child_against_parent_width() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(block_style(
+            CssDimension::Length(10.0),
+            CssDimension::Length(1.0),
+        ));
+
+        let mut child_style = block_style(CssDimension::Percent(1.0), CssDimension::Length(1.0));
+        child_style.max_width = CssDimension::Percent(0.5);
+        let child = arena.create_element(child_style);
+        arena.append_child(root, child);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+
+        assert_eq!(arena.layout(child).size.width, 5.0);
+    }
+
+    #[test]
     fn percent_max_height_constrains_scroll_container() {
         let mut arena = LayoutArena::new();
         let root = arena.create_element(block_style(
