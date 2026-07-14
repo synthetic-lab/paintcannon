@@ -171,6 +171,28 @@ impl Frame {
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
+        self.fill_rect_internal(rect, background, selection_background, clip, None);
+    }
+
+    pub(crate) fn fill_box_background(
+        &mut self,
+        rect: ClipRect,
+        style: &DivStyle,
+        background: Background,
+        selection_background: Option<Background>,
+        clip: ClipBounds,
+    ) {
+        self.fill_rect_internal(rect, background, selection_background, clip, Some(style));
+    }
+
+    fn fill_rect_internal(
+        &mut self,
+        rect: ClipRect,
+        background: Background,
+        selection_background: Option<Background>,
+        clip: ClipBounds,
+        box_style: Option<&DivStyle>,
+    ) {
         if background == Background::Default && selection_background.is_none() {
             return;
         }
@@ -178,10 +200,16 @@ impl Frame {
         let Some(bounds) = self.visible_rect(rect, clip) else {
             return;
         };
+        let chunky_style = box_style.filter(|style| has_chunky_rounded_corner(style));
 
         for row in bounds.top as usize..bounds.bottom as usize {
             let start = row * self.width;
             for col in bounds.left as usize..bounds.right as usize {
+                if chunky_style.is_some_and(|style| {
+                    is_chunky_rounded_corner(rect, style, col as i32, row as i32)
+                }) {
+                    continue;
+                }
                 self.cells[start + col] = Cell {
                     background,
                     character: ' ',
@@ -197,60 +225,6 @@ impl Frame {
                 };
             }
         }
-    }
-
-    pub(crate) fn clear_chunky_rounded_corners(
-        &mut self,
-        rect: ClipRect,
-        style: &DivStyle,
-        clip: ClipBounds,
-    ) {
-        if !has_chunky_rounded_corner(style) {
-            return;
-        }
-
-        let left = rect.left;
-        let right = rect.right - 1;
-        let top = rect.top;
-        let bottom = rect.bottom - 1;
-        if left > right || top > bottom {
-            return;
-        }
-
-        if style.border_top == BorderStyle::ChunkyRounded
-            && style.border_left == BorderStyle::ChunkyRounded
-        {
-            self.clear_cell(left, top, clip);
-        }
-        if style.border_top == BorderStyle::ChunkyRounded
-            && style.border_right == BorderStyle::ChunkyRounded
-            && right != left
-        {
-            self.clear_cell(right, top, clip);
-        }
-        if style.border_bottom == BorderStyle::ChunkyRounded
-            && style.border_left == BorderStyle::ChunkyRounded
-            && bottom != top
-        {
-            self.clear_cell(left, bottom, clip);
-        }
-        if style.border_bottom == BorderStyle::ChunkyRounded
-            && style.border_right == BorderStyle::ChunkyRounded
-            && right != left
-            && bottom != top
-        {
-            self.clear_cell(right, bottom, clip);
-        }
-    }
-
-    pub(crate) fn clear_cell(&mut self, x: i32, y: i32, clip: ClipBounds) {
-        let Some(index) = self.cell_index(x, y) else {
-            return;
-        };
-        if !clip.contains(x, y) {
-            return;
-        }
-        self.cells[index] = Cell::default();
     }
 
     pub(crate) fn set_reversed(&mut self, x: i32, y: i32, reversed: bool, clip: ClipBounds) {
@@ -860,6 +834,37 @@ fn has_chunky_rounded_corner(style: &DivStyle) -> bool {
                 || style.border_right == BorderStyle::ChunkyRounded))
 }
 
+fn is_chunky_rounded_corner(rect: ClipRect, style: &DivStyle, x: i32, y: i32) -> bool {
+    let left = rect.left;
+    let right = rect.right - 1;
+    let top = rect.top;
+    let bottom = rect.bottom - 1;
+    if left > right || top > bottom {
+        return false;
+    }
+
+    (x == left
+        && y == top
+        && style.border_top == BorderStyle::ChunkyRounded
+        && style.border_left == BorderStyle::ChunkyRounded)
+        || (right != left
+            && x == right
+            && y == top
+            && style.border_top == BorderStyle::ChunkyRounded
+            && style.border_right == BorderStyle::ChunkyRounded)
+        || (bottom != top
+            && x == left
+            && y == bottom
+            && style.border_bottom == BorderStyle::ChunkyRounded
+            && style.border_left == BorderStyle::ChunkyRounded)
+        || (right != left
+            && bottom != top
+            && x == right
+            && y == bottom
+            && style.border_bottom == BorderStyle::ChunkyRounded
+            && style.border_right == BorderStyle::ChunkyRounded)
+}
+
 #[derive(Clone, Copy)]
 struct BorderGlyphs {
     horizontal: char,
@@ -1051,7 +1056,7 @@ mod tests {
     }
 
     #[test]
-    fn chunky_rounded_corners_can_clear_background_bleed() {
+    fn chunky_rounded_box_background_preserves_underlying_corner_cells() {
         let mut frame = Frame::new(4, 3, false);
         let mut style = DivStyle::default();
         style.border_top = BorderStyle::ChunkyRounded;
@@ -1065,9 +1070,11 @@ mod tests {
             None,
             ClipBounds::unbounded(),
         );
-        frame.clear_chunky_rounded_corners(
+        frame.fill_box_background(
             ClipRect::new(0, 0, 4, 3),
             &style,
+            Background::Red,
+            None,
             ClipBounds::unbounded(),
         );
         frame.stroke_border(
@@ -1082,7 +1089,9 @@ mod tests {
         assert_eq!(frame.cell(3, 0).unwrap().character, '🭌');
         assert_eq!(frame.cell(0, 2).unwrap().character, '🭒');
         assert_eq!(frame.cell(3, 2).unwrap().character, '🭝');
-        assert_eq!(frame.cell(0, 0).unwrap().background, Background::Default);
+        assert_eq!(frame.cell(0, 0).unwrap().background, Background::Blue);
+        assert_eq!(frame.cell(1, 0).unwrap().background, Background::Red);
+        assert_eq!(frame.cell(1, 1).unwrap().background, Background::Red);
     }
 
     #[test]

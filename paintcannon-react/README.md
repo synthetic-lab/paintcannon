@@ -144,6 +144,12 @@ through `event.clipboardData.files`.
 both supported:
 
 - `display`
+- `position`
+- `top`
+- `right`
+- `bottom`
+- `left`
+- `z-index` / `zIndex`
 - `visibility` (accepts `"visible"` or `"hidden"`; hidden elements keep their
   layout space but do not paint or receive hit tests)
 - `overflow`

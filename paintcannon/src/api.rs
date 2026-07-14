@@ -28,9 +28,9 @@ use crate::style::{
     parse_font_style, parse_font_weight, parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks,
     parse_grid_line, parse_grid_placement, parse_grid_template_tracks, parse_image_rendering,
     parse_justify_content, parse_length_percentage, parse_length_percentage_auto,
-    parse_margin_lengths, parse_non_negative_number, parse_overflow, parse_scrollbar_color,
-    parse_scrollbar_gutter, parse_text_decoration_line, parse_transition, parse_visibility,
-    parse_white_space, Background,
+    parse_margin_lengths, parse_non_negative_number, parse_overflow, parse_position,
+    parse_scrollbar_color, parse_scrollbar_gutter, parse_text_decoration_line, parse_transition,
+    parse_visibility, parse_white_space, parse_z_index, Background,
 };
 use crate::terminal::{query_terminal_size, reset_terminal, TerminalSize};
 
@@ -966,6 +966,12 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
 
     let mutation = match property {
         "display" => StyleMutation::Display(parse_display(value)?),
+        "position" => StyleMutation::Position(parse_position(value)?),
+        "top" => StyleMutation::Top(parse_length_percentage_auto(value)?),
+        "right" => StyleMutation::Right(parse_length_percentage_auto(value)?),
+        "bottom" => StyleMutation::Bottom(parse_length_percentage_auto(value)?),
+        "left" => StyleMutation::Left(parse_length_percentage_auto(value)?),
+        "z-index" | "zIndex" => StyleMutation::ZIndex(parse_z_index(value)?),
         "visibility" => StyleMutation::Visibility(parse_visibility(value)?),
         "overflow" => StyleMutation::Overflow(parse_overflow(value)?),
         "overflow-x" | "overflowX" => StyleMutation::OverflowX(parse_overflow(value)?),
@@ -1155,6 +1161,12 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
 fn style_reset(property: &str) -> Result<StyleReset> {
     let reset = match property {
         "display" => StyleReset::Display,
+        "position" => StyleReset::Position,
+        "top" => StyleReset::Top,
+        "right" => StyleReset::Right,
+        "bottom" => StyleReset::Bottom,
+        "left" => StyleReset::Left,
+        "z-index" | "zIndex" => StyleReset::ZIndex,
         "visibility" => StyleReset::Visibility,
         "overflow" => StyleReset::Overflow,
         "overflow-x" | "overflowX" => StyleReset::OverflowX,
@@ -1347,7 +1359,9 @@ impl Drop for PaintCannon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::{CssDimension, CssVisibility};
+    use crate::style::{
+        CssDimension, CssLengthPercentageAuto, CssPosition, CssVisibility, CssZIndex,
+    };
 
     #[test]
     fn can_fold_style_mutation_into_create_command() {
@@ -1429,6 +1443,38 @@ mod tests {
             } => {}
             _ => panic!("expected visibility style mutation"),
         }
+    }
+
+    #[test]
+    fn positioning_style_commands_are_supported() {
+        assert!(matches!(
+            style_command(1, "position", "absolute").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Position(CssPosition::Absolute),
+                ..
+            }
+        ));
+        assert!(matches!(
+            style_command(1, "left", "25%").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Left(CssLengthPercentageAuto::Percent(value)),
+                ..
+            } if value == 0.25
+        ));
+        assert!(matches!(
+            style_command(1, "zIndex", "-2").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::ZIndex(CssZIndex::Integer(-2)),
+                ..
+            }
+        ));
+        assert!(matches!(
+            style_command(1, "top", "").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Reset(StyleReset::Top),
+                ..
+            }
+        ));
     }
 
     #[test]

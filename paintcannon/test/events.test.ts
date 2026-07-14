@@ -588,6 +588,35 @@ describe("core app focus events", () => {
 });
 
 describe("core style validation", () => {
+  it("supports positioned layout and z-index properties", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+
+    root.style.position = "absolute";
+    root.style.top = "10%";
+    root.style.right = 2;
+    root.style.bottom = "auto";
+    root.style.left = -1;
+    root.style.zIndex = -3;
+
+    expect(root.style.position).toBe("absolute");
+    expect(root.style.top).toBe("10%");
+    expect(root.style.right).toBe("2");
+    expect(root.style.bottom).toBe("auto");
+    expect(root.style.left).toBe("-1");
+    expect(root.style.zIndex).toBe("-3");
+    expect(mockNative.styleMutations).toEqual(
+      expect.arrayContaining([
+        { id: root.id, property: "position", value: "absolute" },
+        { id: root.id, property: "top", value: "10%" },
+        { id: root.id, property: "right", value: "2" },
+        { id: root.id, property: "bottom", value: "auto" },
+        { id: root.id, property: "left", value: "-1" },
+        { id: root.id, property: "z-index", value: "-3" },
+      ]),
+    );
+    paintCannon.stop();
+  });
+
   it("supports width and height constraints and rejects unsupported style keys", () => {
     const { paintCannon, mockNative, root } = createPaintTree();
 

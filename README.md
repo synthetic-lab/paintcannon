@@ -11,6 +11,7 @@ PaintCannon supports the following CSS:
 - Grid
 - Block
 - Inline
+- Relative and absolute positioning with CSS stacking contexts and `z-index`
 - Margins and padding, including auto margins
 - Width and height constraints with `min-width`, `max-width`, `min-height`, and `max-height`,
   including percentage values

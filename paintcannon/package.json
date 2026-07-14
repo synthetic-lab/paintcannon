@@ -57,6 +57,7 @@
     "demo:mouse": "npm run build:debug && node dist/examples/mouse-clicks.js",
     "demo:padding": "npm run build:debug && node dist/examples/padding.js",
     "demo:paste-images": "npm run build:debug && node dist/examples/paste-images.js",
+    "demo:positioning": "npm run build:debug && node dist/examples/positioning.js",
     "demo:margin": "npm run build:debug && node dist/examples/margin.js",
     "demo:overflow": "npm run build:debug && node dist/examples/overflow.js",
     "demo:pong": "npm run build:debug && node dist/examples/pong.js",

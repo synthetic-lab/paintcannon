@@ -187,6 +187,7 @@ type EventListenerForTuple<
 export type ClickEventListener = MouseEventListener;
 export type ImageRendering = "ascii" | "half-block";
 export type CSSVisibility = "visible" | "hidden";
+export type CSSPosition = "static" | "relative" | "absolute";
 export type CSSWhiteSpace = "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
 export type CSSFontWeight = "normal" | "bold";
 export type CSSFontStyle = "normal" | "italic";
@@ -3077,6 +3078,54 @@ export class CSSStyleDeclaration {
     this.setProperty("display", value);
   }
 
+  get position(): CSSPosition | string {
+    return this.getPropertyValue("position");
+  }
+
+  set position(value: CSSPosition | string) {
+    this.setProperty("position", value);
+  }
+
+  get top(): string {
+    return this.getPropertyValue("top");
+  }
+
+  set top(value: string | number) {
+    this.setProperty("top", value);
+  }
+
+  get right(): string {
+    return this.getPropertyValue("right");
+  }
+
+  set right(value: string | number) {
+    this.setProperty("right", value);
+  }
+
+  get bottom(): string {
+    return this.getPropertyValue("bottom");
+  }
+
+  set bottom(value: string | number) {
+    this.setProperty("bottom", value);
+  }
+
+  get left(): string {
+    return this.getPropertyValue("left");
+  }
+
+  set left(value: string | number) {
+    this.setProperty("left", value);
+  }
+
+  get zIndex(): string {
+    return this.getPropertyValue("z-index");
+  }
+
+  set zIndex(value: string | number) {
+    this.setProperty("z-index", value);
+  }
+
   get visibility(): CSSVisibility | string {
     return this.getPropertyValue("visibility");
   }
@@ -3725,6 +3774,12 @@ function normalizeStyleName(property: string): CSSStyleProperty {
 
 export const SUPPORTED_STYLE_PROPERTY_NAMES = [
   "display",
+  "position",
+  "top",
+  "right",
+  "bottom",
+  "left",
+  "z-index",
   "visibility",
   "overflow",
   "overflow-x",

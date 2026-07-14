@@ -16,6 +16,7 @@ PaintCannon supports the following CSS layout and paint features:
 - Grid
 - Block layout
 - Inline layout
+- Relative and absolute positioning with CSS stacking contexts and `z-index`
 - Margins and padding, including auto margins
 - Width and height constraints with `min-width`, `max-width`, `min-height`, and `max-height`,
   including percentage values
@@ -36,6 +37,14 @@ PaintCannon also exposes terminal-specific border styles:
 - `rounded`
 - `chunky-rounded`
 - `ascii`
+
+Positioned elements support `position: static | relative | absolute`, the `top`, `right`,
+`bottom`, and `left` inset properties, and integer or `auto` `z-index` values. Absolute elements
+use the nearest non-static ancestor as their containing block and do not contribute to normal flow.
+Positioned inline elements retain their inline flow position while their painted fragments move.
+
+Run `npm run demo:positioning` from the workspace root to see overlapping positioned elements and
+interactive z-index changes.
 
 ## Elements
 
