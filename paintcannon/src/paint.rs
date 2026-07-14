@@ -38,6 +38,7 @@ pub(crate) struct PaintOptions<'a> {
     pub(crate) truecolor_enabled: bool,
     pub(crate) default_foreground: Background,
     pub(crate) default_background: Background,
+    pub(crate) terminal_focused: bool,
 }
 
 impl PaintOutput {
@@ -80,6 +81,7 @@ pub(crate) fn paint_arena(
             truecolor_enabled: false,
             default_foreground: Background::White,
             default_background: Background::Black,
+            terminal_focused: true,
         },
     )
 }
@@ -671,12 +673,15 @@ impl<'a, 'out> Painter<'a, 'out> {
             &mut self.output.frame,
             input,
             content,
-            background,
-            selection_background,
-            foreground,
-            placeholder_foreground,
-            TextAttributes::from_state(text_state),
-            state.clip,
+            TextControlPaintOptions {
+                background,
+                selection_background,
+                foreground,
+                placeholder_foreground,
+                text_attributes: TextAttributes::from_state(text_state),
+                clip: state.clip,
+                show_cursor: self.options.terminal_focused,
+            },
         );
         let border_color =
             self.paint_color(id, ColorTransitionProperty::BorderColor, style.border_color);
@@ -732,13 +737,16 @@ impl<'a, 'out> Painter<'a, 'out> {
             &mut self.output.frame,
             textarea,
             content,
-            background,
-            selection_background,
-            foreground,
-            placeholder_foreground,
-            TextAttributes::from_state(text_state),
             scroll_top as usize,
-            state.clip,
+            TextControlPaintOptions {
+                background,
+                selection_background,
+                foreground,
+                placeholder_foreground,
+                text_attributes: TextAttributes::from_state(text_state),
+                clip: state.clip,
+                show_cursor: self.options.terminal_focused,
+            },
         );
         let border_color =
             self.paint_color(id, ColorTransitionProperty::BorderColor, style.border_color);
@@ -1042,6 +1050,17 @@ struct TextAttributes {
     strikethrough: bool,
 }
 
+#[derive(Clone, Copy)]
+struct TextControlPaintOptions {
+    background: Background,
+    selection_background: Option<Background>,
+    foreground: Background,
+    placeholder_foreground: Background,
+    text_attributes: TextAttributes,
+    clip: ClipBounds,
+    show_cursor: bool,
+}
+
 impl TextAttributes {
     fn from_state(state: PaintState) -> Self {
         Self {
@@ -1180,13 +1199,17 @@ fn paint_input(
     frame: &mut Frame,
     input: &InputLayoutData,
     rect: ClipRect,
-    background: Background,
-    selection_background: Option<Background>,
-    foreground: Background,
-    placeholder_foreground: Background,
-    text_attributes: TextAttributes,
-    clip: ClipBounds,
+    options: TextControlPaintOptions,
 ) {
+    let TextControlPaintOptions {
+        background,
+        selection_background,
+        foreground,
+        placeholder_foreground,
+        text_attributes,
+        clip,
+        show_cursor,
+    } = options;
     if rect.width() <= 0 || rect.height() <= 0 {
         return;
     }
@@ -1206,7 +1229,7 @@ fn paint_input(
     } else {
         0
     };
-    let cursor_col = input.focused.then_some(
+    let cursor_col = (input.focused && show_cursor).then_some(
         (input.cursor as usize)
             .min(input.value.chars().count())
             .saturating_sub(start),
@@ -1263,14 +1286,18 @@ fn paint_textarea(
     frame: &mut Frame,
     textarea: &TextAreaLayoutData,
     rect: ClipRect,
-    background: Background,
-    selection_background: Option<Background>,
-    foreground: Background,
-    placeholder_foreground: Background,
-    text_attributes: TextAttributes,
     scroll_top: usize,
-    clip: ClipBounds,
+    options: TextControlPaintOptions,
 ) {
+    let TextControlPaintOptions {
+        background,
+        selection_background,
+        foreground,
+        placeholder_foreground,
+        text_attributes,
+        clip,
+        show_cursor,
+    } = options;
     if rect.width() <= 0 || rect.height() <= 0 {
         return;
     }
@@ -1324,7 +1351,7 @@ fn paint_textarea(
             clip,
         );
     }
-    if let Some((row, col)) = cursor_position {
+    if let Some((row, col)) = cursor_position.filter(|_| show_cursor) {
         let visible_row = row.saturating_sub(scroll_top);
         if row >= scroll_top
             && (visible_row as i32) < rect.height()
@@ -3072,6 +3099,7 @@ mod tests {
                 truecolor_enabled: false,
                 default_foreground: Background::White,
                 default_background: Background::Black,
+                terminal_focused: true,
             },
             capture_hidden_selection_units: false,
             output: &mut output,
@@ -3905,6 +3933,46 @@ mod tests {
     }
 
     #[test]
+    fn terminal_blur_hides_focused_input_cursor() {
+        let mut arena = LayoutArena::new();
+        let input = arena.create_input(
+            block_style(CssDimension::Length(4.0), CssDimension::Length(1.0)),
+            "text",
+        );
+        arena.set_input_value(input, "text", 2);
+        arena.set_input_focused(input, true);
+        arena.compute_layout(
+            input,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+
+        let output = paint_arena_with_options(
+            &arena,
+            input,
+            4,
+            1,
+            false,
+            PaintOptions {
+                transitions: None,
+                now: Instant::now(),
+                truecolor_enabled: false,
+                default_foreground: Background::White,
+                default_background: Background::Black,
+                terminal_focused: false,
+            },
+        );
+
+        assert!(matches!(
+            arena.kind(input),
+            LayoutNodeKind::Input(input) if input.focused
+        ));
+        assert!(!output.frame.cell(2, 0).unwrap().reversed);
+    }
+
+    #[test]
     fn empty_input_paints_placeholder() {
         let mut arena = LayoutArena::new();
         let input = arena.create_input(
@@ -4025,6 +4093,48 @@ mod tests {
         assert_eq!(output.frame.cell(4, 0).unwrap().character, 'o');
         assert_eq!(output.frame.cell(0, 1).unwrap().character, 'w');
         assert!(output.frame.cell(0, 1).unwrap().reversed);
+    }
+
+    #[test]
+    fn terminal_blur_hides_focused_textarea_cursor() {
+        let mut arena = LayoutArena::new();
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Length(5.0), CssDimension::Length(2.0)),
+            "a\nb\nc",
+        );
+        arena.set_textarea_value(textarea, "a\nb\nc", 5);
+        arena.set_textarea_focused(textarea, true);
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+
+        let output = paint_arena_with_options(
+            &arena,
+            textarea,
+            5,
+            2,
+            false,
+            PaintOptions {
+                transitions: None,
+                now: Instant::now(),
+                truecolor_enabled: false,
+                default_foreground: Background::White,
+                default_background: Background::Black,
+                terminal_focused: false,
+            },
+        );
+
+        assert!(matches!(
+            arena.kind(textarea),
+            LayoutNodeKind::TextArea(textarea) if textarea.focused
+        ));
+        assert_eq!(output.frame.cell(0, 0).unwrap().character, 'b');
+        assert_eq!(output.frame.cell(0, 1).unwrap().character, 'c');
+        assert!(!output.frame.cell(1, 1).unwrap().reversed);
     }
 
     #[test]

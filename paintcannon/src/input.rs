@@ -248,6 +248,7 @@ impl TerminalInput {
                                         true,
                                         &thread_focus_events,
                                         &thread_focused,
+                                        thread_renderer_tx.as_ref(),
                                     );
                                 }
                                 TerminalEvent::FocusLost => {
@@ -255,6 +256,7 @@ impl TerminalInput {
                                         false,
                                         &thread_focus_events,
                                         &thread_focused,
+                                        thread_renderer_tx.as_ref(),
                                     );
                                 }
                             }
@@ -796,8 +798,12 @@ fn handle_terminal_focus_event(
     focused: bool,
     events: &Arc<Mutex<VecDeque<TerminalFocusEvent>>>,
     current_focus: &Arc<AtomicBool>,
+    renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
 ) {
     current_focus.store(focused, Ordering::Relaxed);
+    if let Some(renderer_tx) = renderer_tx {
+        let _ = renderer_tx.send(EngineCommand::SetTerminalFocused { focused });
+    }
     push_focus_event(events, terminal_focus_event(focused));
 }
 
@@ -1059,10 +1065,17 @@ mod tests {
     fn handle_terminal_focus_event_updates_focus_state_and_queues_event() {
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let focused = Arc::new(AtomicBool::new(true));
+        let (renderer_tx, renderer_rx) = crossbeam_channel::bounded(1);
 
-        handle_terminal_focus_event(false, &events, &focused);
+        handle_terminal_focus_event(false, &events, &focused, Some(&renderer_tx));
 
         assert!(!focused.load(Ordering::Relaxed));
+        assert!(matches!(
+            renderer_rx
+                .recv()
+                .expect("renderer command should be queued"),
+            EngineCommand::SetTerminalFocused { focused: false }
+        ));
         let mut events = events.lock().expect("focus events mutex poisoned");
         let event = events.pop_front().expect("focus event should be queued");
         assert_eq!(event.r#type, "blur");
