@@ -588,15 +588,29 @@ describe("core app focus events", () => {
 });
 
 describe("core style validation", () => {
-  it("supports maxHeight and rejects unsupported style keys before native calls", () => {
+  it("supports width and height constraints and rejects unsupported style keys", () => {
     const { paintCannon, mockNative, root } = createPaintTree();
 
+    root.style.minWidth = 12;
+    root.style.maxWidth = "75%";
     root.style.maxHeight = "90%";
+    expect(root.style.minWidth).toBe("12");
+    expect(root.style.maxWidth).toBe("75%");
     expect(root.style.maxHeight).toBe("90%");
+    expect(mockNative.styleMutations).toEqual(
+      expect.arrayContaining([
+        { id: root.id, property: "min-width", value: "12" },
+        { id: root.id, property: "max-width", value: "75%" },
+        { id: root.id, property: "max-height", value: "90%" },
+      ]),
+    );
+
+    expect(root.style.removeProperty("max-width")).toBe("75%");
+    expect(root.style.maxWidth).toBe("");
     expect(mockNative.styleMutations).toContainEqual({
       id: root.id,
-      property: "max-height",
-      value: "90%",
+      property: "max-width",
+      value: "",
     });
 
     const before = mockNative.styleMutations.length;

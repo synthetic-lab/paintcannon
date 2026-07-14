@@ -1066,6 +1066,8 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
         }
         "width" => StyleMutation::Width(parse_dimension(value)?),
         "height" => StyleMutation::Height(parse_dimension(value)?),
+        "min-width" | "minWidth" => StyleMutation::MinWidth(parse_dimension(value)?),
+        "max-width" | "maxWidth" => StyleMutation::MaxWidth(parse_dimension(value)?),
         "min-height" | "minHeight" => StyleMutation::MinHeight(parse_dimension(value)?),
         "max-height" | "maxHeight" => StyleMutation::MaxHeight(parse_dimension(value)?),
         "white-space" | "whiteSpace" => StyleMutation::WhiteSpace(parse_white_space(value)?),
@@ -1189,6 +1191,8 @@ fn style_reset(property: &str) -> Result<StyleReset> {
         "margin-left" | "marginLeft" => StyleReset::MarginLeft,
         "width" => StyleReset::Width,
         "height" => StyleReset::Height,
+        "min-width" | "minWidth" => StyleReset::MinWidth,
+        "max-width" | "maxWidth" => StyleReset::MaxWidth,
         "min-height" | "minHeight" => StyleReset::MinHeight,
         "max-height" | "maxHeight" => StyleReset::MaxHeight,
         "border" => StyleReset::Border,
@@ -1383,6 +1387,36 @@ mod tests {
             } => assert_eq!(value, 0.9),
             _ => panic!("expected max-height style mutation"),
         }
+    }
+
+    #[test]
+    fn min_and_max_width_style_commands_are_supported() {
+        let min_command = style_command(1, "min-width", "12").unwrap();
+        match min_command {
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::MinWidth(CssDimension::Length(value)),
+                ..
+            } => assert_eq!(value, 12.0),
+            _ => panic!("expected min-width style mutation"),
+        }
+
+        let max_command = style_command(1, "maxWidth", "75%").unwrap();
+        match max_command {
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::MaxWidth(CssDimension::Percent(value)),
+                ..
+            } => assert_eq!(value, 0.75),
+            _ => panic!("expected max-width style mutation"),
+        }
+
+        let reset_command = style_command(1, "max-width", "").unwrap();
+        assert!(matches!(
+            reset_command,
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Reset(StyleReset::MaxWidth),
+                ..
+            }
+        ));
     }
 
     #[test]

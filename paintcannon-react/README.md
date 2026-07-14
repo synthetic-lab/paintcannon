@@ -180,6 +180,8 @@ both supported:
 - `margin-left` / `marginLeft`
 - `width`
 - `height`
+- `min-width` / `minWidth`
+- `max-width` / `maxWidth`
 - `min-height` / `minHeight`
 - `max-height` / `maxHeight`
 - `white-space` / `whiteSpace`
