@@ -5,6 +5,7 @@ import { filesFromTerminalPaste, type PaintFileList } from "./terminal-files.ts"
 import type {
   BatchCommand as NativeBatchCommand,
   BatchIdMapping as NativeBatchIdMapping,
+  CursorVisualPosition as NativeCursorVisualPosition,
   KeyboardEvent as NativeKeyboardEvent,
   PaintCannon as NativePaintCannon,
   ScrollbarHit as NativeScrollbarHit,
@@ -50,6 +51,7 @@ export interface PaintCannonOptions {
 }
 
 export type AnimationFrameCallback = (timestamp: number) => void;
+export type CursorVisualPosition = NativeCursorVisualPosition;
 export const KEYBOARD_EVENT_TYPES = ["keydown", "keyup"] as const;
 export const CLIPBOARD_EVENT_TYPES = ["paste"] as const;
 export const PAINT_CANNON_FOCUS_EVENT_TYPES = ["focus", "blur"] as const;
@@ -616,6 +618,7 @@ export class PaintCannon {
       (id, placeholder) => this.setNativeTextAreaPlaceholder(id, placeholder),
       (id, x, y) => this.binding.setTextControlCursorAtPoint(id, x, y),
       (id, direction) => this.binding.moveTextAreaCursorVertically(id, direction),
+      id => this.binding.getTextAreaCursorVisualPosition(id),
       (id, property, value) => this.setNativeStyleProperty(id, property, value),
     );
     this.registerElement(element);
@@ -3003,6 +3006,9 @@ export class TextAreaElement extends TextControlElementBase<TextAreaElementEvent
       id: number,
       direction: number,
     ) => number | null,
+    private readonly getNativeTextAreaCursorVisualPosition: (
+      id: number,
+    ) => CursorVisualPosition | null,
     setNativeStyleProperty: SetNativeStyleProperty,
   ) {
     super(
@@ -3036,6 +3042,10 @@ export class TextAreaElement extends TextControlElementBase<TextAreaElementEvent
 
     this.setCursorPositionFromNative(cursor);
     return true;
+  }
+
+  getCursorVisualPosition(): CursorVisualPosition | null {
+    return this.getNativeTextAreaCursorVisualPosition(this.id);
   }
 }
 

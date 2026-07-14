@@ -190,6 +190,20 @@ describe("core keyboard events", () => {
   });
 });
 
+describe("textarea cursor APIs", () => {
+  it("returns the native soft-wrapped cursor position", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const textarea = paintCannon.createElement("textarea");
+    root.appendChild(textarea);
+
+    expect(textarea.getCursorVisualPosition()).toBeNull();
+    mockNative.cursorVisualPositions.set(textarea.id, { row: 3, column: 7 });
+    expect(textarea.getCursorVisualPosition()).toEqual({ row: 3, column: 7 });
+
+    paintCannon.stop();
+  });
+});
+
 describe("core paste events", () => {
   it("preserves ordering with keyboard events and inserts pasted text by default", () => {
     const { paintCannon, mockNative, root } = createPaintTree();

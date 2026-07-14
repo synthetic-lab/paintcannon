@@ -62,6 +62,11 @@ The core DOM subset supports:
 - `img` via ANSI, ASCII, and half-block rendering
 - text nodes
 
+Textareas expose the non-standard `getCursorVisualPosition()` method for terminal editors. It
+returns the cursor's zero-based `{row, column}` in the soft-wrapped text, or `null` when layout is
+not available. The row is relative to the complete textarea value, not its currently scrolled
+viewport.
+
 ## Events
 
 PaintCannon supports bubbling events with `stopPropagation()` and `preventDefault()`:
