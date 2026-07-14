@@ -1756,7 +1756,9 @@ impl LayoutArena {
                 let wrap_width = known_dimensions
                     .width
                     .or_else(|| available_space.width.into_option())
-                    .map(float_to_cells);
+                    .map(float_to_cells)
+                    // Zero cells is an intrinsic sizing query, not a one-cell wrap width.
+                    .filter(|width| *width > 0);
                 textarea_natural_size(textarea, wrap_width)
             }
             LayoutNodeKind::Element | LayoutNodeKind::Text(_) => Size::ZERO,
@@ -2093,9 +2095,12 @@ fn textarea_natural_size(textarea: &TextAreaLayoutData, wrap_width: Option<u32>)
         max_col: 0,
     };
     measure_inline_text(&textarea.value, CssWhiteSpace::PreWrap, &mut cursor);
+    let width = cursor.max_col.max(cursor.col).max(1);
+    // Taffy may reuse this result when its returned width later becomes known.
+    let wrapped = WrappedText::new(&textarea.value, width as usize);
     Size {
-        width: cursor.max_col.max(cursor.col).max(1) as f32,
-        height: (cursor.row + 1).max(1) as f32,
+        width: width as f32,
+        height: wrapped.row_count().max(1) as f32,
     }
 }
 
@@ -3748,6 +3753,173 @@ mod tests {
         );
 
         assert_eq!(arena.layout(textarea).size.height, 2.0);
+    }
+
+    #[test]
+    fn textarea_unknown_width_measurement_matches_its_returned_width() {
+        let mut arena = LayoutArena::new();
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Auto, CssDimension::Auto),
+            "1234567890",
+        );
+
+        let max_content = Size {
+            width: AvailableSpace::MaxContent,
+            height: AvailableSpace::MaxContent,
+        };
+        let unknown_width = arena.measure_leaf_node(textarea, Size::NONE, max_content);
+        let zero_width = arena.measure_leaf_node(
+            textarea,
+            Size {
+                width: Some(0.0),
+                height: None,
+            },
+            Size {
+                width: AvailableSpace::Definite(0.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        let known_width = arena.measure_leaf_node(
+            textarea,
+            Size {
+                width: Some(unknown_width.width),
+                height: None,
+            },
+            max_content,
+        );
+
+        assert_eq!(
+            unknown_width,
+            Size {
+                width: 10.0,
+                height: 2.0,
+            }
+        );
+        assert_eq!(zero_width.height, 2.0);
+        assert_eq!(known_width, unknown_width);
+    }
+
+    #[test]
+    fn exact_wrap_boundary_keeps_bordered_flex_textarea_inside_viewport() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(12.0), CssDimension::Length(8.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = arena.create_element(root_style);
+
+        let mut transcript_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        transcript_style.display = LayoutDisplay::Flex;
+        transcript_style.flex_direction = LayoutFlexDirection::Column;
+        transcript_style.flex_grow = 1.0;
+        transcript_style.flex_shrink = 1.0;
+        transcript_style.flex_basis = CssDimension::Length(0.0);
+        transcript_style.min_height = CssDimension::Length(0.0);
+        transcript_style.overflow_y = LayoutOverflow::Scroll;
+        let transcript = arena.create_element(transcript_style);
+
+        let mut bottom_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        bottom_style.display = LayoutDisplay::Flex;
+        bottom_style.flex_direction = LayoutFlexDirection::Column;
+        let bottom = arena.create_element(bottom_style);
+
+        let mut input_row_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        input_row_style.display = LayoutDisplay::Flex;
+        input_row_style.border_top = BorderStyle::Solid;
+        input_row_style.border_bottom = BorderStyle::Solid;
+        input_row_style.border_color = crate::style::Background::Green;
+        input_row_style.column_gap = CssLengthPercentage::Length(1.0);
+        let input_row = arena.create_element(input_row_style);
+
+        let mut prompt_style = block_style(CssDimension::Auto, CssDimension::Auto);
+        prompt_style.display = LayoutDisplay::Inline;
+        let prompt = arena.create_element(prompt_style);
+        let prompt_text = arena.create_text(">");
+        arena.append_child(prompt, prompt_text);
+
+        let mut input_wrapper_style = block_style(CssDimension::Auto, CssDimension::Auto);
+        input_wrapper_style.display = LayoutDisplay::Flex;
+        input_wrapper_style.flex_direction = LayoutFlexDirection::Column;
+        input_wrapper_style.flex_grow = 1.0;
+        input_wrapper_style.flex_shrink = 1.0;
+        input_wrapper_style.flex_basis = CssDimension::Length(0.0);
+        input_wrapper_style.min_width = CssDimension::Length(0.0);
+        let input_wrapper = arena.create_element(input_wrapper_style);
+
+        let mut textarea_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        textarea_style.display = LayoutDisplay::Flex;
+        textarea_style.min_width = CssDimension::Length(0.0);
+        textarea_style.min_height = CssDimension::Length(1.0);
+        textarea_style.flex_grow = 1.0;
+        textarea_style.overflow_y = LayoutOverflow::Visible;
+        textarea_style.white_space = CssWhiteSpace::PreWrap;
+        let textarea = arena.create_textarea(textarea_style, "123456789");
+        arena.set_textarea_focused(textarea, true);
+
+        let status = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(1.0),
+        ));
+        let status_text = arena.create_text("status");
+        arena.append_child(status, status_text);
+
+        arena.append_child(input_wrapper, textarea);
+        arena.append_child(input_row, prompt);
+        arena.append_child(input_row, input_wrapper);
+        arena.append_child(bottom, input_row);
+        arena.append_child(bottom, status);
+        arena.append_child(root, transcript);
+        arena.append_child(root, bottom);
+
+        for (value, expected_input_height, expected_transcript_height) in [
+            ("123456789", 3.0, 4.0),
+            ("1234567890", 4.0, 3.0),
+            ("12345678901", 4.0, 3.0),
+        ] {
+            arena.set_textarea_value(textarea, value, value.len() as u32);
+            arena.compute_layout(
+                root,
+                Size {
+                    width: AvailableSpace::Definite(12.0),
+                    height: AvailableSpace::Definite(8.0),
+                },
+            );
+
+            assert_eq!(arena.layout(root).size.height, 8.0, "value: {value}");
+            assert_eq!(
+                arena.layout(transcript).size.height,
+                expected_transcript_height,
+                "value: {value}"
+            );
+            assert_eq!(
+                arena.layout(input_row).size.height,
+                expected_input_height,
+                "value: {value}"
+            );
+            assert_eq!(
+                arena.layout(status).location.y + arena.layout(status).size.height,
+                arena.layout(bottom).size.height,
+                "value: {value}"
+            );
+            assert_eq!(
+                arena.layout(transcript).size.height + arena.layout(bottom).size.height,
+                arena.layout(root).size.height,
+                "value: {value}"
+            );
+
+            if value.len() == 10 {
+                let output = crate::paint::paint_arena(&arena, root, 12, 8, false);
+                let top_border = output.frame.cell(0, 3).unwrap();
+                let cursor = output.frame.cell(2, 5).unwrap();
+                let bottom_border = output.frame.cell(0, 6).unwrap();
+
+                assert_eq!(top_border.character, '─');
+                assert_eq!(top_border.foreground, crate::style::Background::Green);
+                assert!(cursor.reversed);
+                assert_eq!(bottom_border.character, '─');
+                assert_eq!(bottom_border.foreground, crate::style::Background::Green);
+                assert_eq!(output.frame.cell(0, 7).unwrap().character, 's');
+            }
+        }
     }
 
     #[test]
