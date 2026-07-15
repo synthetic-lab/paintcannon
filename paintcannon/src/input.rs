@@ -29,9 +29,10 @@ use crate::native_event::{
     TerminalResizeEvent,
 };
 use crate::selection::{SelectionAction, SelectionMouseEvent, SelectionMouseEventType};
-use crate::terminal::{reset_pointer_shape, reset_terminal};
+use crate::terminal::{reset_pointer_shape, reset_terminal, try_query_terminal_size};
 
 const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
+const TERMINAL_SIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) struct TerminalInput {
     focused: Arc<AtomicBool>,
@@ -58,6 +59,7 @@ impl TerminalInput {
         alternate_screen: bool,
         capture_mouse: bool,
         capture_ctrl_c: bool,
+        initial_terminal_size: (u32, u32),
         renderer_tx: Option<crossbeam_channel::Sender<EngineCommand>>,
         event_queue: Arc<NativeEventQueue>,
         event_notifier: Arc<dyn EventNotification>,
@@ -126,6 +128,8 @@ impl TerminalInput {
             let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
             let mut mouse_down: Option<MouseDown> = None;
             let mut awaiting_initial_focus_report = true;
+            let mut observed_terminal_size = Some(initial_terminal_size);
+            let mut next_terminal_size_poll = Instant::now() + TERMINAL_SIZE_POLL_INTERVAL;
 
             while !thread_stop.load(Ordering::Relaxed) {
                 match terminal_event::poll(Duration::from_millis(25)) {
@@ -178,15 +182,14 @@ impl TerminalInput {
                                     thread_event_notifier.notify();
                                 }
                                 TerminalEvent::Resize(cols, rows) => {
-                                    push_resize_event(
+                                    if observe_terminal_size(
+                                        &mut observed_terminal_size,
                                         &thread_event_queue,
-                                        TerminalResizeEvent {
-                                            cols: u32::from(cols),
-                                            rows: u32::from(rows),
-                                        },
+                                        (u32::from(cols), u32::from(rows)),
                                         thread_renderer_tx.as_ref(),
-                                    );
-                                    thread_event_notifier.notify();
+                                    ) {
+                                        thread_event_notifier.notify();
+                                    }
                                 }
                                 TerminalEvent::FocusGained => {
                                     let initial_report = awaiting_initial_focus_report;
@@ -223,6 +226,25 @@ impl TerminalInput {
                         }
                     }
                     Err(_) => break,
+                }
+
+                let now = Instant::now();
+                if now >= next_terminal_size_poll {
+                    if try_query_terminal_size().is_some_and(|size| {
+                        observe_terminal_size(
+                            &mut observed_terminal_size,
+                            &thread_event_queue,
+                            terminal_cell_size(size),
+                            thread_renderer_tx.as_ref(),
+                        )
+                    }) {
+                        thread_event_notifier.notify();
+                    }
+                    next_terminal_size_poll = next_poll_deadline(
+                        next_terminal_size_poll,
+                        TERMINAL_SIZE_POLL_INTERVAL,
+                        now,
+                    );
                 }
             }
 
@@ -673,18 +695,39 @@ fn push_mouse_event(events: &NativeEventQueue, event: TerminalMouseEvent) {
     events.push(NativeEvent::mouse(event));
 }
 
-fn push_resize_event(
+fn terminal_cell_size(size: crate::terminal::TerminalSize) -> (u32, u32) {
+    (size.cols, size.rows)
+}
+
+fn observe_terminal_size(
+    observed: &mut Option<(u32, u32)>,
     events: &NativeEventQueue,
-    event: TerminalResizeEvent,
+    size: (u32, u32),
     renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
-) {
+) -> bool {
+    if size.0 == 0 || size.1 == 0 || *observed == Some(size) {
+        return false;
+    }
+    *observed = Some(size);
     if let Some(renderer_tx) = renderer_tx {
         let _ = renderer_tx.send(EngineCommand::SetRenderSize {
-            width: event.cols as usize,
-            height: event.rows as usize,
+            width: size.0 as usize,
+            height: size.1 as usize,
         });
     }
-    events.push(NativeEvent::resize(event));
+    events.push(NativeEvent::resize(TerminalResizeEvent {
+        cols: size.0,
+        rows: size.1,
+    }));
+    true
+}
+
+fn next_poll_deadline(previous: Instant, interval: Duration, now: Instant) -> Instant {
+    let mut next = previous + interval;
+    while next <= now {
+        next += interval;
+    }
+    next
 }
 
 fn handle_terminal_focus_event(
@@ -956,15 +999,14 @@ mod tests {
     fn terminal_resize_updates_renderer_size_without_waiting_for_javascript() {
         let events = NativeEventQueue::default();
         let (renderer_tx, renderer_rx) = crossbeam_channel::bounded(1);
+        let mut observed = Some((80, 24));
 
-        push_resize_event(
+        assert!(observe_terminal_size(
+            &mut observed,
             &events,
-            TerminalResizeEvent {
-                cols: 100,
-                rows: 40,
-            },
+            (100, 40),
             Some(&renderer_tx),
-        );
+        ));
 
         assert!(matches!(
             renderer_rx
@@ -982,6 +1024,46 @@ mod tests {
                 .as_ref()
                 .map(|event| (event.cols, event.rows)),
             Some((100, 40))
+        );
+    }
+
+    #[test]
+    fn polled_size_then_matching_sigwinch_emits_resize_once() {
+        let events = NativeEventQueue::default();
+        let (renderer_tx, renderer_rx) = crossbeam_channel::bounded(2);
+        let mut observed = Some((80, 24));
+
+        assert!(observe_terminal_size(
+            &mut observed,
+            &events,
+            (100, 40),
+            Some(&renderer_tx),
+        ));
+        assert!(!observe_terminal_size(
+            &mut observed,
+            &events,
+            (100, 40),
+            Some(&renderer_tx),
+        ));
+
+        assert_eq!(events.drain().len(), 1);
+        assert!(renderer_rx.recv().is_ok());
+        assert!(renderer_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn terminal_size_poll_deadline_keeps_its_cadence() {
+        let start = Instant::now();
+        let interval = Duration::from_millis(100);
+        let first_deadline = start + interval;
+
+        assert_eq!(
+            next_poll_deadline(first_deadline, interval, first_deadline),
+            start + Duration::from_millis(200)
+        );
+        assert_eq!(
+            next_poll_deadline(first_deadline, interval, start + Duration::from_millis(350)),
+            start + Duration::from_millis(400)
         );
     }
 

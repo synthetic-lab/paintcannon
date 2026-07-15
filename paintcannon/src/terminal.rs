@@ -233,15 +233,18 @@ pub(crate) fn base64_encode(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn query_terminal_size() -> TerminalSize {
+    try_query_terminal_size().unwrap_or(TerminalSize {
+        cols: 80,
+        rows: 24,
+        pixel_width: 0,
+        pixel_height: 0,
+    })
+}
+
+pub(crate) fn try_query_terminal_size() -> Option<TerminalSize> {
     query_terminal_size_from(io::stdout())
         .or_else(|| query_terminal_size_from(io::stderr()))
         .or_else(|| query_terminal_size_from(io::stdin()))
-        .unwrap_or(TerminalSize {
-            cols: 80,
-            rows: 24,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
 }
 
 #[cfg(unix)]

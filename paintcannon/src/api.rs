@@ -162,6 +162,7 @@ impl PaintCannon {
             alternate_screen.unwrap_or(false),
             capture_mouse.unwrap_or(false),
             capture_ctrl_c.unwrap_or(false),
+            (size.cols, size.rows),
             Some(tx.clone()),
             Arc::clone(&events),
             engine_event_notifier,
