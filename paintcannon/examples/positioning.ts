@@ -66,7 +66,6 @@ stage.appendChild(anchored);
 stage.appendChild(inlineExample);
 
 root.appendChild(pc.createTextNode("Relative, absolute, and z-index positioning. Ctrl-C exits."));
-pc.render();
 
 let nextZ = 5;
 

@@ -63,7 +63,6 @@ let events = 0;
 let lastEvent = "initial";
 
 applyFocusState(pc.hasFocus);
-pc.render();
 
 pc.addEventListener("focus", handleFocusChange);
 pc.addEventListener("blur", handleFocusChange);

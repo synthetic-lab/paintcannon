@@ -87,7 +87,6 @@ pc.addEventListener("keydown", event => {
 
 process.once("exit", cleanupTemporaryFiles);
 input.focus();
-pc.render();
 
 function tick(): void {
   pc.requestAnimationFrame(tick);

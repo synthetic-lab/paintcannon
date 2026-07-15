@@ -49,7 +49,6 @@ root.appendChild(inputField.row);
 root.appendChild(textareaField.row);
 
 inputField.control.focus();
-pc.render();
 
 pc.addEventListener("keydown", event => {
   if (event.key === "Escape" || (event.ctrlKey && event.code === "KeyC")) {
@@ -123,7 +122,6 @@ function handleControlledKey(field: ControlledField, event: KeyboardEvent): bool
   field.input.value = field.value;
   field.input.cursorPosition = field.cursor;
   field.stats.nodeValue = `updates=${field.updates} chars=${Array.from(field.value).length}`;
-  pc.render();
   return true;
 }
 

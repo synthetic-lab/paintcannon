@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 use std::sync::{mpsc::Sender as StdSender, OnceLock};
 use std::time::Instant;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Sender;
 use taffy::{AvailableSpace, NodeId, Size};
-use termprofile::{DetectorSettings, TermProfile};
+use termprofile::TermProfile;
 
 use crate::frame::Frame;
 use crate::image::load_png_image;
@@ -24,8 +24,12 @@ use crate::style::{
     LayoutFlexWrap, LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, ScrollbarColor,
     ScrollbarGutter, TransitionProperty, TransitionSpec,
 };
-use crate::terminal::{copy_text_to_clipboard, query_terminal_size, write_pointer_shape};
+use crate::terminal::{query_terminal_size, write_pointer_shape};
 use crate::transition::{TransitionEvent, TransitionEventType, TransitionState};
+
+mod runtime;
+
+pub(crate) use runtime::{engine_loop, EngineLoopOptions};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct DomId(pub(crate) u32);
@@ -353,43 +357,31 @@ pub(crate) enum EngineCommand {
     MoveTextAreaCursorVertically {
         node: DomId,
         direction: i32,
-        width: usize,
-        height: usize,
         response: Sender<Option<u32>>,
     },
     GetTextAreaCursorVisualPosition {
         node: DomId,
-        width: usize,
-        height: usize,
         response: Sender<Option<(u32, u32)>>,
     },
     GetTextAreaVisualLineRange {
         node: DomId,
         row: u32,
-        width: usize,
-        height: usize,
         response: Sender<Option<(u32, u32)>>,
     },
     SetTextControlCursorAtPoint {
         node: DomId,
         x: u32,
         y: u32,
-        width: usize,
-        height: usize,
         response: Sender<Option<u32>>,
     },
     SetScrollOffset {
         node: DomId,
         scroll_left: u32,
         scroll_top: u32,
-        width: usize,
-        height: usize,
         response: Sender<Option<ArenaScrollMetrics>>,
     },
     GetScrollMetrics {
         node: DomId,
-        width: usize,
-        height: usize,
         response: Sender<Option<ArenaScrollMetrics>>,
     },
     HitTestPoint {
@@ -420,31 +412,18 @@ pub(crate) enum EngineCommand {
         height: usize,
         response: Sender<Option<Frame>>,
     },
-    RenderAsync {
-        width: usize,
-        height: usize,
-        color_profile: TermProfile,
-        synchronized: bool,
-    },
-    RenderStdout {
-        width: usize,
-        height: usize,
-        color_profile: TermProfile,
-        synchronized: bool,
+    FlushFrame {
         response: StdSender<io::Result<()>>,
     },
     DrainTransitionEvents {
         response: Sender<Vec<EngineTransitionEvent>>,
     },
-    HasActiveTransitions {
-        response: Sender<bool>,
+    SetRenderSize {
+        width: usize,
+        height: usize,
     },
-    SetTruecolorEnabled {
-        enabled: bool,
-    },
-    SetTerminalColors {
-        foreground: Background,
-        background: Background,
+    SetFrameRate {
+        fps: f64,
     },
     SetTerminalFocused {
         focused: bool,
@@ -453,6 +432,13 @@ pub(crate) enum EngineCommand {
     Shutdown {
         response: Option<Sender<()>>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Dirtiness {
+    Clean,
+    Paint,
+    Layout,
 }
 
 pub(crate) struct PaintEngine {
@@ -464,7 +450,7 @@ pub(crate) struct PaintEngine {
     node_to_dom: HashMap<NodeId, DomId>,
     parents: HashMap<DomId, DomId>,
     children: HashMap<DomId, Vec<DomId>>,
-    layout_dirty: bool,
+    dirtiness: Dirtiness,
     last_layout_size: Option<(usize, usize)>,
     previous_frame: Option<Frame>,
     current_frame: Option<Frame>,
@@ -492,7 +478,7 @@ impl PaintEngine {
             node_to_dom: HashMap::new(),
             parents: HashMap::new(),
             children: HashMap::new(),
-            layout_dirty: false,
+            dirtiness: Dirtiness::Clean,
             last_layout_size: None,
             previous_frame: None,
             current_frame: None,
@@ -510,9 +496,19 @@ impl PaintEngine {
         }
     }
 
+    fn mark_layout_dirty(&mut self) {
+        self.dirtiness = Dirtiness::Layout;
+    }
+
+    fn mark_paint_dirty(&mut self) {
+        if self.dirtiness == Dirtiness::Clean {
+            self.dirtiness = Dirtiness::Paint;
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn create_element(&mut self, style: DivStyle) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_element(style);
         self.register_node(node)
     }
@@ -560,20 +556,20 @@ impl PaintEngine {
     }
 
     pub(crate) fn create_element_with_id(&mut self, id: DomId, style: DivStyle) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_element(style);
         self.register_node_with_id(id, node)
     }
 
     #[cfg(test)]
     pub(crate) fn create_text(&mut self, text: impl Into<String>) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_text(text);
         self.register_node(node)
     }
 
     pub(crate) fn create_text_with_id(&mut self, id: DomId, text: impl Into<String>) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_text(text);
         self.register_node_with_id(id, node)
     }
@@ -587,7 +583,7 @@ impl PaintEngine {
         cell_width_px: u32,
         cell_height_px: u32,
     ) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node =
             self.arena
                 .create_image(style, width_px, height_px, cell_width_px, cell_height_px);
@@ -600,14 +596,14 @@ impl PaintEngine {
         style: DivStyle,
         value: impl Into<String>,
     ) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_input(style, value);
         self.register_node_with_id(id, node)
     }
 
     #[cfg(test)]
     pub(crate) fn create_textarea(&mut self, style: DivStyle, value: impl Into<String>) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_textarea(style, value);
         self.register_node(node)
     }
@@ -618,7 +614,7 @@ impl PaintEngine {
         style: DivStyle,
         value: impl Into<String>,
     ) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_textarea(style, value);
         self.register_node_with_id(id, node)
     }
@@ -641,7 +637,7 @@ impl PaintEngine {
         }
 
         self.children.entry(parent).or_default().push(child);
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena.append_child(parent_node, child_node);
         true
     }
@@ -678,7 +674,7 @@ impl PaintEngine {
             .position(|id| *id == before)
             .unwrap_or(siblings.len());
         siblings.insert(index, child);
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena
             .insert_child_before(parent_node, child_node, before_node);
         true
@@ -689,7 +685,7 @@ impl PaintEngine {
             return false;
         }
         self.root = Some(root);
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         true
     }
 
@@ -702,7 +698,7 @@ impl PaintEngine {
         style.overflow_y = LayoutOverflow::Hidden;
         self.arena.set_style(node, style);
         self.viewport = Some(viewport);
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         true
     }
 
@@ -783,7 +779,7 @@ impl PaintEngine {
             }
         }
 
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         removed.len()
     }
 
@@ -794,7 +790,7 @@ impl PaintEngine {
 
         if self.root == Some(node) {
             self.root = None;
-            self.layout_dirty = true;
+            self.mark_layout_dirty();
             return true;
         }
 
@@ -808,7 +804,7 @@ impl PaintEngine {
         if let Some(siblings) = self.children.get_mut(&parent) {
             siblings.retain(|id| *id != node);
         }
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         true
     }
 
@@ -875,10 +871,14 @@ impl PaintEngine {
             now,
             transitions_enabled,
         );
-        self.layout_dirty = self.layout_dirty
-            || previous.to_taffy() != style.to_taffy()
+        if previous.to_taffy() != style.to_taffy()
             || previous.white_space != style.white_space
-            || previous.position != style.position;
+            || previous.position != style.position
+        {
+            self.mark_layout_dirty();
+        } else {
+            self.mark_paint_dirty();
+        }
         self.arena.set_style(node, style);
         self.arena
             .set_opacity_transition_active(node, self.transitions.has_active_opacity(node));
@@ -892,24 +892,28 @@ impl PaintEngine {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn set_truecolor_enabled(&mut self, enabled: bool) {
+        if self.truecolor_enabled == enabled {
+            return;
+        }
         self.truecolor_enabled = enabled;
-    }
-
-    pub(crate) fn set_terminal_colors(&mut self, foreground: Background, background: Background) {
-        self.terminal_foreground = foreground;
-        self.terminal_background = background;
+        self.mark_paint_dirty();
     }
 
     pub(crate) fn set_terminal_focused(&mut self, focused: bool) {
+        if self.terminal_focused == focused {
+            return;
+        }
         self.terminal_focused = focused;
+        self.mark_paint_dirty();
     }
 
     pub(crate) fn set_text(&mut self, node: DomId, text: impl Into<String>) -> bool {
         let Some(node) = self.node_for(node) else {
             return false;
         };
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena.set_text(node, text);
         true
     }
@@ -955,7 +959,7 @@ impl PaintEngine {
         let Some(node) = self.node_for(node) else {
             return false;
         };
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena.set_image_pixels_and_cell_size(
             node,
             width_px,
@@ -977,7 +981,7 @@ impl PaintEngine {
             return false;
         };
         let value = value.into();
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena.set_input_value(node, value.clone(), cursor);
         self.arena.set_textarea_value(node, value, cursor);
         true
@@ -989,6 +993,7 @@ impl PaintEngine {
         };
         self.arena.set_input_focused(node, focused);
         self.arena.set_textarea_focused(node, focused);
+        self.mark_paint_dirty();
         true
     }
 
@@ -1003,6 +1008,7 @@ impl PaintEngine {
         let placeholder = placeholder.into();
         self.arena.set_input_placeholder(node, placeholder.clone());
         self.arena.set_textarea_placeholder(node, placeholder);
+        self.mark_paint_dirty();
         true
     }
 
@@ -1015,7 +1021,7 @@ impl PaintEngine {
         let Some(node) = self.node_for(node) else {
             return false;
         };
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena.set_textarea_value(node, value, cursor);
         true
     }
@@ -1025,6 +1031,7 @@ impl PaintEngine {
             return false;
         };
         self.arena.set_textarea_focused(node, focused);
+        self.mark_paint_dirty();
         true
     }
 
@@ -1037,6 +1044,7 @@ impl PaintEngine {
             return false;
         };
         self.arena.set_textarea_placeholder(node, placeholder);
+        self.mark_paint_dirty();
         true
     }
 
@@ -1049,7 +1057,11 @@ impl PaintEngine {
     ) -> Option<u32> {
         let node = self.node_for(node)?;
         self.ensure_layout_for_size(width, height);
-        self.arena.move_textarea_cursor_vertically(node, direction)
+        let cursor = self.arena.move_textarea_cursor_vertically(node, direction);
+        if cursor.is_some() {
+            self.mark_paint_dirty();
+        }
+        cursor
     }
 
     pub(crate) fn textarea_cursor_visual_position_for_size(
@@ -1085,7 +1097,11 @@ impl PaintEngine {
     ) -> Option<u32> {
         let node = self.node_for(node)?;
         self.ensure_layout_for_size(width, height);
-        self.arena.set_text_control_cursor_at_point(node, x, y)
+        let cursor = self.arena.set_text_control_cursor_at_point(node, x, y);
+        if cursor.is_some() {
+            self.mark_paint_dirty();
+        }
+        cursor
     }
 
     pub(crate) fn scroll_metrics(&mut self, node: DomId) -> Option<ArenaScrollMetrics> {
@@ -1109,8 +1125,13 @@ impl PaintEngine {
         scroll_left: u32,
         scroll_top: u32,
     ) -> Option<ArenaScrollMetrics> {
-        self.node_for(node)
-            .and_then(|node| self.arena.set_scroll_offset(node, scroll_left, scroll_top))
+        let metrics = self
+            .node_for(node)
+            .and_then(|node| self.arena.set_scroll_offset(node, scroll_left, scroll_top));
+        if metrics.is_some() {
+            self.mark_paint_dirty();
+        }
+        metrics
     }
 
     pub(crate) fn set_scroll_offset_for_size(
@@ -1125,7 +1146,8 @@ impl PaintEngine {
         self.set_scroll_offset(node, scroll_left, scroll_top)
     }
 
-    pub(crate) fn render_to(
+    #[cfg(test)]
+    pub(crate) fn flush_frame_to(
         &mut self,
         width: usize,
         height: usize,
@@ -1133,8 +1155,41 @@ impl PaintEngine {
         color_profile: TermProfile,
         synchronized: bool,
     ) -> io::Result<()> {
+        self.flush_frame_to_at(
+            width,
+            height,
+            out,
+            color_profile,
+            synchronized,
+            Instant::now(),
+        )
+    }
+
+    fn flush_frame_to_at(
+        &mut self,
+        width: usize,
+        height: usize,
+        out: &mut impl Write,
+        color_profile: TermProfile,
+        synchronized: bool,
+        now: Instant,
+    ) -> io::Result<()> {
+        self.write_frame_to_at(width, height, out, color_profile, synchronized, now)?;
+        self.dirtiness = Dirtiness::Clean;
+        Ok(())
+    }
+
+    fn write_frame_to_at(
+        &mut self,
+        width: usize,
+        height: usize,
+        out: &mut impl Write,
+        color_profile: TermProfile,
+        synchronized: bool,
+        now: Instant,
+    ) -> io::Result<()> {
         let total_start = Instant::now();
-        let Some(frame) = self.render_frame(width, height) else {
+        let Some(frame) = self.render_frame_at(width, height, now) else {
             return Ok(());
         };
         let diff_start = Instant::now();
@@ -1154,13 +1209,50 @@ impl PaintEngine {
         out.flush()?;
         profile_log("stdout_flush", flush_start.elapsed(), &[]);
         profile_log(
-            "render_to_total",
+            "frame_flush_total",
             total_start.elapsed(),
             &[("width", width.to_string()), ("height", height.to_string())],
         );
         Ok(())
     }
 
+    #[cfg(test)]
+    fn flush_if_dirty_to(
+        &mut self,
+        width: usize,
+        height: usize,
+        out: &mut impl Write,
+        color_profile: TermProfile,
+        synchronized: bool,
+        now: Instant,
+    ) -> io::Result<bool> {
+        if !self.prepare_frame_tick() {
+            return Ok(false);
+        }
+        self.flush_dirty_frame_to(width, height, out, color_profile, synchronized, now)
+    }
+
+    fn prepare_frame_tick(&mut self) -> bool {
+        if self.transitions.has_active() {
+            self.mark_paint_dirty();
+        }
+        self.dirtiness != Dirtiness::Clean
+    }
+
+    fn flush_dirty_frame_to(
+        &mut self,
+        width: usize,
+        height: usize,
+        out: &mut impl Write,
+        color_profile: TermProfile,
+        synchronized: bool,
+        now: Instant,
+    ) -> io::Result<bool> {
+        self.flush_frame_to_at(width, height, out, color_profile, synchronized, now)?;
+        Ok(true)
+    }
+
+    #[cfg(test)]
     pub(crate) fn render_frame(&mut self, width: usize, height: usize) -> Option<Frame> {
         self.render_frame_at(width, height, Instant::now())
     }
@@ -1521,6 +1613,7 @@ impl PaintEngine {
 
     pub(crate) fn invalidate_frame(&mut self) {
         self.previous_frame = None;
+        self.mark_paint_dirty();
     }
 
     pub(crate) fn drain_transition_events(&mut self) -> Vec<EngineTransitionEvent> {
@@ -1531,13 +1624,18 @@ impl PaintEngine {
             .collect()
     }
 
+    fn has_pending_transition_events(&self) -> bool {
+        self.transitions.has_events()
+    }
+
+    #[cfg(test)]
     pub(crate) fn has_active_transitions(&self) -> bool {
         self.transitions.has_active()
     }
 
     fn ensure_layout(&mut self, width: usize, height: usize, root: NodeId) {
         let size = (width, height);
-        if !self.layout_dirty && self.last_layout_size == Some(size) {
+        if self.dirtiness != Dirtiness::Layout && self.last_layout_size == Some(size) {
             return;
         }
 
@@ -1571,7 +1669,7 @@ impl PaintEngine {
             style.overflow_y = overflow_y;
             self.arena.set_style(viewport, style);
         }
-        self.layout_dirty = false;
+        self.dirtiness = Dirtiness::Paint;
         self.last_layout_size = Some(size);
     }
 
@@ -1940,315 +2038,6 @@ fn reset_style_property(style: &mut DivStyle, reset: StyleReset) {
     }
 }
 
-pub(crate) fn engine_loop(rx: Receiver<EngineCommand>) {
-    let mut engine = PaintEngine::new();
-
-    while let Ok(command) = rx.recv() {
-        if !apply_command(&mut engine, command) {
-            break;
-        }
-    }
-}
-
-fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
-    match command {
-        EngineCommand::Batch { commands } => {
-            let start = Instant::now();
-            let command_count = commands.len();
-            engine.reserve_for_batch(&commands);
-            let mut pending_destroys = Vec::new();
-            for command in commands {
-                if let EngineCommand::DestroyNode { node } = command {
-                    pending_destroys.push(node);
-                    continue;
-                }
-                if !pending_destroys.is_empty() {
-                    engine.destroy_nodes(pending_destroys.drain(..));
-                }
-                if !apply_command(engine, command) {
-                    profile_log(
-                        "batch_apply",
-                        start.elapsed(),
-                        &[
-                            ("commands", command_count.to_string()),
-                            ("shutdown", true.to_string()),
-                        ],
-                    );
-                    return false;
-                }
-            }
-            if !pending_destroys.is_empty() {
-                engine.destroy_nodes(pending_destroys);
-            }
-            profile_log(
-                "batch_apply",
-                start.elapsed(),
-                &[
-                    ("commands", command_count.to_string()),
-                    ("shutdown", false.to_string()),
-                ],
-            );
-        }
-        #[cfg(test)]
-        EngineCommand::CreateElement { style, response } => {
-            let _ = response.send(engine.create_element(style));
-        }
-        EngineCommand::CreateElementWithId { id, style } => {
-            engine.create_element_with_id(id, style);
-        }
-        #[cfg(test)]
-        EngineCommand::CreateText { text, response } => {
-            let _ = response.send(engine.create_text(text));
-        }
-        EngineCommand::CreateTextWithId { id, text } => {
-            engine.create_text_with_id(id, text);
-        }
-        EngineCommand::CreateImageWithId {
-            id,
-            style,
-            width_px,
-            height_px,
-            cell_width_px,
-            cell_height_px,
-        } => {
-            engine.create_image_with_id(
-                id,
-                style,
-                width_px,
-                height_px,
-                cell_width_px,
-                cell_height_px,
-            );
-        }
-        EngineCommand::CreateInputWithId { id, style, value } => {
-            engine.create_input_with_id(id, style, value);
-        }
-        EngineCommand::CreateTextAreaWithId { id, style, value } => {
-            engine.create_textarea_with_id(id, style, value);
-        }
-        EngineCommand::AppendChild { parent, child } => {
-            engine.append_child(parent, child);
-        }
-        EngineCommand::InsertChildBefore {
-            parent,
-            child,
-            before,
-        } => {
-            engine.insert_child_before(parent, child, before);
-        }
-        EngineCommand::SetRoot { root } => {
-            engine.set_root(root);
-        }
-        EngineCommand::SetViewport { viewport } => {
-            engine.set_viewport(viewport);
-        }
-        EngineCommand::DestroyNode { node } => {
-            engine.destroy_node(node);
-        }
-        EngineCommand::DetachNode { node } => {
-            engine.detach_node(node);
-        }
-        EngineCommand::MutateStyle { node, mutation } => {
-            engine.mutate_style(node, mutation);
-        }
-        EngineCommand::SetTransition { node, transitions } => {
-            engine.set_transition(node, transitions);
-        }
-        EngineCommand::SetText { node, text } => {
-            engine.set_text(node, text);
-        }
-        EngineCommand::SetImageSource { node, src } => {
-            engine.set_image_source(node, src);
-        }
-        EngineCommand::SetInputValue {
-            node,
-            value,
-            cursor,
-        } => {
-            engine.set_input_value(node, value, cursor);
-        }
-        EngineCommand::SetInputFocused { node, focused } => {
-            engine.set_input_focused(node, focused);
-        }
-        EngineCommand::SetInputPlaceholder { node, placeholder } => {
-            engine.set_input_placeholder(node, placeholder);
-        }
-        EngineCommand::SetTextAreaValue {
-            node,
-            value,
-            cursor,
-        } => {
-            engine.set_textarea_value(node, value, cursor);
-        }
-        EngineCommand::SetTextAreaFocused { node, focused } => {
-            engine.set_textarea_focused(node, focused);
-        }
-        EngineCommand::SetTextAreaPlaceholder { node, placeholder } => {
-            engine.set_textarea_placeholder(node, placeholder);
-        }
-        EngineCommand::MoveTextAreaCursorVertically {
-            node,
-            direction,
-            width,
-            height,
-            response,
-        } => {
-            let _ = response.send(
-                engine.move_textarea_cursor_vertically_for_size(node, direction, width, height),
-            );
-        }
-        EngineCommand::GetTextAreaCursorVisualPosition {
-            node,
-            width,
-            height,
-            response,
-        } => {
-            let _ =
-                response.send(engine.textarea_cursor_visual_position_for_size(node, width, height));
-        }
-        EngineCommand::GetTextAreaVisualLineRange {
-            node,
-            row,
-            width,
-            height,
-            response,
-        } => {
-            let _ =
-                response.send(engine.textarea_visual_line_range_for_size(node, row, width, height));
-        }
-        EngineCommand::SetTextControlCursorAtPoint {
-            node,
-            x,
-            y,
-            width,
-            height,
-            response,
-        } => {
-            let _ = response
-                .send(engine.set_text_control_cursor_at_point_for_size(node, x, y, width, height));
-        }
-        EngineCommand::SetScrollOffset {
-            node,
-            scroll_left,
-            scroll_top,
-            width,
-            height,
-            response,
-        } => {
-            let _ = response.send(engine.set_scroll_offset_for_size(
-                node,
-                scroll_left,
-                scroll_top,
-                width,
-                height,
-            ));
-        }
-        EngineCommand::GetScrollMetrics {
-            node,
-            width,
-            height,
-            response,
-        } => {
-            let _ = response.send(engine.scroll_metrics_for_size(node, width, height));
-        }
-        EngineCommand::HitTestPoint { x, y, response } => {
-            let _ = response.send(engine.target_at(x, y));
-        }
-        EngineCommand::HitTestClick { click, response } => {
-            let _ = response.send(engine.click_event_for(click));
-        }
-        EngineCommand::HitTestScrollbar { x, y, response } => {
-            let _ = response.send(engine.scrollbar_hit_at(x, y));
-        }
-        EngineCommand::HandleSelection { event, response } => {
-            if scrollbar_suppresses_selection(engine, event) {
-                let _ = response.send(SelectionAction::None);
-                return true;
-            }
-            let action = engine.handle_selection_event(event);
-            if let SelectionAction::CopyToClipboard(text) = &action {
-                copy_text_to_clipboard(text);
-            }
-            if matches!(
-                &action,
-                SelectionAction::Redraw | SelectionAction::CopyToClipboard(_)
-            ) {
-                let size = query_terminal_size();
-                let color_profile = TermProfile::detect(&io::stdout(), DetectorSettings::default());
-                let mut out = io::stdout().lock();
-                let _ = engine.render_to(
-                    size.cols as usize,
-                    size.rows as usize,
-                    &mut out,
-                    color_profile,
-                    io::stdout().is_terminal(),
-                );
-            }
-            let _ = response.send(action);
-        }
-        EngineCommand::HandlePointerMove { x, y } => {
-            engine.handle_pointer_move(x, y);
-        }
-        #[cfg(test)]
-        EngineCommand::RenderFrame {
-            width,
-            height,
-            response,
-        } => {
-            let _ = response.send(engine.render_frame(width, height));
-        }
-        EngineCommand::RenderAsync {
-            width,
-            height,
-            color_profile,
-            synchronized,
-        } => {
-            let mut out = io::stdout().lock();
-            let _ = engine.render_to(width, height, &mut out, color_profile, synchronized);
-        }
-        EngineCommand::RenderStdout {
-            width,
-            height,
-            color_profile,
-            synchronized,
-            response,
-        } => {
-            let result = {
-                let mut out = io::stdout().lock();
-                engine.render_to(width, height, &mut out, color_profile, synchronized)
-            };
-            let _ = response.send(result);
-        }
-        EngineCommand::DrainTransitionEvents { response } => {
-            let _ = response.send(engine.drain_transition_events());
-        }
-        EngineCommand::HasActiveTransitions { response } => {
-            let _ = response.send(engine.has_active_transitions());
-        }
-        EngineCommand::SetTruecolorEnabled { enabled } => {
-            engine.set_truecolor_enabled(enabled);
-        }
-        EngineCommand::SetTerminalColors {
-            foreground,
-            background,
-        } => {
-            engine.set_terminal_colors(foreground, background);
-        }
-        EngineCommand::SetTerminalFocused { focused } => {
-            engine.set_terminal_focused(focused);
-        }
-        EngineCommand::InvalidateFrame => engine.invalidate_frame(),
-        EngineCommand::Shutdown { response } => {
-            if let Some(response) = response {
-                let _ = response.send(());
-            }
-            return false;
-        }
-    }
-
-    true
-}
-
 fn scrollbar_suppresses_selection(engine: &mut PaintEngine, event: SelectionMouseEvent) -> bool {
     match event.event_type {
         SelectionMouseEventType::Down if engine.scrollbar_hit_at(event.x, event.y).is_some() => {
@@ -2300,1494 +2089,4 @@ fn ns_to_ms(ns: u128) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crossbeam_channel::bounded;
-    use std::thread;
-
-    use crate::selection::{SelectionMouseEvent, SelectionMouseEventType};
-    use crate::style::{
-        Background, CssDimension, CssFontWeight, LayoutFlexDirection, LayoutOverflow,
-        TransitionProperty, TransitionSpec,
-    };
-    use crate::transition::TransitionEventType;
-
-    fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
-        let mut style = DivStyle::default();
-        style.width = width;
-        style.height = height;
-        style
-    }
-
-    fn scroll_engine() -> (PaintEngine, DomId) {
-        let mut engine = PaintEngine::new();
-        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(1.0));
-        viewport_style.overflow_y = LayoutOverflow::Scroll;
-        let viewport = engine.create_element(viewport_style);
-        let mut content_style = block_style(CssDimension::Length(5.0), CssDimension::Auto);
-        content_style.display = crate::style::LayoutDisplay::Flex;
-        content_style.flex_direction = LayoutFlexDirection::Column;
-        let content = engine.create_element(content_style);
-        for text in ["aaaaa", "bbbbb"] {
-            let row =
-                engine.create_element(block_style(CssDimension::Length(5.0), CssDimension::Auto));
-            let text = engine.create_text(text);
-            engine.append_child(row, text);
-            engine.append_child(content, row);
-        }
-        engine.append_child(viewport, content);
-        engine.set_root(viewport);
-        (engine, viewport)
-    }
-
-    #[test]
-    fn scroll_offset_render_does_not_recompute_layout() {
-        let (mut engine, viewport) = scroll_engine();
-        let first = engine.render_frame(5, 1).unwrap();
-        assert_eq!(first.cell(0, 0).unwrap().character, 'a');
-        let passes = engine.layout_passes();
-
-        engine.set_scroll_offset(viewport, 0, 1);
-        let second = engine.render_frame(5, 1).unwrap();
-
-        assert_eq!(engine.layout_passes(), passes);
-        assert_eq!(second.cell(0, 0).unwrap().character, 'b');
-    }
-
-    #[test]
-    fn render_clamps_scroll_offset_after_viewport_grows() {
-        let mut engine = PaintEngine::new();
-        let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Percent(1.0));
-        viewport_style.overflow_y = LayoutOverflow::Scroll;
-        let viewport = engine.create_element(viewport_style);
-        let mut content_style = block_style(CssDimension::Length(5.0), CssDimension::Auto);
-        content_style.display = crate::style::LayoutDisplay::Flex;
-        content_style.flex_direction = LayoutFlexDirection::Column;
-        let content = engine.create_element(content_style);
-        for index in 0..10 {
-            let row =
-                engine.create_element(block_style(CssDimension::Length(5.0), CssDimension::Auto));
-            let text = engine.create_text(format!("{index}{index}{index}{index}{index}"));
-            engine.append_child(row, text);
-            engine.append_child(content, row);
-        }
-        engine.append_child(viewport, content);
-        engine.set_root(viewport);
-
-        engine.render_frame(5, 3).unwrap();
-        engine.set_scroll_offset_for_size(viewport, 0, 100, 5, 3);
-        let small = engine.render_frame(5, 3).unwrap();
-        assert_eq!(small.cell(0, 0).unwrap().character, '7');
-
-        let large = engine.render_frame(5, 8).unwrap();
-        assert_eq!(large.cell(0, 0).unwrap().character, '2');
-        assert_eq!(large.cell(0, 7).unwrap().character, '9');
-    }
-
-    #[test]
-    fn scroll_metrics_query_before_first_render_computes_layout() {
-        let mut engine = PaintEngine::new();
-
-        let mut root_style = block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
-        root_style.display = crate::style::LayoutDisplay::Flex;
-        root_style.flex_direction = LayoutFlexDirection::Column;
-        let root = engine.create_element(root_style);
-
-        let header = engine.create_element(block_style(
-            CssDimension::Percent(1.0),
-            CssDimension::Length(2.0),
-        ));
-
-        let mut body_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
-        body_style.display = crate::style::LayoutDisplay::Flex;
-        body_style.flex_direction = LayoutFlexDirection::Row;
-        body_style.flex_grow = 1.0;
-        body_style.flex_shrink = 1.0;
-        body_style.flex_basis = CssDimension::Length(0.0);
-        let body = engine.create_element(body_style);
-
-        let viewport = engine.create_element(block_style(
-            CssDimension::Percent(0.8),
-            CssDimension::Percent(1.0),
-        ));
-        let rail = engine.create_element(block_style(
-            CssDimension::Percent(0.2),
-            CssDimension::Percent(1.0),
-        ));
-        let scrollbar = engine.create_text("#");
-        engine.append_child(rail, scrollbar);
-
-        engine.append_child(body, viewport);
-        engine.append_child(body, rail);
-        engine.append_child(root, header);
-        engine.append_child(root, body);
-        engine.set_root(root);
-
-        let rail_metrics = engine.scroll_metrics_for_size(rail, 80, 24).unwrap();
-        let viewport_metrics = engine.scroll_metrics_for_size(viewport, 80, 24).unwrap();
-
-        assert_eq!(rail_metrics.client_height, 22);
-        assert_eq!(viewport_metrics.client_height, 22);
-        assert_eq!(engine.layout_passes(), 1);
-    }
-
-    #[test]
-    fn scrollbar_hit_testing_uses_rendered_regions_and_suppresses_selection() {
-        let mut engine = PaintEngine::new();
-        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
-        viewport_style.overflow_x = LayoutOverflow::Scroll;
-        viewport_style.overflow_y = LayoutOverflow::Scroll;
-        let viewport = engine.create_element(viewport_style);
-        let child = engine.create_element(block_style(
-            CssDimension::Length(10.0),
-            CssDimension::Length(5.0),
-        ));
-        engine.append_child(viewport, child);
-        engine.set_root(viewport);
-
-        engine.render_frame(6, 3).unwrap();
-
-        let hit = engine.scrollbar_hit_at(5, 1).unwrap();
-        assert_eq!(hit.target_id, viewport);
-        assert_eq!(hit.axis, ScrollbarAxis::Vertical);
-
-        assert!(scrollbar_suppresses_selection(
-            &mut engine,
-            SelectionMouseEvent {
-                event_type: SelectionMouseEventType::Down,
-                x: 5,
-                y: 1,
-                button: 0,
-            },
-        ));
-        assert!(scrollbar_suppresses_selection(
-            &mut engine,
-            SelectionMouseEvent {
-                event_type: SelectionMouseEventType::Drag,
-                x: 5,
-                y: 0,
-                button: 0,
-            },
-        ));
-        assert!(scrollbar_suppresses_selection(
-            &mut engine,
-            SelectionMouseEvent {
-                event_type: SelectionMouseEventType::Up,
-                x: 5,
-                y: 0,
-                button: 0,
-            },
-        ));
-    }
-
-    #[test]
-    fn viewport_automatically_enables_scrollbars_for_descendant_overflow() {
-        let mut engine = PaintEngine::new();
-        let viewport = engine.create_element(block_style(
-            CssDimension::Percent(1.0),
-            CssDimension::Percent(1.0),
-        ));
-        let root = engine.create_element(block_style(
-            CssDimension::Percent(1.0),
-            CssDimension::Percent(1.0),
-        ));
-        let content = engine.create_element(block_style(
-            CssDimension::Length(20.0),
-            CssDimension::Length(10.0),
-        ));
-        assert!(engine.append_child(root, content));
-        assert!(engine.append_child(viewport, root));
-        assert!(engine.set_viewport(viewport));
-        assert!(engine.set_root(viewport));
-
-        engine.render_frame(10, 4).unwrap();
-
-        let metrics = engine.scroll_metrics(viewport).unwrap();
-        assert_eq!(metrics.client_width, 9);
-        assert_eq!(metrics.client_height, 3);
-        assert_eq!(metrics.scroll_width, 20);
-        assert_eq!(metrics.scroll_height, 10);
-        let vertical = engine.scrollbar_hit_at(9, 1).unwrap();
-        assert_eq!(vertical.target_id, viewport);
-        assert_eq!(vertical.axis, ScrollbarAxis::Vertical);
-        let horizontal = engine.scrollbar_hit_at(2, 3).unwrap();
-        assert_eq!(horizontal.target_id, viewport);
-        assert_eq!(horizontal.axis, ScrollbarAxis::Horizontal);
-
-        let layout_passes = engine.layout_passes();
-        let thumb_color = Background::Rgb(56, 189, 248);
-        assert!(engine.mutate_style(
-            root,
-            StyleMutation::ScrollbarColor(ScrollbarColor::Colors {
-                thumb: thumb_color,
-                track: Background::Rgb(17, 24, 39),
-            }),
-        ));
-        let recolored = engine.render_frame(10, 4).unwrap();
-        assert_eq!(engine.layout_passes(), layout_passes);
-        assert_eq!(recolored.cell(9, 0).unwrap().background, thumb_color);
-
-        engine.set_scroll_offset(viewport, 8, 6).unwrap();
-        engine.render_frame(30, 12).unwrap();
-        let resized = engine.scroll_metrics(viewport).unwrap();
-        assert_eq!(resized.scroll_left, 0);
-        assert_eq!(resized.scroll_top, 0);
-        assert!(engine.scrollbar_hit_at(29, 1).is_none());
-        assert!(engine.scrollbar_hit_at(1, 11).is_none());
-    }
-
-    #[test]
-    fn viewport_does_not_render_scrollbars_when_content_fits() {
-        let mut engine = PaintEngine::new();
-        let viewport = engine.create_element(block_style(
-            CssDimension::Percent(1.0),
-            CssDimension::Percent(1.0),
-        ));
-        let content = engine.create_element(block_style(
-            CssDimension::Percent(1.0),
-            CssDimension::Percent(1.0),
-        ));
-        assert!(engine.append_child(viewport, content));
-        assert!(engine.set_viewport(viewport));
-        assert!(engine.set_root(viewport));
-
-        engine.render_frame(10, 4).unwrap();
-
-        assert!(engine.scrollbar_hit_at(9, 1).is_none());
-        let viewport_node = engine.node_for(viewport).unwrap();
-        let style = engine.arena.style(viewport_node);
-        assert!(style.overflow_x == LayoutOverflow::Hidden);
-        assert!(style.overflow_y == LayoutOverflow::Hidden);
-    }
-
-    #[test]
-    fn viewport_frame_is_unchanged_when_scrolling_past_the_end() {
-        let mut engine = PaintEngine::new();
-        let viewport = engine.create_element(block_style(
-            CssDimension::Percent(1.0),
-            CssDimension::Percent(1.0),
-        ));
-        let root = engine.create_element(block_style(
-            CssDimension::Percent(1.0),
-            CssDimension::Percent(1.0),
-        ));
-        let mut content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
-        content_style.display = crate::style::LayoutDisplay::Flex;
-        content_style.flex_direction = LayoutFlexDirection::Column;
-        let content = engine.create_element(content_style);
-        for index in 0..80 {
-            let row = engine.create_element(block_style(
-                CssDimension::Percent(1.0),
-                CssDimension::Length(1.0),
-            ));
-            let text = engine.create_text(format!("{index:02}"));
-            assert!(engine.append_child(row, text));
-            assert!(engine.append_child(content, row));
-        }
-        assert!(engine.append_child(root, content));
-        assert!(engine.append_child(viewport, root));
-        assert!(engine.set_viewport(viewport));
-        assert!(engine.set_root(viewport));
-
-        engine.render_frame(10, 4).unwrap();
-        let metrics = engine.scroll_metrics(viewport).unwrap();
-        assert_eq!(metrics.client_height, 4);
-        assert_eq!(metrics.scroll_height, 80);
-        let max_top = metrics.scroll_height - metrics.client_height;
-        let at_max_metrics = engine.set_scroll_offset(viewport, 0, max_top).unwrap();
-        let at_max = engine.render_frame(10, 4).unwrap();
-
-        let past_end_metrics = engine
-            .set_scroll_offset(viewport, 0, max_top.saturating_add(3))
-            .unwrap();
-        let past_end = engine.render_frame(10, 4).unwrap();
-
-        assert_eq!(at_max_metrics, past_end_metrics);
-        for y in 0..at_max.height() {
-            for x in 0..at_max.width() {
-                assert_eq!(at_max.cell(x, y), past_end.cell(x, y));
-            }
-        }
-        assert!((0..past_end.height())
-            .flat_map(|y| (0..past_end.width()).map(move |x| (x, y)))
-            .any(|(x, y)| past_end
-                .cell(x, y)
-                .is_some_and(|cell| cell.character != ' ')));
-    }
-
-    #[test]
-    fn selection_in_later_scroll_pane_does_not_capture_hidden_text_from_earlier_pane() {
-        let mut engine = PaintEngine::new();
-        let mut root_style = block_style(CssDimension::Length(20.0), CssDimension::Length(2.0));
-        root_style.display = crate::style::LayoutDisplay::Flex;
-        root_style.flex_direction = LayoutFlexDirection::Row;
-        let root = engine.create_element(root_style);
-
-        let mut left_style = block_style(CssDimension::Length(10.0), CssDimension::Length(2.0));
-        left_style.overflow_y = LayoutOverflow::Scroll;
-        let left = engine.create_element(left_style);
-        let mut left_content_style = block_style(CssDimension::Length(10.0), CssDimension::Auto);
-        left_content_style.display = crate::style::LayoutDisplay::Flex;
-        left_content_style.flex_direction = LayoutFlexDirection::Column;
-        let left_content = engine.create_element(left_content_style);
-        for index in 0..8 {
-            let row = engine.create_element(block_style(
-                CssDimension::Length(10.0),
-                CssDimension::Length(1.0),
-            ));
-            let text = engine.create_text(format!("left-{index}"));
-            engine.append_child(row, text);
-            engine.append_child(left_content, row);
-        }
-        engine.append_child(left, left_content);
-
-        let mut right_style = block_style(CssDimension::Length(10.0), CssDimension::Length(2.0));
-        right_style.overflow_y = LayoutOverflow::Scroll;
-        let right = engine.create_element(right_style);
-        let mut right_content_style = block_style(CssDimension::Length(10.0), CssDimension::Auto);
-        right_content_style.display = crate::style::LayoutDisplay::Flex;
-        right_content_style.flex_direction = LayoutFlexDirection::Column;
-        let right_content = engine.create_element(right_content_style);
-        for text in ["RIGHT-0", "RIGHT-1"] {
-            let row = engine.create_element(block_style(
-                CssDimension::Length(10.0),
-                CssDimension::Length(1.0),
-            ));
-            let text = engine.create_text(text);
-            engine.append_child(row, text);
-            engine.append_child(right_content, row);
-        }
-        engine.append_child(right, right_content);
-
-        engine.append_child(root, left);
-        engine.append_child(root, right);
-        engine.set_root(root);
-
-        engine.render_frame(20, 2).unwrap();
-        engine.handle_selection_event(SelectionMouseEvent {
-            event_type: SelectionMouseEventType::Down,
-            x: 10,
-            y: 0,
-            button: 0,
-        });
-        engine.handle_selection_event(SelectionMouseEvent {
-            event_type: SelectionMouseEventType::Drag,
-            x: 16,
-            y: 0,
-            button: 0,
-        });
-        engine.render_frame(20, 2).unwrap();
-
-        let action = engine.handle_selection_event(SelectionMouseEvent {
-            event_type: SelectionMouseEventType::Up,
-            x: 16,
-            y: 0,
-            button: 0,
-        });
-
-        assert_eq!(
-            action,
-            SelectionAction::CopyToClipboard("RIGHT-0".to_string())
-        );
-    }
-
-    #[test]
-    fn selection_drag_below_scroll_pane_scrolls_pane_before_selecting_outside() {
-        let mut engine = PaintEngine::new();
-        let mut root_style = block_style(CssDimension::Length(12.0), CssDimension::Length(4.0));
-        root_style.display = crate::style::LayoutDisplay::Flex;
-        root_style.flex_direction = LayoutFlexDirection::Column;
-        let root = engine.create_element(root_style);
-
-        let mut viewport_style = block_style(CssDimension::Length(12.0), CssDimension::Length(2.0));
-        viewport_style.overflow_y = LayoutOverflow::Scroll;
-        let viewport = engine.create_element(viewport_style);
-        let mut content_style = block_style(CssDimension::Length(12.0), CssDimension::Auto);
-        content_style.display = crate::style::LayoutDisplay::Flex;
-        content_style.flex_direction = LayoutFlexDirection::Column;
-        let content = engine.create_element(content_style);
-        for index in 0..6 {
-            let row = engine.create_element(block_style(
-                CssDimension::Length(12.0),
-                CssDimension::Length(1.0),
-            ));
-            let text = engine.create_text(format!("RIGHT-{index}"));
-            engine.append_child(row, text);
-            engine.append_child(content, row);
-        }
-        engine.append_child(viewport, content);
-
-        let footer = engine.create_element(block_style(
-            CssDimension::Length(12.0),
-            CssDimension::Length(2.0),
-        ));
-        let footer_text = engine.create_text("FOOTER");
-        engine.append_child(footer, footer_text);
-
-        engine.append_child(root, viewport);
-        engine.append_child(root, footer);
-        engine.set_root(root);
-
-        engine.render_frame(12, 4).unwrap();
-        engine.handle_selection_event(SelectionMouseEvent {
-            event_type: SelectionMouseEventType::Down,
-            x: 0,
-            y: 0,
-            button: 0,
-        });
-        engine.handle_selection_event(SelectionMouseEvent {
-            event_type: SelectionMouseEventType::Drag,
-            x: 6,
-            y: 2,
-            button: 0,
-        });
-        let action = engine.handle_selection_event(SelectionMouseEvent {
-            event_type: SelectionMouseEventType::Up,
-            x: 6,
-            y: 2,
-            button: 0,
-        });
-
-        assert_eq!(
-            action,
-            SelectionAction::CopyToClipboard(
-                ["RIGHT-0", "RIGHT-1", "RIGHT-2", "RIGHT-3"].join("\n")
-            )
-        );
-    }
-
-    #[test]
-    fn selection_drag_right_of_scroll_pane_scrolls_pane_before_selecting_outside() {
-        let mut engine = PaintEngine::new();
-        let mut root_style = block_style(CssDimension::Length(12.0), CssDimension::Length(2.0));
-        root_style.display = crate::style::LayoutDisplay::Flex;
-        root_style.flex_direction = LayoutFlexDirection::Row;
-        let root = engine.create_element(root_style);
-
-        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(2.0));
-        viewport_style.overflow_x = LayoutOverflow::Scroll;
-        let viewport = engine.create_element(viewport_style);
-        let content = engine.create_element(block_style(
-            CssDimension::Length(12.0),
-            CssDimension::Length(1.0),
-        ));
-        let content_text = engine.create_text("ABCDEFGHIJKL");
-        engine.append_child(content, content_text);
-        engine.append_child(viewport, content);
-
-        let sibling = engine.create_element(block_style(
-            CssDimension::Length(6.0),
-            CssDimension::Length(2.0),
-        ));
-        let sibling_text = engine.create_text("OUT");
-        engine.append_child(sibling, sibling_text);
-
-        engine.append_child(root, viewport);
-        engine.append_child(root, sibling);
-        engine.set_root(root);
-
-        engine.render_frame(12, 2).unwrap();
-        engine.handle_selection_event(SelectionMouseEvent {
-            event_type: SelectionMouseEventType::Down,
-            x: 0,
-            y: 0,
-            button: 0,
-        });
-        engine.handle_selection_event(SelectionMouseEvent {
-            event_type: SelectionMouseEventType::Drag,
-            x: 8,
-            y: 0,
-            button: 0,
-        });
-        let action = engine.handle_selection_event(SelectionMouseEvent {
-            event_type: SelectionMouseEventType::Up,
-            x: 8,
-            y: 0,
-            button: 0,
-        });
-
-        assert_eq!(
-            action,
-            SelectionAction::CopyToClipboard("ABCDEFGHIJKL".to_string())
-        );
-    }
-
-    #[test]
-    fn percent_scroll_demo_keeps_widths_after_scroll_text_updates() {
-        let mut engine = PaintEngine::new();
-
-        let mut root_style = block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
-        root_style.display = crate::style::LayoutDisplay::Flex;
-        root_style.flex_direction = LayoutFlexDirection::Column;
-        root_style.background = Background::Black;
-        let root = engine.create_element(root_style);
-
-        let mut header_style = block_style(CssDimension::Percent(1.0), CssDimension::Percent(0.1));
-        header_style.background = Background::Cyan;
-        let header = engine.create_element(header_style);
-        let status = engine.create_text(
-            "Percent scroll demo. Resize the terminal; wheel over the panel. Ctrl-C exits.",
-        );
-        engine.append_child(header, status);
-
-        let mut body_style = block_style(CssDimension::Percent(1.0), CssDimension::Percent(0.9));
-        body_style.display = crate::style::LayoutDisplay::Flex;
-        body_style.flex_direction = LayoutFlexDirection::Row;
-        let body = engine.create_element(body_style);
-
-        let mut viewport_style =
-            block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
-        viewport_style.overflow_y = LayoutOverflow::Scroll;
-        viewport_style.overflow_x = LayoutOverflow::Hidden;
-        viewport_style.background = Background::Blue;
-        let viewport = engine.create_element(viewport_style);
-
-        let mut content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
-        content_style.display = crate::style::LayoutDisplay::Flex;
-        content_style.flex_direction = LayoutFlexDirection::Column;
-        let content = engine.create_element(content_style);
-        let mut row_ids = Vec::new();
-        for index in 1..=200 {
-            let row =
-                engine.create_element(block_style(CssDimension::Percent(1.0), CssDimension::Auto));
-            row_ids.push(row);
-            let text = engine.create_text(format!(
-                "percent row {index:02} - resize changes visible content"
-            ));
-            engine.append_child(row, text);
-            engine.append_child(content, row);
-        }
-
-        engine.append_child(viewport, content);
-        engine.append_child(body, viewport);
-        engine.append_child(root, header);
-        engine.append_child(root, body);
-        engine.set_root(root);
-
-        engine.render_frame(80, 24).unwrap();
-        let viewport_node = engine.node_for(viewport).unwrap();
-        let first_row_node = engine.node_for(row_ids[0]).unwrap();
-        let fourth_row_node = engine.node_for(row_ids[3]).unwrap();
-        let before_viewport = engine.arena.layout(viewport_node);
-        assert_eq!(before_viewport.size.width, 80.0);
-        assert_eq!(engine.arena.layout(first_row_node).size.width, 79.0);
-        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 79.0);
-
-        let metrics = engine
-            .set_scroll_offset_for_size(viewport, 0, 3, 80, 24)
-            .unwrap();
-        engine.set_text(
-            status,
-            format!(
-                "scrollTop={}/{}, clientHeight={}",
-                metrics.scroll_top, metrics.scroll_height, metrics.client_height
-            ),
-        );
-
-        let frame = engine.render_frame(80, 24).unwrap();
-        let after_viewport = engine.arena.layout(viewport_node);
-
-        assert_eq!(after_viewport.size.width, 80.0);
-        assert_eq!(engine.arena.layout(fourth_row_node).size.width, 79.0);
-        let visible_row_prefix: String = (0..11)
-            .map(|x| frame.cell(x, 2).unwrap().character)
-            .collect();
-        assert_eq!(visible_row_prefix, "percent row");
-    }
-
-    #[test]
-    fn text_mutation_recomputes_layout() {
-        let mut engine = PaintEngine::new();
-        let root =
-            engine.create_element(block_style(CssDimension::Length(5.0), CssDimension::Auto));
-        let text = engine.create_text("short");
-        engine.append_child(root, text);
-        engine.set_root(root);
-
-        engine.render_frame(5, 5).unwrap();
-        let passes = engine.layout_passes();
-        engine.set_text(text, "hello world");
-        engine.render_frame(5, 5).unwrap();
-
-        assert_eq!(engine.layout_passes(), passes + 1);
-    }
-
-    #[test]
-    fn hit_testing_uses_last_rendered_regions() {
-        let mut engine = PaintEngine::new();
-        let mut root_style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
-        root_style.background = Background::Blue;
-        let root = engine.create_element(root_style);
-        engine.set_root(root);
-        engine.render_frame(4, 1).unwrap();
-
-        assert_eq!(engine.target_at(0, 0), Some(root));
-        assert_eq!(engine.target_at(4, 0), None);
-    }
-
-    #[test]
-    fn dom_ids_are_stable_and_not_reused_after_destroy() {
-        let mut engine = PaintEngine::new();
-        let first = engine.create_element(DivStyle::default());
-        assert!(engine.destroy_node(first));
-
-        let second = engine.create_element(DivStyle::default());
-
-        assert_ne!(first, second);
-        assert!(!engine.destroy_node(first));
-        assert!(engine.set_root(second));
-    }
-
-    #[test]
-    fn destroying_subtrees_reclaims_layout_nodes_for_future_trees() {
-        let mut engine = PaintEngine::new();
-        let root = engine.create_element(DivStyle::default());
-        for index in 0..1_000 {
-            let row = engine.create_element(DivStyle::default());
-            let text = engine.create_text(format!("row {index}"));
-            assert!(engine.append_child(row, text));
-            assert!(engine.append_child(root, row));
-        }
-
-        assert_eq!(engine.arena.stats().node_count, 2_001);
-        assert!(engine.destroy_node(root));
-        assert_eq!(engine.arena.stats().node_count, 0);
-
-        let replacement_root = engine.create_element(DivStyle::default());
-        for index in 0..1_000 {
-            let row = engine.create_element(DivStyle::default());
-            let text = engine.create_text(format!("replacement {index}"));
-            assert!(engine.append_child(row, text));
-            assert!(engine.append_child(replacement_root, row));
-        }
-
-        let stats = engine.arena.stats();
-        assert_eq!(stats.node_count, 2_001);
-        assert_eq!(stats.allocated_slot_count, 2_001);
-    }
-
-    #[test]
-    fn batched_sibling_destruction_preserves_survivors_and_reuses_slots() {
-        let mut engine = PaintEngine::new();
-        let root = engine.create_element(DivStyle::default());
-        let survivor = engine.create_element(DivStyle::default());
-        assert!(engine.append_child(root, survivor));
-
-        let removed = (0..1_000)
-            .map(|_| {
-                let child = engine.create_element(DivStyle::default());
-                assert!(engine.append_child(root, child));
-                child
-            })
-            .collect::<Vec<_>>();
-        let allocated_slots = engine.arena.stats().allocated_slot_count;
-
-        assert!(apply_command(
-            &mut engine,
-            EngineCommand::Batch {
-                commands: removed
-                    .iter()
-                    .map(|node| EngineCommand::DestroyNode { node: *node })
-                    .collect(),
-            },
-        ));
-
-        assert_eq!(engine.children.get(&root), Some(&vec![survivor]));
-        assert_eq!(
-            engine.arena.children(engine.node_for(root).unwrap()).len(),
-            1
-        );
-        assert_eq!(engine.arena.stats().node_count, 2);
-        for node in removed {
-            assert!(engine.node_for(node).is_none());
-        }
-
-        for _ in 0..1_000 {
-            engine.create_element(DivStyle::default());
-        }
-        assert_eq!(engine.arena.stats().allocated_slot_count, allocated_slots);
-    }
-
-    #[test]
-    fn invalid_dom_ids_do_not_mutate_or_panic() {
-        let mut engine = PaintEngine::new();
-        let root = engine.create_element(block_style(
-            CssDimension::Length(2.0),
-            CssDimension::Length(1.0),
-        ));
-        let text = engine.create_text("ok");
-        let missing = DomId(99_999);
-        assert!(engine.append_child(root, text));
-        assert!(engine.set_root(root));
-
-        assert!(!engine.append_child(root, missing));
-        assert!(!engine.set_root(missing));
-        assert!(!engine.set_text(missing, "nope"));
-        assert!(!engine.set_style(missing, DivStyle::default()));
-        assert_eq!(engine.scroll_metrics(missing), None);
-
-        let frame = engine.render_frame(2, 1).unwrap();
-        assert_eq!(frame.cell(0, 0).unwrap().character, 'o');
-        assert_eq!(frame.cell(1, 0).unwrap().character, 'k');
-    }
-
-    #[test]
-    fn destroying_child_detaches_it_from_layout_and_hit_testing() {
-        let mut engine = PaintEngine::new();
-        let mut root_style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
-        root_style.background = Background::Blue;
-        let root = engine.create_element(root_style);
-
-        let mut child_style = block_style(CssDimension::Length(1.0), CssDimension::Length(1.0));
-        child_style.background = Background::Red;
-        let child = engine.create_element(child_style);
-
-        assert!(engine.append_child(root, child));
-        assert!(engine.set_root(root));
-        engine.render_frame(4, 1).unwrap();
-        assert_eq!(engine.target_at(0, 0), Some(child));
-
-        assert!(engine.destroy_node(child));
-        engine.render_frame(4, 1).unwrap();
-
-        assert_eq!(engine.target_at(0, 0), Some(root));
-        assert!(!engine.set_root(child));
-    }
-
-    #[test]
-    fn detaching_child_detaches_without_destroying_it() {
-        let mut engine = PaintEngine::new();
-        let root = engine.create_element(block_style(
-            CssDimension::Length(4.0),
-            CssDimension::Length(1.0),
-        ));
-        let child = engine.create_element(block_style(
-            CssDimension::Length(1.0),
-            CssDimension::Length(1.0),
-        ));
-
-        assert!(engine.append_child(root, child));
-        assert!(engine.set_root(root));
-        engine.render_frame(4, 1).unwrap();
-
-        assert!(engine.detach_node(child));
-        engine.render_frame(4, 1).unwrap();
-        assert_eq!(engine.target_at(0, 0), Some(root));
-
-        assert!(engine.append_child(root, child));
-        engine.render_frame(4, 1).unwrap();
-        assert_eq!(engine.target_at(0, 0), Some(child));
-    }
-
-    #[test]
-    fn destroying_root_clears_render_output() {
-        let mut engine = PaintEngine::new();
-        let root = engine.create_element(block_style(
-            CssDimension::Length(2.0),
-            CssDimension::Length(1.0),
-        ));
-        assert!(engine.set_root(root));
-
-        assert!(engine.render_frame(2, 1).is_some());
-        assert!(engine.destroy_node(root));
-
-        assert!(engine.render_frame(2, 1).is_none());
-    }
-
-    #[test]
-    fn selection_action_uses_current_layout_frame() {
-        let (mut engine, _viewport) = scroll_engine();
-        engine.render_frame(5, 1).unwrap();
-
-        engine.handle_selection_event(SelectionMouseEvent {
-            event_type: SelectionMouseEventType::Down,
-            x: 0,
-            y: 0,
-            button: 0,
-        });
-        assert_eq!(
-            engine.handle_selection_event(SelectionMouseEvent {
-                event_type: SelectionMouseEventType::Up,
-                x: 4,
-                y: 0,
-                button: 0,
-            }),
-            SelectionAction::CopyToClipboard("aaaaa".to_string())
-        );
-    }
-
-    #[test]
-    fn render_to_diffs_against_previous_frame() {
-        let mut engine = PaintEngine::new();
-        let root = engine.create_element(block_style(
-            CssDimension::Length(4.0),
-            CssDimension::Length(1.0),
-        ));
-        let text = engine.create_text("ab");
-        engine.append_child(root, text);
-        engine.set_root(root);
-
-        let mut first = Vec::new();
-        engine
-            .render_to(4, 1, &mut first, TermProfile::NoColor, false)
-            .unwrap();
-        engine.set_text(text, "ac");
-        let mut second = Vec::new();
-        engine
-            .render_to(4, 1, &mut second, TermProfile::NoColor, false)
-            .unwrap();
-        let second = String::from_utf8(second).unwrap();
-
-        assert!(second.contains("\x1b[1;2Hc"));
-        assert!(!second.contains("\x1b[H"));
-    }
-
-    #[test]
-    fn render_to_flushes_output_after_writing_frame() {
-        struct FlushProbe {
-            bytes: Vec<u8>,
-            flushes: usize,
-        }
-
-        impl std::io::Write for FlushProbe {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.bytes.extend_from_slice(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                self.flushes += 1;
-                Ok(())
-            }
-        }
-
-        let mut engine = PaintEngine::new();
-        let root = engine.create_element(block_style(
-            CssDimension::Length(2.0),
-            CssDimension::Length(1.0),
-        ));
-        let text = engine.create_text("ok");
-        engine.append_child(root, text);
-        engine.set_root(root);
-
-        let mut out = FlushProbe {
-            bytes: Vec::new(),
-            flushes: 0,
-        };
-        engine
-            .render_to(2, 1, &mut out, TermProfile::NoColor, false)
-            .unwrap();
-
-        assert!(String::from_utf8(out.bytes).unwrap().contains("ok"));
-        assert_eq!(out.flushes, 1);
-    }
-
-    #[test]
-    fn resize_recomputes_layout() {
-        let mut engine = PaintEngine::new();
-        let root =
-            engine.create_element(block_style(CssDimension::Percent(1.0), CssDimension::Auto));
-        let text = engine.create_text("hello world");
-        engine.append_child(root, text);
-        engine.set_root(root);
-
-        engine.render_frame(5, 5).unwrap();
-        let passes = engine.layout_passes();
-        engine.render_frame(10, 5).unwrap();
-
-        assert_eq!(engine.layout_passes(), passes + 1);
-    }
-
-    #[test]
-    fn invalidating_frame_forces_full_repaint() {
-        let mut engine = PaintEngine::new();
-        let root = engine.create_element(block_style(
-            CssDimension::Length(4.0),
-            CssDimension::Length(1.0),
-        ));
-        let text = engine.create_text("ab");
-        engine.append_child(root, text);
-        engine.set_root(root);
-
-        let mut first = Vec::new();
-        engine
-            .render_to(4, 1, &mut first, TermProfile::NoColor, false)
-            .unwrap();
-        engine.invalidate_frame();
-        let mut second = Vec::new();
-        engine
-            .render_to(4, 1, &mut second, TermProfile::NoColor, false)
-            .unwrap();
-        let second = String::from_utf8(second).unwrap();
-
-        assert!(second.contains("\x1b[H"));
-    }
-
-    #[test]
-    fn text_attribute_change_paints_without_recomputing_layout() {
-        let mut engine = PaintEngine::new();
-        let root = engine.create_element(block_style(
-            CssDimension::Length(4.0),
-            CssDimension::Length(1.0),
-        ));
-        let text = engine.create_text("ok");
-        engine.append_child(root, text);
-        engine.set_root(root);
-
-        engine.render_frame(4, 1).unwrap();
-        let passes = engine.layout_passes();
-        assert!(engine.mutate_style(root, StyleMutation::FontWeight(CssFontWeight::Bold)));
-        let frame = engine.render_frame(4, 1).unwrap();
-
-        assert_eq!(engine.layout_passes(), passes);
-        assert!(frame.cell(0, 0).unwrap().bold);
-    }
-
-    #[test]
-    fn z_index_change_reorders_paint_without_recomputing_layout() {
-        let mut engine = PaintEngine::new();
-        let mut root_style = block_style(CssDimension::Length(4.0), CssDimension::Length(2.0));
-        root_style.position = CssPosition::Relative;
-        let root = engine.create_element(root_style);
-        let mut red_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
-        red_style.position = CssPosition::Absolute;
-        red_style.z_index = CssZIndex::Integer(1);
-        red_style.background = Background::Red;
-        let red = engine.create_element(red_style);
-        let mut blue_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
-        blue_style.position = CssPosition::Absolute;
-        blue_style.z_index = CssZIndex::Integer(2);
-        blue_style.background = Background::Blue;
-        let blue = engine.create_element(blue_style);
-        engine.append_child(root, red);
-        engine.append_child(root, blue);
-        engine.set_root(root);
-
-        let first = engine.render_frame(4, 2).unwrap();
-        assert_eq!(first.cell(0, 0).unwrap().background, Background::Blue);
-        let passes = engine.layout_passes();
-        assert!(engine.mutate_style(red, StyleMutation::ZIndex(CssZIndex::Integer(3))));
-        let second = engine.render_frame(4, 2).unwrap();
-
-        assert_eq!(engine.layout_passes(), passes);
-        assert_eq!(second.cell(0, 0).unwrap().background, Background::Red);
-    }
-
-    #[test]
-    fn opacity_change_repaints_without_recomputing_layout() {
-        let mut engine = PaintEngine::new();
-        let mut style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
-        style.background = Background::Red;
-        let root = engine.create_element(style);
-        engine.set_root(root);
-
-        engine.render_frame(2, 1).unwrap();
-        let passes = engine.layout_passes();
-        assert!(engine.mutate_style(root, StyleMutation::Opacity(0.5)));
-        let frame = engine.render_frame(2, 1).unwrap();
-
-        assert_eq!(engine.layout_passes(), passes);
-        assert_eq!(
-            frame.cell(0, 0).unwrap().background,
-            Background::Rgb(128, 0, 0)
-        );
-    }
-
-    #[test]
-    fn opacity_transition_fades_in_as_a_stacking_context_without_recomputing_layout() {
-        let mut engine = PaintEngine::new();
-        let mut root_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
-        root_style.background = Background::Blue;
-        let root = engine.create_element(root_style);
-        let mut child_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
-        child_style.background = Background::Red;
-        child_style.opacity = 0.0;
-        let child = engine.create_element(child_style.clone());
-        engine.append_child(root, child);
-        engine.set_root(root);
-        let start = std::time::Instant::now();
-        engine.render_frame_at(2, 1, start).unwrap();
-        let passes = engine.layout_passes();
-
-        engine.set_transition(
-            child,
-            vec![TransitionSpec {
-                property: TransitionProperty::Opacity,
-                duration_ms: 100,
-            }],
-        );
-        child_style.opacity = 1.0;
-        engine.set_style_at(child, child_style, start);
-
-        assert!(engine.has_active_transitions());
-        assert_eq!(
-            engine.drain_transition_events(),
-            vec![EngineTransitionEvent {
-                event_type: TransitionEventType::Start,
-                target: child,
-                property: TransitionProperty::Opacity,
-            }]
-        );
-        let midway = engine
-            .render_frame_at(2, 1, start + std::time::Duration::from_millis(50))
-            .unwrap();
-        assert_eq!(engine.layout_passes(), passes);
-        assert_eq!(
-            midway.cell(0, 0).unwrap().background,
-            Background::Rgb(128, 0, 128)
-        );
-
-        let finished = engine
-            .render_frame_at(2, 1, start + std::time::Duration::from_millis(100))
-            .unwrap();
-        assert_eq!(engine.layout_passes(), passes);
-        assert_eq!(finished.cell(0, 0).unwrap().background, Background::Red);
-        assert!(!engine.has_active_transitions());
-        assert_eq!(
-            engine.drain_transition_events(),
-            vec![EngineTransitionEvent {
-                event_type: TransitionEventType::End,
-                target: child,
-                property: TransitionProperty::Opacity,
-            }]
-        );
-    }
-
-    #[test]
-    fn initial_opacity_does_not_transition_from_the_internal_default() {
-        let mut engine = PaintEngine::new();
-        let mut root_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
-        root_style.background = Background::Blue;
-        let root = engine.create_element(root_style);
-        let mut overlay_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
-        overlay_style.background = Background::Black;
-        let overlay = engine.create_element(overlay_style.clone());
-        engine.append_child(root, overlay);
-        engine.set_root(root);
-        let start = std::time::Instant::now();
-
-        engine.set_transition(
-            overlay,
-            vec![TransitionSpec {
-                property: TransitionProperty::Opacity,
-                duration_ms: 200,
-            }],
-        );
-        overlay_style.opacity = 0.5;
-        engine.set_style_at(overlay, overlay_style, start);
-
-        let frame = engine.render_frame_at(2, 1, start).unwrap();
-        assert_eq!(
-            frame.cell(0, 0).unwrap().background,
-            Background::Rgb(0, 0, 128)
-        );
-        assert!(engine.drain_transition_events().is_empty());
-    }
-
-    #[test]
-    fn color_transition_paints_without_recomputing_layout() {
-        let mut engine = PaintEngine::new();
-        let mut style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
-        style.background = Background::Rgb(0, 0, 255);
-        let root = engine.create_element(style.clone());
-        engine.set_root(root);
-        let start = std::time::Instant::now();
-        engine.render_frame_at(4, 1, start).unwrap();
-        let passes = engine.layout_passes();
-
-        engine.set_transition(
-            root,
-            vec![TransitionSpec {
-                property: TransitionProperty::BackgroundColor,
-                duration_ms: 100,
-            }],
-        );
-        style.background = Background::Rgb(0, 255, 255);
-        engine.set_style_at(root, style, start);
-
-        assert_eq!(engine.layout_passes(), passes);
-        assert_eq!(
-            engine.drain_transition_events(),
-            vec![EngineTransitionEvent {
-                event_type: TransitionEventType::Start,
-                target: root,
-                property: TransitionProperty::BackgroundColor,
-            }]
-        );
-
-        let midway = engine
-            .render_frame_at(4, 1, start + std::time::Duration::from_millis(50))
-            .unwrap();
-        let midway_background = midway.cell(0, 0).unwrap().background;
-        assert_ne!(midway_background, Background::Rgb(0, 0, 255));
-        assert_ne!(midway_background, Background::Rgb(0, 255, 255));
-        assert_eq!(engine.layout_passes(), passes);
-
-        let finished = engine
-            .render_frame_at(4, 1, start + std::time::Duration::from_millis(100))
-            .unwrap();
-        assert_eq!(
-            finished.cell(0, 0).unwrap().background,
-            Background::Rgb(0, 255, 255)
-        );
-        assert_eq!(
-            engine.drain_transition_events(),
-            vec![EngineTransitionEvent {
-                event_type: TransitionEventType::End,
-                target: root,
-                property: TransitionProperty::BackgroundColor,
-            }]
-        );
-    }
-
-    #[test]
-    fn truecolor_disabled_skips_transition() {
-        let mut engine = PaintEngine::new();
-        engine.set_truecolor_enabled(false);
-        let mut style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
-        style.color = Background::Rgb(255, 0, 0);
-        let root = engine.create_element(style.clone());
-        let text = engine.create_text("x");
-        engine.append_child(root, text);
-        engine.set_root(root);
-        let start = std::time::Instant::now();
-        engine.render_frame_at(2, 1, start).unwrap();
-
-        engine.set_transition(
-            root,
-            vec![TransitionSpec {
-                property: TransitionProperty::Color,
-                duration_ms: 100,
-            }],
-        );
-        style.color = Background::Rgb(0, 255, 0);
-        engine.set_style_at(root, style, start);
-
-        let frame = engine
-            .render_frame_at(2, 1, start + std::time::Duration::from_millis(50))
-            .unwrap();
-        assert_eq!(
-            frame.cell(0, 0).unwrap().foreground,
-            Background::Rgb(0, 255, 0)
-        );
-        assert!(engine.drain_transition_events().is_empty());
-    }
-
-    #[test]
-    fn input_value_command_updates_textarea_for_typescript_compatibility() {
-        let mut engine = PaintEngine::new();
-        let root = engine.create_element(block_style(
-            CssDimension::Length(8.0),
-            CssDimension::Length(2.0),
-        ));
-        let textarea = engine.create_textarea(
-            block_style(CssDimension::Length(8.0), CssDimension::Auto),
-            "",
-        );
-        engine.append_child(root, textarea);
-        engine.set_root(root);
-
-        assert!(engine.set_input_value(textarea, "hello", 5));
-        let frame = engine.render_frame(8, 2).unwrap();
-
-        assert_eq!(frame.cell(0, 0).unwrap().character, 'h');
-        assert_eq!(frame.cell(4, 0).unwrap().character, 'o');
-    }
-
-    #[test]
-    fn textarea_vertical_cursor_move_uses_soft_wrapped_rows() {
-        let mut engine = PaintEngine::new();
-        let textarea = engine.create_textarea(
-            block_style(CssDimension::Length(6.0), CssDimension::Auto),
-            "abcd efgh",
-        );
-        engine.set_root(textarea);
-        engine.set_textarea_value(textarea, "abcd efgh", 7);
-        engine.set_textarea_focused(textarea, true);
-
-        assert_eq!(
-            engine.move_textarea_cursor_vertically_for_size(textarea, -1, 6, 3),
-            Some(2)
-        );
-
-        let frame = engine.render_frame(6, 3).unwrap();
-        assert!(frame.cell(2, 0).unwrap().reversed);
-    }
-
-    #[test]
-    fn textarea_cursor_visual_position_query_uses_current_layout_without_relayout() {
-        let mut engine = PaintEngine::new();
-        let textarea = engine.create_textarea(
-            block_style(CssDimension::Length(4.0), CssDimension::Auto),
-            "hahahaha",
-        );
-        engine.set_root(textarea);
-        engine.set_textarea_value(textarea, "hahahaha", 5);
-
-        assert_eq!(
-            engine.textarea_cursor_visual_position_for_size(textarea, 8, 4),
-            Some((1, 1))
-        );
-        let layout_passes = engine.layout_passes();
-
-        assert_eq!(
-            engine.textarea_cursor_visual_position_for_size(textarea, 8, 4),
-            Some((1, 1))
-        );
-        assert_eq!(
-            engine.textarea_visual_line_range_for_size(textarea, 1, 8, 4),
-            Some((4, 8))
-        );
-        assert_eq!(engine.layout_passes(), layout_passes);
-    }
-
-    #[test]
-    fn clicking_input_moves_cursor_to_clicked_column() {
-        let mut engine = PaintEngine::new();
-        let input = engine.create_input_with_id(
-            DomId(1),
-            block_style(CssDimension::Length(6.0), CssDimension::Length(1.0)),
-            "abcdef",
-        );
-        engine.set_root(input);
-        engine.set_input_focused(input, true);
-
-        assert_eq!(
-            engine.set_text_control_cursor_at_point_for_size(input, 3, 0, 6, 1),
-            Some(3)
-        );
-
-        let frame = engine.render_frame(6, 1).unwrap();
-        assert!(frame.cell(3, 0).unwrap().reversed);
-    }
-
-    #[test]
-    fn terminal_focus_changes_cursor_without_recomputing_layout() {
-        let mut engine = PaintEngine::new();
-        let input = engine.create_input_with_id(
-            DomId(1),
-            block_style(CssDimension::Length(6.0), CssDimension::Length(1.0)),
-            "abcdef",
-        );
-        engine.set_root(input);
-        engine.set_input_focused(input, true);
-        engine.set_input_value(input, "abcdef", 3);
-
-        let focused_frame = engine.render_frame(6, 1).unwrap();
-        assert!(focused_frame.cell(3, 0).unwrap().reversed);
-        let layout_passes = engine.layout_passes();
-
-        engine.set_terminal_focused(false);
-        let blurred_frame = engine.render_frame(6, 1).unwrap();
-        assert!(!blurred_frame.cell(3, 0).unwrap().reversed);
-        assert_eq!(engine.layout_passes(), layout_passes);
-
-        engine.set_terminal_focused(true);
-        let refocused_frame = engine.render_frame(6, 1).unwrap();
-        assert!(refocused_frame.cell(3, 0).unwrap().reversed);
-        assert_eq!(engine.layout_passes(), layout_passes);
-    }
-
-    #[test]
-    fn initially_blurred_terminal_hides_cursor_on_first_frame() {
-        let mut engine = PaintEngine::new();
-        let input = engine.create_input_with_id(
-            DomId(1),
-            block_style(CssDimension::Length(6.0), CssDimension::Length(1.0)),
-            "abcdef",
-        );
-        engine.set_root(input);
-        engine.set_input_focused(input, true);
-        engine.set_input_value(input, "abcdef", 3);
-        engine.set_terminal_focused(false);
-
-        let frame = engine.render_frame(6, 1).unwrap();
-
-        assert!(!frame.cell(3, 0).unwrap().reversed);
-    }
-
-    #[test]
-    fn clicking_textarea_uses_soft_wrapped_visual_position() {
-        let mut engine = PaintEngine::new();
-        let textarea = engine.create_textarea(
-            block_style(CssDimension::Length(6.0), CssDimension::Auto),
-            "abcd efgh",
-        );
-        engine.set_root(textarea);
-        engine.set_textarea_focused(textarea, true);
-
-        assert_eq!(
-            engine.set_text_control_cursor_at_point_for_size(textarea, 2, 1, 6, 3),
-            Some(7)
-        );
-
-        let frame = engine.render_frame(6, 3).unwrap();
-        assert!(frame.cell(2, 1).unwrap().reversed);
-    }
-
-    #[test]
-    fn command_loop_creates_renders_and_hit_tests() {
-        let (tx, rx) = bounded(32);
-        let thread = thread::spawn(move || engine_loop(rx));
-
-        let (response_tx, response_rx) = bounded(1);
-        tx.send(EngineCommand::CreateElement {
-            style: block_style(CssDimension::Length(4.0), CssDimension::Length(1.0)),
-            response: response_tx,
-        })
-        .unwrap();
-        let root = response_rx.recv().unwrap();
-
-        let (response_tx, response_rx) = bounded(1);
-        tx.send(EngineCommand::CreateText {
-            text: "hi".to_string(),
-            response: response_tx,
-        })
-        .unwrap();
-        let text = response_rx.recv().unwrap();
-
-        tx.send(EngineCommand::AppendChild {
-            parent: root,
-            child: text,
-        })
-        .unwrap();
-        tx.send(EngineCommand::SetRoot { root }).unwrap();
-
-        let (response_tx, response_rx) = bounded(1);
-        tx.send(EngineCommand::RenderFrame {
-            width: 4,
-            height: 1,
-            response: response_tx,
-        })
-        .unwrap();
-        let frame = response_rx.recv().unwrap().unwrap();
-        assert_eq!(frame.cell(0, 0).unwrap().character, 'h');
-
-        let (response_tx, response_rx) = bounded(1);
-        tx.send(EngineCommand::HitTestPoint {
-            x: 0,
-            y: 0,
-            response: response_tx,
-        })
-        .unwrap();
-        assert_eq!(response_rx.recv().unwrap(), Some(root));
-
-        tx.send(EngineCommand::Shutdown { response: None }).unwrap();
-        thread.join().unwrap();
-    }
-
-    #[test]
-    fn command_loop_batches_explicit_id_creates() {
-        let (tx, rx) = bounded(32);
-        let thread = thread::spawn(move || engine_loop(rx));
-
-        tx.send(EngineCommand::Batch {
-            commands: vec![
-                EngineCommand::CreateElementWithId {
-                    id: DomId(1),
-                    style: block_style(CssDimension::Length(4.0), CssDimension::Length(1.0)),
-                },
-                EngineCommand::CreateTextWithId {
-                    id: DomId(2),
-                    text: "ok".to_string(),
-                },
-                EngineCommand::AppendChild {
-                    parent: DomId(1),
-                    child: DomId(2),
-                },
-                EngineCommand::SetRoot { root: DomId(1) },
-            ],
-        })
-        .unwrap();
-
-        let (response_tx, response_rx) = bounded(1);
-        tx.send(EngineCommand::RenderFrame {
-            width: 4,
-            height: 1,
-            response: response_tx,
-        })
-        .unwrap();
-        let frame = response_rx.recv().unwrap().unwrap();
-
-        assert_eq!(frame.cell(0, 0).unwrap().character, 'o');
-        assert_eq!(frame.cell(1, 0).unwrap().character, 'k');
-
-        tx.send(EngineCommand::Shutdown { response: None }).unwrap();
-        thread.join().unwrap();
-    }
-
-    #[test]
-    fn command_loop_acknowledges_shutdown_after_earlier_commands() {
-        let (tx, rx) = bounded(32);
-        let thread = thread::spawn(move || engine_loop(rx));
-
-        tx.send(EngineCommand::CreateTextWithId {
-            id: DomId(1),
-            text: "queued before shutdown".to_string(),
-        })
-        .unwrap();
-        let (response_tx, response_rx) = bounded(1);
-        tx.send(EngineCommand::Shutdown {
-            response: Some(response_tx),
-        })
-        .unwrap();
-
-        response_rx.recv().unwrap();
-        thread.join().unwrap();
-        assert!(tx.send(EngineCommand::InvalidateFrame).is_err());
-    }
-
-    #[test]
-    fn command_loop_scroll_metrics_use_explicit_command_size() {
-        let (tx, rx) = bounded(32);
-        let thread = thread::spawn(move || engine_loop(rx));
-
-        let mut viewport_style =
-            block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
-        viewport_style.overflow_y = LayoutOverflow::Scroll;
-        tx.send(EngineCommand::CreateElementWithId {
-            id: DomId(1),
-            style: viewport_style,
-        })
-        .unwrap();
-        tx.send(EngineCommand::CreateElementWithId {
-            id: DomId(2),
-            style: block_style(CssDimension::Length(10.0), CssDimension::Length(20.0)),
-        })
-        .unwrap();
-        tx.send(EngineCommand::AppendChild {
-            parent: DomId(1),
-            child: DomId(2),
-        })
-        .unwrap();
-        tx.send(EngineCommand::SetRoot { root: DomId(1) }).unwrap();
-
-        let (response_tx, response_rx) = bounded(1);
-        tx.send(EngineCommand::GetScrollMetrics {
-            node: DomId(1),
-            width: 10,
-            height: 5,
-            response: response_tx,
-        })
-        .unwrap();
-        let small = response_rx.recv().unwrap().unwrap();
-
-        let (response_tx, response_rx) = bounded(1);
-        tx.send(EngineCommand::GetScrollMetrics {
-            node: DomId(1),
-            width: 10,
-            height: 12,
-            response: response_tx,
-        })
-        .unwrap();
-        let large = response_rx.recv().unwrap().unwrap();
-
-        assert_eq!(small.client_height, 5);
-        assert_eq!(small.scroll_height, 20);
-        assert_eq!(large.client_height, 12);
-        assert_eq!(large.scroll_height, 20);
-
-        tx.send(EngineCommand::Shutdown { response: None }).unwrap();
-        thread.join().unwrap();
-    }
-}
+mod tests;

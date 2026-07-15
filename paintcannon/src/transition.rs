@@ -259,6 +259,10 @@ impl TransitionState {
         !self.active.is_empty()
     }
 
+    pub(crate) fn has_events(&self) -> bool {
+        !self.events.is_empty()
+    }
+
     pub(crate) fn drain_events(&mut self) -> Vec<TransitionEvent> {
         self.events.drain(..).collect()
     }

@@ -31,6 +31,29 @@ afterEach(() => {
 });
 
 describe("core keyboard events", () => {
+  it("drains events only when native code notifies JavaScript", () => {
+    vi.useFakeTimers();
+    const paintCannon = new PaintCannon({ fps: 60 });
+    const mockNative = currentMockNative();
+    const keys: string[] = [];
+
+    try {
+      paintCannon.addEventListener("keydown", event => keys.push(event.key));
+      mockNative.inputEvents.push(keyboardInput(keyDown("a")));
+
+      vi.advanceTimersByTime(1_000);
+      expect(keys).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+
+      mockNative.notifyEvents();
+      expect(keys).toEqual(["a"]);
+      expect(mockNative.eventNotifications).toBe(1);
+    } finally {
+      paintCannon.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("targets the first root child and bubbles through ancestors before document listeners", () => {
     const { paintCannon, mockNative, root, child } = createPaintTree();
     const events: string[] = [];
@@ -46,7 +69,7 @@ describe("core keyboard events", () => {
     });
 
     mockNative.inputEvents.push(keyboardInput(keyDown("a")));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual(["child:a:true:true", "root:a:true:true", "document:a:true"]);
@@ -68,7 +91,7 @@ describe("core keyboard events", () => {
     });
 
     mockNative.inputEvents.push(keyboardInput(keyDown("a")));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual(["child"]);
@@ -89,7 +112,7 @@ describe("core keyboard events", () => {
     });
     input.focus();
     mockNative.inputEvents.push(keyboardInput(keyDown("x")));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual(["input:x", "root"]);
@@ -110,7 +133,7 @@ describe("core keyboard events", () => {
 
     input.focus();
     mockNative.inputEvents.push(keyboardInput(keyDown("x")));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual(["root:true:true:x"]);
@@ -129,7 +152,7 @@ describe("core keyboard events", () => {
 
     input.focus();
     mockNative.inputEvents.push(keyboardInput(keyDown("a")), keyboardInput(keyDown("b")));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     input.cursorPosition = 1;
     input.value = input.value;
     paintCannon.stop();
@@ -171,11 +194,11 @@ describe("core keyboard events", () => {
     second.addEventListener("blur", () => events.push("second:blur"));
 
     mockNative.inputEvents.push(keyboardInput(keyDown("Tab", { code: "Tab" })));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     mockNative.inputEvents.push(keyboardInput(keyDown("Tab", { code: "Tab" })));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     mockNative.inputEvents.push(keyboardInput(keyDown("Tab", { code: "Tab", shiftKey: true })));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual([
@@ -228,7 +251,7 @@ describe("core paste events", () => {
       pasteInput("BC"),
       keyboardInput(keyDown("d")),
     );
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual(["key:a", "paste:BC", "key:d"]);
@@ -254,7 +277,7 @@ describe("core paste events", () => {
     input.addEventListener("change", event => events.push(`change:${event.target.value}`));
 
     mockNative.inputEvents.push(pasteInput("hello\nworld"));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual([
@@ -274,7 +297,7 @@ describe("core paste events", () => {
     input.addEventListener("paste", event => event.preventDefault());
 
     mockNative.inputEvents.push(pasteInput("blocked"));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(input.value).toBe("");
@@ -300,7 +323,7 @@ describe("core paste events", () => {
       });
 
       mockNative.inputEvents.push(pasteInput(`'${filePath}'`));
-      runKeyboardEventPump(paintCannon);
+      notifyNativeEvents(paintCannon);
       paintCannon.stop();
 
       expect(input.value).toBe("");
@@ -332,7 +355,7 @@ describe("core submit events", () => {
 
     input.focus();
     mockNative.inputEvents.push(keyboardInput(keyDown("Enter", { code: "Enter" })));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual(["form:true:true:true", "root:true:true:true"]);
@@ -351,14 +374,14 @@ describe("core submit events", () => {
       events.push(`submit:${event.submitter === button}`);
     });
     mockNative.mouseEvents.push(mouseEvent("click"));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
 
     button.addEventListener("click", event => {
       event.preventDefault();
       events.push("click:prevented");
     });
     mockNative.mouseEvents.push(mouseEvent("click"));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual(["submit:true", "click:prevented"]);
@@ -380,7 +403,7 @@ describe("core mouse events", () => {
     });
 
     mockNative.mouseEvents.push(mouseEvent("click"));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual(["child:true:true", "root:true:true"]);
@@ -436,7 +459,7 @@ describe("core native scrollbar events", () => {
     });
 
     mockNative.mouseEvents.push(mouseEvent("wheel", { deltaY: 1 }));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(mockNative.scrollMetrics(viewportId).scrollTop).toBe(3);
@@ -474,7 +497,7 @@ describe("core native scrollbar events", () => {
       mouseEvent("mousedown", { y: 0 }),
       mouseEvent("mousedrag", { y: 5 }),
     );
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(mockNative.scrollMetrics(child.id)?.scrollTop).toBe(50);
@@ -515,7 +538,7 @@ describe("core native scrollbar events", () => {
     });
 
     mockNative.mouseEvents.push(mouseEvent("mousedown", { y: 5 }), mouseEvent("click", { y: 5 }));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(mockNative.scrollMetrics(child.id)?.scrollTop).toBe(10);
@@ -552,7 +575,7 @@ describe("core node lifecycle", () => {
     child.destroy();
     mockNative.targetIdAtPoint = grandchildId;
     mockNative.mouseEvents.push(mouseEvent("click"));
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(clicks).toBe(0);
@@ -561,7 +584,7 @@ describe("core node lifecycle", () => {
 });
 
 describe("core resize events", () => {
-  it("dispatches the latest resize and uses the normal render path", () => {
+  it("dispatches the latest resize without rendering during native event delivery", () => {
     const paintCannon = new PaintCannon({ fps: 120 });
     const mockNative = currentMockNative();
     const sizes: Array<[number, number]> = [];
@@ -570,39 +593,41 @@ describe("core resize events", () => {
       sizes.push([event.cols, event.rows]);
     });
     mockNative.resizeEvents.push({ cols: 90, rows: 30 }, { cols: 100, rows: 40 });
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(sizes).toEqual([[100, 40]]);
-    expect(mockNative.renderCalls).toBe(1);
     expect(mockNative.renderSyncCalls).toBe(0);
   });
 });
 
 describe("core animation lifecycle", () => {
-  it("renders frames until a laid-out opacity transition completes", () => {
+  it("updates the native render loop frame rate", () => {
+    const paintCannon = new PaintCannon({ fps: 30 });
+    const mockNative = currentMockNative();
+
+    expect(mockNative.fps).toBe(30);
+    paintCannon.setFrameRate(90);
+    expect(mockNative.fps).toBe(90);
+
+    paintCannon.stop();
+  });
+
+  it("runs only requested animation frame callbacks", () => {
     vi.useFakeTimers();
     const paintCannon = new PaintCannon({ fps: 60 });
-    const mockNative = currentMockNative();
-    const overlay = paintCannon.createElement("div");
+    let callbackCalls = 0;
 
     try {
-      overlay.style.opacity = 0;
-      overlay.style.transition = "opacity 200ms";
-      paintCannon.render();
-
-      mockNative.activeTransitions = true;
-      overlay.style.opacity = 0.2;
+      paintCannon.requestAnimationFrame(() => {
+        callbackCalls += 1;
+      });
 
       vi.advanceTimersByTime(17);
-      expect(mockNative.renderCalls).toBe(2);
-
-      mockNative.activeTransitions = false;
-      vi.advanceTimersByTime(17);
-      expect(mockNative.renderCalls).toBe(3);
+      expect(callbackCalls).toBe(1);
 
       vi.advanceTimersByTime(100);
-      expect(mockNative.renderCalls).toBe(3);
+      expect(callbackCalls).toBe(1);
     } finally {
       paintCannon.stop();
       vi.useRealTimers();
@@ -710,11 +735,10 @@ describe("core app focus events", () => {
     paintCannon.addEventListener("blur", event => {
       events.push(`${event.type}:${event.hasFocus}`);
     });
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual(["blur:false"]);
-    expect(mockNative.renderCalls).toBe(1);
   });
 
   it("dispatches terminal focus reports as PaintCannon focus and blur events", () => {
@@ -731,16 +755,15 @@ describe("core app focus events", () => {
     });
 
     mockNative.queueFocusEvent("blur");
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     expect(paintCannon.hasFocus).toBe(false);
 
     mockNative.queueFocusEvent("focus");
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(events).toEqual(["blur:false:true", "focus:true:true"]);
     expect(paintCannon.hasFocus).toBe(true);
-    expect(mockNative.renderCalls).toBe(2);
   });
 });
 
@@ -879,6 +902,6 @@ function currentMockNative(): MockNativePaintCannon {
   return mockNative;
 }
 
-function runKeyboardEventPump(paintCannon: PaintCannon): void {
-  (paintCannon as unknown as { runKeyboardEventPump(): void }).runKeyboardEventPump();
+function notifyNativeEvents(_paintCannon: PaintCannon): void {
+  currentMockNative().notifyEvents();
 }

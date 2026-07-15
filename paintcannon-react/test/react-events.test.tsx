@@ -197,7 +197,7 @@ describe("paste events", () => {
       throw new Error("expected mock native instance");
     }
     mockNative.inputEvents.push(pasteInput("from clipboard"));
-    runKeyboardEventPump(root.paintCannon);
+    notifyNativeEvents(root.paintCannon);
     root.paintCannon.stop();
 
     expect(events).toEqual(["from clipboard"]);
@@ -246,7 +246,7 @@ describe("controlled text controls", () => {
         repeat: false,
       }),
     );
-    runKeyboardEventPump(root.paintCannon);
+    notifyNativeEvents(root.paintCannon);
     await commit();
     root.paintCannon.stop();
 
@@ -257,7 +257,7 @@ describe("controlled text controls", () => {
 });
 
 describe("resize events", () => {
-  it("uses the normal render path instead of sync rendering inside the input pump", () => {
+  it("does not synchronously render during native event delivery", () => {
     const sizes: Array<[number, number]> = [];
     const paintCannon = new PaintCannon({ fps: 120 });
     const mockNative = mockNativeInstances[0];
@@ -269,17 +269,16 @@ describe("resize events", () => {
       sizes.push([event.cols, event.rows]);
     });
     mockNative.resizeEvents.push({ cols: 100, rows: 40 });
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(sizes).toEqual([[100, 40]]);
-    expect(mockNative.renderCalls).toBe(1);
     expect(mockNative.renderSyncCalls).toBe(0);
   });
 });
 
 describe("app exit", () => {
-  it("does not render the empty unmount over the final frame", async () => {
+  it("flushes the final frame before unmounting", async () => {
     const root = render(<Div>persistent output</Div>, { fps: 120 });
     const mockNative = mockNativeInstances[0];
     if (mockNative === undefined) {
@@ -287,12 +286,10 @@ describe("app exit", () => {
     }
 
     await commit();
-    const rendersBeforeExit = mockNative.renderCalls;
-
     root.exit();
     await root.waitUntilExit();
 
-    expect(mockNative.renderCalls).toBe(rendersBeforeExit);
+    expect(mockNative.renderSyncCalls).toBe(1);
     expect(mockNative.stopCalls).toBe(1);
   });
 });
@@ -323,7 +320,7 @@ describe("host tree lifecycle", () => {
 });
 
 describe("scroll events", () => {
-  it("commits state updates from onScroll before the input pump returns", async () => {
+  it("commits state updates from onScroll before native event delivery returns", async () => {
     let scroller: PaintElement | undefined;
     let renderedTop = -1;
 
@@ -362,7 +359,7 @@ describe("scroll events", () => {
     });
     mockNative.mouseEvents.push(mouseEvent("wheel", { deltaY: -1 }));
 
-    runKeyboardEventPump(root.paintCannon);
+    notifyNativeEvents(root.paintCannon);
     root.paintCannon.stop();
 
     expect(renderedTop).toBe(0);
@@ -436,8 +433,12 @@ function dispatchKey(paintCannon: PaintCannon, key: string): void {
   );
 }
 
-function runKeyboardEventPump(paintCannon: PaintCannon): void {
-  (paintCannon as unknown as { runKeyboardEventPump(): void }).runKeyboardEventPump();
+function notifyNativeEvents(_paintCannon: PaintCannon): void {
+  const mockNative = mockNativeInstances[mockNativeInstances.length - 1];
+  if (mockNative === undefined) {
+    throw new Error("expected mock native instance");
+  }
+  mockNative.notifyEvents();
 }
 
 async function commit(): Promise<void> {

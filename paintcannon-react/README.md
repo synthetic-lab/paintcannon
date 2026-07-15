@@ -245,4 +245,5 @@ both supported:
 ## Core Runtime
 
 This package depends on `paintcannon`, which provides the NAPI-RS native
-renderer and DOM-like API.
+renderer and DOM-like API. React commits are sent as PaintCannon transactions;
+the Rust-owned render loop presents dirty state at the configured `fps`.

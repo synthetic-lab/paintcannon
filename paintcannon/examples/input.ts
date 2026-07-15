@@ -31,7 +31,6 @@ root.appendChild(first.row);
 root.appendChild(second.row);
 
 first.input.focus();
-pc.render();
 
 pc.addEventListener("keydown", event => {
   if (event.key === "Escape") {

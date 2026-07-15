@@ -47,7 +47,6 @@ root.appendChild(title);
 root.appendChild(textarea);
 root.appendChild(status);
 textarea.focus();
-pc.render();
 
 pc.addEventListener("keydown", (event: KeyboardEvent) => {
   if (event.key === "Escape") {

@@ -1,5 +1,6 @@
 mod api;
 mod engine;
+mod event_notification;
 mod frame;
 mod image;
 mod input;

@@ -35,8 +35,10 @@ export function createMockNativeBinding(instances: MockNativePaintCannon[] = [])
         alternateScreen?: boolean,
         captureMouse?: boolean,
         captureCtrlC?: boolean,
+        fps?: number,
+        onEventsAvailable?: () => void,
       ) {
-        super(forceCompatMode, alternateScreen, captureMouse, captureCtrlC);
+        super(forceCompatMode, alternateScreen, captureMouse, captureCtrlC, fps, onEventsAvailable);
         instances.push(this);
       }
     },
@@ -49,8 +51,8 @@ export class MockNativePaintCannon implements NativePaintCannon {
   rendererStopped = false;
   interruptWhenStyleMutationFails = false;
   private focused = true;
-  renderCalls = 0;
   renderSyncCalls = 0;
+  eventNotifications = 0;
   stopCalls = 0;
   releaseTerminalCalls = 0;
   captureTerminalCalls = 0;
@@ -66,7 +68,6 @@ export class MockNativePaintCannon implements NativePaintCannon {
   mouseEvents: TerminalMouseEvent[] = [];
   resizeEvents: TerminalResizeEvent[] = [];
   transitionEvents: NativeTransitionEvent[] = [];
-  activeTransitions = false;
   rootId: number | undefined;
   viewportId: number | undefined;
   appendedChildren: Array<{ parent: number; child: number }> = [];
@@ -81,6 +82,8 @@ export class MockNativePaintCannon implements NativePaintCannon {
     readonly alternateScreen = false,
     readonly captureMouse = false,
     readonly captureCtrlC = false,
+    public fps = 60,
+    private readonly onEventsAvailable: () => void = () => {},
   ) {}
 
   createDiv(): number {
@@ -225,15 +228,20 @@ export class MockNativePaintCannon implements NativePaintCannon {
     return this.focused;
   }
 
-  render(): void {
-    this.renderCalls += 1;
-  }
-
   renderSync(): void {
     this.renderSyncCalls += 1;
   }
 
+  setFrameRate(fps: number): void {
+    this.fps = fps;
+  }
+
   invalidateFrame(): void {}
+
+  notifyEvents(): void {
+    this.eventNotifications += 1;
+    this.onEventsAvailable();
+  }
 
   drainInputEvents(): NativeTerminalInputEvent[] {
     const events = this.inputEvents;
@@ -271,10 +279,6 @@ export class MockNativePaintCannon implements NativePaintCannon {
     const events = this.transitionEvents;
     this.transitionEvents = [];
     return events;
-  }
-
-  hasActiveTransitions(): boolean {
-    return this.activeTransitions;
   }
 
   clickEventForMouseClick(): null {

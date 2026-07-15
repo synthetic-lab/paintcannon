@@ -61,8 +61,10 @@ And the following DOM events and event handlers, with bubbling,
 - Transition start and end events
 - Scroll events
 
-PaintCannon also exposes a `requestAnimationFrame` function to hook into its
-paint timing, much like browsers do.
+PaintCannon's Rust renderer wakes at the configured `fps` (60 by default), but
+only lays out and paints dirty state and only writes non-empty frame diffs.
+`requestAnimationFrame` schedules JS updates at that cadence, and `renderSync`
+provides an explicit presentation barrier when one is needed before shutdown.
 
 Terminal focus detection uses xterm focus reporting under the hood. PaintCannon
 enables the terminal protocol from Rust and exposes it as app-level
