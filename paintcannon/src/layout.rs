@@ -105,6 +105,7 @@ struct LayoutNode {
     has_inline_stacking_contexts: bool,
     inline_static_position: Option<Point<u32>>,
     layout: Layout,
+    has_computed_layout: bool,
     cache: Cache,
     layout_dirty: bool,
     fragments_dirty: bool,
@@ -670,6 +671,7 @@ impl LayoutArena {
         item.parent = None;
         item.stacking_children.clear();
         item.layout = Layout::new();
+        item.has_computed_layout = false;
         item.cache.clear();
         item.layout_dirty = true;
         item.fragments_dirty = true;
@@ -806,6 +808,10 @@ impl LayoutArena {
         self.layout_passes
     }
 
+    pub(crate) fn has_computed_layout(&self, node: NodeId) -> bool {
+        self.nodes[node_index(node)].has_computed_layout
+    }
+
     pub(crate) fn stats(&self) -> LayoutStats {
         LayoutStats {
             node_count: self.nodes.iter().filter(|node| node.occupied).count(),
@@ -845,6 +851,7 @@ impl LayoutArena {
             has_inline_stacking_contexts: false,
             inline_static_position: None,
             layout: Layout::new(),
+            has_computed_layout: false,
             cache: Cache::new(),
             layout_dirty: true,
             fragments_dirty: true,
@@ -2483,6 +2490,7 @@ impl LayoutPartialTree for LayoutArena {
         if self.should_store_layout() {
             let item = &mut self.nodes[node_index(node_id)];
             item.layout = *layout;
+            item.has_computed_layout = true;
             item.layout_dirty = false;
         }
     }
@@ -2543,7 +2551,9 @@ impl RoundTree for LayoutArena {
     }
 
     fn set_final_layout(&mut self, node_id: NodeId, layout: &Layout) {
-        self.nodes[node_index(node_id)].layout = *layout;
+        let item = &mut self.nodes[node_index(node_id)];
+        item.layout = *layout;
+        item.has_computed_layout = true;
     }
 }
 

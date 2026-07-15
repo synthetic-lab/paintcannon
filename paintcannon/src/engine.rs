@@ -441,6 +441,9 @@ pub(crate) enum EngineCommand {
     DrainTransitionEvents {
         response: Sender<Vec<EngineTransitionEvent>>,
     },
+    HasActiveTransitions {
+        response: Sender<bool>,
+    },
     SetTruecolorEnabled {
         enabled: bool,
     },
@@ -845,13 +848,14 @@ impl PaintEngine {
 
     fn set_node_style_at(&mut self, node: NodeId, style: DivStyle, now: Instant) {
         let previous = self.arena.style(node).clone();
+        let transitions_enabled = self.truecolor_enabled && self.arena.has_computed_layout(node);
         self.transitions.style_color_changed(
             node,
             TransitionProperty::Color,
             previous.color,
             style.color,
             now,
-            self.truecolor_enabled,
+            transitions_enabled,
         );
         self.transitions.style_color_changed(
             node,
@@ -859,7 +863,7 @@ impl PaintEngine {
             previous.background,
             style.background,
             now,
-            self.truecolor_enabled,
+            transitions_enabled,
         );
         self.transitions.style_color_changed(
             node,
@@ -867,14 +871,14 @@ impl PaintEngine {
             previous.border_color,
             style.border_color,
             now,
-            self.truecolor_enabled,
+            transitions_enabled,
         );
         self.transitions.style_opacity_changed(
             node,
             previous.opacity,
             style.opacity,
             now,
-            self.truecolor_enabled,
+            transitions_enabled,
         );
         self.layout_dirty = self.layout_dirty
             || previous.to_taffy() != style.to_taffy()
@@ -1530,6 +1534,10 @@ impl PaintEngine {
             .into_iter()
             .filter_map(|event| self.transition_event_for_dom(event))
             .collect()
+    }
+
+    pub(crate) fn has_active_transitions(&self) -> bool {
+        self.transitions.has_active()
     }
 
     fn ensure_layout(&mut self, width: usize, height: usize, root: NodeId) {
@@ -2222,6 +2230,9 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         }
         EngineCommand::DrainTransitionEvents { response } => {
             let _ = response.send(engine.drain_transition_events());
+        }
+        EngineCommand::HasActiveTransitions { response } => {
+            let _ = response.send(engine.has_active_transitions());
         }
         EngineCommand::SetTruecolorEnabled { enabled } => {
             engine.set_truecolor_enabled(enabled);
@@ -3317,6 +3328,7 @@ mod tests {
         child_style.opacity = 1.0;
         engine.set_style_at(child, child_style, start);
 
+        assert!(engine.has_active_transitions());
         assert_eq!(
             engine.drain_transition_events(),
             vec![EngineTransitionEvent {
@@ -3339,6 +3351,7 @@ mod tests {
             .unwrap();
         assert_eq!(engine.layout_passes(), passes);
         assert_eq!(finished.cell(0, 0).unwrap().background, Background::Red);
+        assert!(!engine.has_active_transitions());
         assert_eq!(
             engine.drain_transition_events(),
             vec![EngineTransitionEvent {
@@ -3347,6 +3360,37 @@ mod tests {
                 property: TransitionProperty::Opacity,
             }]
         );
+    }
+
+    #[test]
+    fn initial_opacity_does_not_transition_from_the_internal_default() {
+        let mut engine = PaintEngine::new();
+        let mut root_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        root_style.background = Background::Blue;
+        let root = engine.create_element(root_style);
+        let mut overlay_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        overlay_style.background = Background::Black;
+        let overlay = engine.create_element(overlay_style.clone());
+        engine.append_child(root, overlay);
+        engine.set_root(root);
+        let start = std::time::Instant::now();
+
+        engine.set_transition(
+            overlay,
+            vec![TransitionSpec {
+                property: TransitionProperty::Opacity,
+                duration_ms: 200,
+            }],
+        );
+        overlay_style.opacity = 0.5;
+        engine.set_style_at(overlay, overlay_style, start);
+
+        let frame = engine.render_frame_at(2, 1, start).unwrap();
+        assert_eq!(
+            frame.cell(0, 0).unwrap().background,
+            Background::Rgb(0, 0, 128)
+        );
+        assert!(engine.drain_transition_events().is_empty());
     }
 
     #[test]

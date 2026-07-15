@@ -85,7 +85,7 @@ impl TransitionState {
         previous_style_color: Background,
         next_style_color: Background,
         now: Instant,
-        truecolor_enabled: bool,
+        transitions_enabled: bool,
     ) {
         if previous_style_color == next_style_color {
             return;
@@ -98,7 +98,7 @@ impl TransitionState {
             .and_then(|specs| specs.get(&property))
             .copied();
 
-        if !truecolor_enabled {
+        if !transitions_enabled {
             self.active.remove(&key);
             return;
         }
@@ -159,7 +159,7 @@ impl TransitionState {
         previous_opacity: f32,
         next_opacity: f32,
         now: Instant,
-        truecolor_enabled: bool,
+        transitions_enabled: bool,
     ) {
         if previous_opacity == next_opacity {
             return;
@@ -173,7 +173,7 @@ impl TransitionState {
             .and_then(|specs| specs.get(&property))
             .copied();
 
-        if !truecolor_enabled {
+        if !transitions_enabled {
             self.active.remove(&key);
             return;
         }
@@ -255,7 +255,6 @@ impl TransitionState {
             .collect()
     }
 
-    #[cfg(test)]
     pub(crate) fn has_active(&self) -> bool {
         !self.active.is_empty()
     }

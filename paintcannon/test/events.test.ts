@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mock } from "antipattern";
 import { PaintCannon, paintCannonDeps, type PaintElement } from "../main.ts";
 import {
@@ -580,6 +580,35 @@ describe("core resize events", () => {
 });
 
 describe("core animation lifecycle", () => {
+  it("renders frames until a laid-out opacity transition completes", () => {
+    vi.useFakeTimers();
+    const paintCannon = new PaintCannon({ fps: 60 });
+    const mockNative = currentMockNative();
+    const overlay = paintCannon.createElement("div");
+
+    try {
+      overlay.style.opacity = 0;
+      overlay.style.transition = "opacity 200ms";
+      paintCannon.render();
+
+      mockNative.activeTransitions = true;
+      overlay.style.opacity = 0.2;
+
+      vi.advanceTimersByTime(17);
+      expect(mockNative.renderCalls).toBe(2);
+
+      mockNative.activeTransitions = false;
+      vi.advanceTimersByTime(17);
+      expect(mockNative.renderCalls).toBe(3);
+
+      vi.advanceTimersByTime(100);
+      expect(mockNative.renderCalls).toBe(3);
+    } finally {
+      paintCannon.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("stops an in-flight animation callback cleanly after native Ctrl-C shutdown", () => {
     const paintCannon = new PaintCannon();
     const mockNative = currentMockNative();
