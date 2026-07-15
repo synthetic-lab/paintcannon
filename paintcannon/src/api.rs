@@ -1,14 +1,11 @@
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
 use std::sync::mpsc;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
-use crossbeam_channel::{bounded, Sender, TrySendError};
+use crossbeam_channel::{bounded, Sender};
 use napi::{Error, Result};
 use napi_derive::napi;
 use termprofile::{DetectorSettings, TermProfile};
@@ -127,7 +124,6 @@ pub struct PaintCannon {
     thread: Option<JoinHandle<()>>,
     input: Option<TerminalInput>,
     kitty_keyboard_enabled: bool,
-    render_pending: Arc<AtomicBool>,
     layout_size: Mutex<(usize, usize)>,
     next_dom_id: u32,
     color_profile: TermProfile,
@@ -148,7 +144,6 @@ impl PaintCannon {
         let size = query_terminal_size();
         let (terminal_foreground, terminal_background) = query_terminal_colors();
         let thread = thread::spawn(move || engine_loop(rx));
-        let render_pending = Arc::new(AtomicBool::new(false));
         let _ = tx.send(EngineCommand::SetTruecolorEnabled {
             enabled: color_profile == TermProfile::TrueColor,
         });
@@ -174,7 +169,6 @@ impl PaintCannon {
             thread: Some(thread),
             input,
             kitty_keyboard_enabled,
-            render_pending,
             layout_size: Mutex::new((size.cols as usize, size.rows as usize)),
             next_dom_id: 1,
             color_profile,
@@ -710,32 +704,13 @@ impl PaintCannon {
 
     #[napi]
     pub fn render(&self) -> Result<()> {
-        if self
-            .render_pending
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return Ok(());
-        }
-
         let (width, height) = self.layout_size();
-        match self.tx.try_send(EngineCommand::RenderPending {
+        self.send(EngineCommand::RenderAsync {
             width,
             height,
             color_profile: self.color_profile,
             synchronized: io::stdout().is_terminal(),
-            pending: Arc::clone(&self.render_pending),
-        }) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => {
-                self.render_pending.store(false, Ordering::Release);
-                Ok(())
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                self.render_pending.store(false, Ordering::Release);
-                Err(Error::from_reason("renderer thread stopped"))
-            }
-        }
+        })
     }
 
     #[napi]
@@ -1445,6 +1420,35 @@ mod tests {
     use crate::style::{
         CssDimension, CssLengthPercentageAuto, CssPosition, CssVisibility, CssZIndex,
     };
+
+    #[test]
+    fn render_request_after_mutation_is_not_dropped_behind_an_earlier_frame() {
+        let (tx, rx) = bounded(4);
+        let paint_cannon = PaintCannon {
+            tx,
+            thread: None,
+            input: None,
+            kitty_keyboard_enabled: false,
+            layout_size: Mutex::new((80, 24)),
+            next_dom_id: 1,
+            color_profile: TermProfile::TrueColor,
+        };
+
+        paint_cannon.render().unwrap();
+        paint_cannon
+            .tx
+            .send(EngineCommand::SetTerminalFocused { focused: false })
+            .unwrap();
+        paint_cannon.render().unwrap();
+
+        let commands = rx.try_iter().collect::<Vec<_>>();
+        assert!(matches!(commands[0], EngineCommand::RenderAsync { .. }));
+        assert!(matches!(
+            commands[1],
+            EngineCommand::SetTerminalFocused { focused: false }
+        ));
+        assert!(matches!(commands[2], EngineCommand::RenderAsync { .. }));
+    }
 
     #[test]
     fn can_fold_style_mutation_into_create_command() {

@@ -1,10 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, IsTerminal, Write};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc::Sender as StdSender,
-    Arc, OnceLock,
-};
+use std::sync::{mpsc::Sender as StdSender, OnceLock};
 use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -424,12 +420,11 @@ pub(crate) enum EngineCommand {
         height: usize,
         response: Sender<Option<Frame>>,
     },
-    RenderPending {
+    RenderAsync {
         width: usize,
         height: usize,
         color_profile: TermProfile,
         synchronized: bool,
-        pending: Arc<AtomicBool>,
     },
     RenderStdout {
         width: usize,
@@ -2202,18 +2197,14 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         } => {
             let _ = response.send(engine.render_frame(width, height));
         }
-        EngineCommand::RenderPending {
+        EngineCommand::RenderAsync {
             width,
             height,
             color_profile,
             synchronized,
-            pending,
         } => {
-            {
-                let mut out = io::stdout().lock();
-                let _ = engine.render_to(width, height, &mut out, color_profile, synchronized);
-            }
-            pending.store(false, Ordering::Release);
+            let mut out = io::stdout().lock();
+            let _ = engine.render_to(width, height, &mut out, color_profile, synchronized);
         }
         EngineCommand::RenderStdout {
             width,
