@@ -12,14 +12,12 @@ use termprofile::{DetectorSettings, TermProfile};
 
 use crate::engine::{
     apply_style_mutation, engine_loop, ClickEvent as EngineClickEvent, DomId, EngineCommand,
-    EngineLoopOptions, EngineTransitionEvent, MouseClick, ScrollbarHit as EngineScrollbarHit,
-    StyleMutation, StyleReset,
+    EngineLoopOptions, MouseClick, ScrollbarHit as EngineScrollbarHit, StyleMutation, StyleReset,
 };
 use crate::event_notification::{EventNotification, EventNotifier};
-use crate::input::{
-    TerminalFocusEvent, TerminalInput, TerminalInputEvent, TerminalMouseEvent, TerminalResizeEvent,
-};
+use crate::input::TerminalInput;
 use crate::layout::{ArenaScrollMetrics, ScrollbarAxis};
+use crate::native_event::{NativeEvent, NativeEventQueue};
 use crate::style::{
     parse_align_items, parse_border_style, parse_box_lengths, parse_cursor, parse_dimension,
     parse_display, parse_flex_direction, parse_flex_flow, parse_flex_shorthand, parse_flex_wrap,
@@ -89,14 +87,6 @@ pub struct ScrollbarHit {
     pub scroll_length: u32,
 }
 
-#[derive(Clone)]
-#[napi(object)]
-pub struct TransitionEvent {
-    pub r#type: String,
-    pub target_id: u32,
-    pub property_name: String,
-}
-
 #[napi(object)]
 pub struct BatchCommand {
     pub r#type: String,
@@ -124,6 +114,7 @@ pub struct PaintCannon {
     tx: Sender<EngineCommand>,
     thread: Option<JoinHandle<()>>,
     input: Option<TerminalInput>,
+    events: Arc<NativeEventQueue>,
     kitty_keyboard_enabled: bool,
     next_dom_id: u32,
 }
@@ -152,6 +143,7 @@ impl PaintCannon {
         let (terminal_foreground, terminal_background) = query_terminal_colors();
         let event_notifier = Arc::new(EventNotifier::new(on_events_available)?);
         let engine_event_notifier: Arc<dyn EventNotification> = event_notifier.clone();
+        let events = Arc::new(NativeEventQueue::default());
         let loop_options = EngineLoopOptions {
             width: size.cols as usize,
             height: size.rows as usize,
@@ -160,6 +152,7 @@ impl PaintCannon {
             synchronized: io::stdout().is_terminal(),
             terminal_foreground,
             terminal_background,
+            event_queue: Arc::clone(&events),
             event_notifier: engine_event_notifier.clone(),
         };
         let thread = thread::spawn(move || engine_loop(rx, loop_options));
@@ -170,6 +163,7 @@ impl PaintCannon {
             capture_mouse.unwrap_or(false),
             capture_ctrl_c.unwrap_or(false),
             Some(tx.clone()),
+            Arc::clone(&events),
             engine_event_notifier,
         );
         let kitty_keyboard_enabled = input
@@ -181,6 +175,7 @@ impl PaintCannon {
             tx,
             thread: Some(thread),
             input,
+            events,
             kitty_keyboard_enabled,
             next_dom_id: 1,
         })
@@ -711,54 +706,8 @@ impl PaintCannon {
     }
 
     #[napi]
-    pub fn drain_input_events(&self) -> Vec<TerminalInputEvent> {
-        self.input
-            .as_ref()
-            .map(TerminalInput::drain)
-            .unwrap_or_default()
-    }
-
-    #[napi]
-    pub fn drain_mouse_events(&self) -> Vec<TerminalMouseEvent> {
-        self.input
-            .as_ref()
-            .map(TerminalInput::drain_mouse_events)
-            .unwrap_or_default()
-    }
-
-    #[napi]
-    pub fn drain_resize_events(&self) -> Vec<TerminalResizeEvent> {
-        let events = self
-            .input
-            .as_ref()
-            .map(TerminalInput::drain_resize_events)
-            .unwrap_or_default();
-        events
-    }
-
-    #[napi]
-    pub fn drain_focus_events(&self) -> Vec<TerminalFocusEvent> {
-        self.input
-            .as_ref()
-            .map(TerminalInput::drain_focus_events)
-            .unwrap_or_default()
-    }
-
-    #[napi]
-    pub fn drain_transition_events(&self) -> Vec<TransitionEvent> {
-        let (response_tx, response_rx) = bounded(1);
-        if self
-            .send(EngineCommand::DrainTransitionEvents {
-                response: response_tx,
-            })
-            .is_err()
-        {
-            return Vec::new();
-        }
-        response_rx
-            .recv()
-            .map(|events| events.into_iter().map(transition_event_to_napi).collect())
-            .unwrap_or_default()
+    pub fn drain_events(&self) -> Vec<NativeEvent> {
+        self.events.drain()
     }
 
     #[napi]
@@ -1308,27 +1257,6 @@ fn click_event_to_napi(event: EngineClickEvent) -> ClickEvent {
     }
 }
 
-fn transition_event_to_napi(event: EngineTransitionEvent) -> TransitionEvent {
-    TransitionEvent {
-        r#type: match event.event_type {
-            crate::transition::TransitionEventType::Start => "transitionstart",
-            crate::transition::TransitionEventType::End => "transitionend",
-        }
-        .to_string(),
-        target_id: event.target.0,
-        property_name: transition_property_name(event.property).to_string(),
-    }
-}
-
-fn transition_property_name(property: crate::style::TransitionProperty) -> &'static str {
-    match property {
-        crate::style::TransitionProperty::Color => "color",
-        crate::style::TransitionProperty::BackgroundColor => "background-color",
-        crate::style::TransitionProperty::BorderColor => "border-color",
-        crate::style::TransitionProperty::Opacity => "opacity",
-    }
-}
-
 fn required_i32(value: Option<i32>, field: &str, command: &str) -> Result<i32> {
     value.ok_or_else(|| Error::from_reason(format!("{command} requires {field}")))
 }
@@ -1481,14 +1409,6 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    #[test]
-    fn opacity_transition_events_use_the_css_property_name() {
-        assert_eq!(
-            transition_property_name(crate::style::TransitionProperty::Opacity),
-            "opacity"
-        );
     }
 
     #[test]

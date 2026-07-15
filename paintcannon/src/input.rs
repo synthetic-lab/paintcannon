@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -21,74 +21,19 @@ use crossterm::{
         LeaveAlternateScreen,
     },
 };
-use napi_derive::napi;
 
 use crate::engine::EngineCommand;
 use crate::event_notification::EventNotification;
+use crate::native_event::{
+    KeyboardEvent, NativeEvent, NativeEventQueue, TerminalFocusEvent, TerminalMouseEvent,
+    TerminalResizeEvent,
+};
 use crate::selection::{SelectionAction, SelectionMouseEvent, SelectionMouseEventType};
 use crate::terminal::{reset_pointer_shape, reset_terminal};
 
 const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
 
-#[derive(Clone)]
-#[napi(object)]
-pub struct KeyboardEvent {
-    pub r#type: String,
-    pub key: String,
-    pub code: String,
-    pub ctrl_key: bool,
-    pub alt_key: bool,
-    pub meta_key: bool,
-    pub shift_key: bool,
-    pub repeat: bool,
-}
-
-#[derive(Clone)]
-#[napi(object)]
-pub struct TerminalInputEvent {
-    pub keyboard: Option<KeyboardEvent>,
-    pub paste: Option<String>,
-}
-
-#[derive(Clone)]
-enum OrderedInputEvent {
-    Keyboard(KeyboardEvent),
-    Paste(String),
-}
-
-#[derive(Clone)]
-#[napi(object)]
-pub struct TerminalMouseEvent {
-    pub r#type: String,
-    pub x: u32,
-    pub y: u32,
-    pub button: u32,
-    pub delta_x: i32,
-    pub delta_y: i32,
-    pub ctrl_key: bool,
-    pub alt_key: bool,
-    pub meta_key: bool,
-    pub shift_key: bool,
-}
-
-#[derive(Clone)]
-#[napi(object)]
-pub struct TerminalResizeEvent {
-    pub cols: u32,
-    pub rows: u32,
-}
-
-#[derive(Clone)]
-#[napi(object)]
-pub struct TerminalFocusEvent {
-    pub r#type: String,
-}
-
 pub(crate) struct TerminalInput {
-    input_events: Arc<Mutex<VecDeque<OrderedInputEvent>>>,
-    mouse_events: Arc<Mutex<VecDeque<TerminalMouseEvent>>>,
-    resize_events: Arc<Mutex<VecDeque<TerminalResizeEvent>>>,
-    focus_events: Arc<Mutex<VecDeque<TerminalFocusEvent>>>,
     focused: Arc<AtomicBool>,
     interrupted_by_ctrl_c: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
@@ -114,6 +59,7 @@ impl TerminalInput {
         capture_mouse: bool,
         capture_ctrl_c: bool,
         renderer_tx: Option<crossbeam_channel::Sender<EngineCommand>>,
+        event_queue: Arc<NativeEventQueue>,
         event_notifier: Arc<dyn EventNotification>,
     ) -> Option<Self> {
         if enable_raw_mode().is_err() {
@@ -158,19 +104,12 @@ impl TerminalInput {
             set_bool(&keyboard_enhancement_pushed, true);
         }
 
-        let input_events = Arc::new(Mutex::new(VecDeque::new()));
-        let mouse_events = Arc::new(Mutex::new(VecDeque::new()));
-        let resize_events = Arc::new(Mutex::new(VecDeque::new()));
-        let focus_events = Arc::new(Mutex::new(VecDeque::new()));
         let focused = Arc::new(AtomicBool::new(true));
         let interrupted_by_ctrl_c = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let synthetic_keyup_delay_ms = Arc::new(Mutex::new(synthetic_keyup_delay_ms));
         let terminal_captured = Arc::new(Mutex::new(true));
-        let thread_input_events = Arc::clone(&input_events);
-        let thread_mouse_events = Arc::clone(&mouse_events);
-        let thread_resize_events = Arc::clone(&resize_events);
-        let thread_focus_events = Arc::clone(&focus_events);
+        let thread_event_queue = event_queue;
         let thread_focused = Arc::clone(&focused);
         let thread_interrupted_by_ctrl_c = Arc::clone(&interrupted_by_ctrl_c);
         let thread_stop = Arc::clone(&stop);
@@ -214,7 +153,7 @@ impl TerminalInput {
                                     if handle_terminal_key_event(
                                         event,
                                         &mut pressed_keys,
-                                        &thread_input_events,
+                                        &thread_event_queue,
                                         &thread_synthetic_keyup_delay_ms,
                                         kitty_keyboard_enabled,
                                     ) {
@@ -222,14 +161,14 @@ impl TerminalInput {
                                     }
                                 }
                                 TerminalEvent::Paste(data) => {
-                                    push_paste_event(&thread_input_events, data);
+                                    push_paste_event(&thread_event_queue, data);
                                     thread_event_notifier.notify();
                                 }
                                 TerminalEvent::Mouse(event) => {
                                     handle_terminal_mouse_event(
                                         event,
                                         &mut mouse_down,
-                                        &thread_mouse_events,
+                                        &thread_event_queue,
                                         if capture_mouse {
                                             thread_renderer_tx.as_ref()
                                         } else {
@@ -240,7 +179,7 @@ impl TerminalInput {
                                 }
                                 TerminalEvent::Resize(cols, rows) => {
                                     push_resize_event(
-                                        &thread_resize_events,
+                                        &thread_event_queue,
                                         TerminalResizeEvent {
                                             cols: u32::from(cols),
                                             rows: u32::from(rows),
@@ -254,7 +193,7 @@ impl TerminalInput {
                                     awaiting_initial_focus_report = false;
                                     if handle_terminal_focus_event(
                                         true,
-                                        &thread_focus_events,
+                                        &thread_event_queue,
                                         &thread_focused,
                                         thread_renderer_tx.as_ref(),
                                         initial_report,
@@ -267,7 +206,7 @@ impl TerminalInput {
                                     awaiting_initial_focus_report = false;
                                     if handle_terminal_focus_event(
                                         false,
-                                        &thread_focus_events,
+                                        &thread_event_queue,
                                         &thread_focused,
                                         thread_renderer_tx.as_ref(),
                                         initial_report,
@@ -279,7 +218,7 @@ impl TerminalInput {
                         }
                     }
                     Ok(false) => {
-                        if synthesize_expired_keyups(&mut pressed_keys, &thread_input_events) {
+                        if synthesize_expired_keyups(&mut pressed_keys, &thread_event_queue) {
                             thread_event_notifier.notify();
                         }
                     }
@@ -289,7 +228,7 @@ impl TerminalInput {
 
             for (_, pressed_key) in pressed_keys {
                 push_keyboard_event(
-                    &thread_input_events,
+                    &thread_event_queue,
                     keyboard_event_from_pressed_key("keyup", false, &pressed_key),
                 );
             }
@@ -300,10 +239,6 @@ impl TerminalInput {
         }
 
         Some(Self {
-            input_events,
-            mouse_events,
-            resize_events,
-            focus_events,
             focused,
             interrupted_by_ctrl_c,
             stop,
@@ -320,56 +255,6 @@ impl TerminalInput {
             terminal_captured,
             thread,
         })
-    }
-
-    pub(crate) fn drain(&self) -> Vec<TerminalInputEvent> {
-        let Ok(mut events) = self.input_events.lock() else {
-            return Vec::new();
-        };
-
-        events
-            .drain(..)
-            .map(|event| match event {
-                OrderedInputEvent::Keyboard(keyboard) => TerminalInputEvent {
-                    keyboard: Some(keyboard),
-                    paste: None,
-                },
-                OrderedInputEvent::Paste(paste) => TerminalInputEvent {
-                    keyboard: None,
-                    paste: Some(paste),
-                },
-            })
-            .collect()
-    }
-
-    pub(crate) fn drain_mouse_events(&self) -> Vec<TerminalMouseEvent> {
-        let Ok(mut events) = self.mouse_events.lock() else {
-            return Vec::new();
-        };
-
-        events.drain(..).collect()
-    }
-
-    pub(crate) fn drain_resize_events(&self) -> Vec<TerminalResizeEvent> {
-        let Ok(mut events) = self.resize_events.lock() else {
-            return Vec::new();
-        };
-
-        if events.is_empty() {
-            return Vec::new();
-        }
-
-        let latest = events.pop_back();
-        events.clear();
-        latest.into_iter().collect()
-    }
-
-    pub(crate) fn drain_focus_events(&self) -> Vec<TerminalFocusEvent> {
-        let Ok(mut events) = self.focus_events.lock() else {
-            return Vec::new();
-        };
-
-        events.drain(..).collect()
     }
 
     pub(crate) fn has_focus(&self) -> bool {
@@ -566,7 +451,7 @@ struct MouseDown {
 fn handle_terminal_key_event(
     event: TerminalKeyEvent,
     pressed_keys: &mut HashMap<String, PressedKey>,
-    events: &Arc<Mutex<VecDeque<OrderedInputEvent>>>,
+    events: &NativeEventQueue,
     synthetic_keyup_delay_ms: &Arc<Mutex<u32>>,
     kitty_keyboard_enabled: bool,
 ) -> bool {
@@ -610,7 +495,7 @@ fn handle_terminal_key_event(
 
 fn synthesize_expired_keyups(
     pressed_keys: &mut HashMap<String, PressedKey>,
-    events: &Arc<Mutex<VecDeque<OrderedInputEvent>>>,
+    events: &NativeEventQueue,
 ) -> bool {
     let now = Instant::now();
     let released: Vec<String> = pressed_keys
@@ -652,35 +537,21 @@ fn synthetic_keyup_deadline(delay_ms: &Arc<Mutex<u32>>) -> Option<Instant> {
     }
 }
 
-fn push_keyboard_event(
-    events: &Arc<Mutex<VecDeque<OrderedInputEvent>>>,
-    event: Option<KeyboardEvent>,
-) {
+fn push_keyboard_event(events: &NativeEventQueue, event: Option<KeyboardEvent>) {
     let Some(event) = event else {
         return;
     };
-
-    if let Ok(mut events) = events.lock() {
-        events.push_back(OrderedInputEvent::Keyboard(event));
-        while events.len() > 1024 {
-            events.pop_front();
-        }
-    }
+    events.push(NativeEvent::keyboard(event));
 }
 
-fn push_paste_event(events: &Arc<Mutex<VecDeque<OrderedInputEvent>>>, data: String) {
-    if let Ok(mut events) = events.lock() {
-        events.push_back(OrderedInputEvent::Paste(data));
-        while events.len() > 1024 {
-            events.pop_front();
-        }
-    }
+fn push_paste_event(events: &NativeEventQueue, data: String) {
+    events.push(NativeEvent::paste(data));
 }
 
 fn handle_terminal_mouse_event(
     event: CrosstermMouseEvent,
     mouse_down: &mut Option<MouseDown>,
-    events: &Arc<Mutex<VecDeque<TerminalMouseEvent>>>,
+    events: &NativeEventQueue,
     renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
 ) {
     match event.kind {
@@ -798,17 +669,12 @@ fn send_selection_cursor_event(
     });
 }
 
-fn push_mouse_event(events: &Arc<Mutex<VecDeque<TerminalMouseEvent>>>, event: TerminalMouseEvent) {
-    if let Ok(mut events) = events.lock() {
-        events.push_back(event);
-        while events.len() > 1024 {
-            events.pop_front();
-        }
-    }
+fn push_mouse_event(events: &NativeEventQueue, event: TerminalMouseEvent) {
+    events.push(NativeEvent::mouse(event));
 }
 
 fn push_resize_event(
-    events: &Arc<Mutex<VecDeque<TerminalResizeEvent>>>,
+    events: &NativeEventQueue,
     event: TerminalResizeEvent,
     renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
 ) {
@@ -818,17 +684,12 @@ fn push_resize_event(
             height: event.rows as usize,
         });
     }
-    if let Ok(mut events) = events.lock() {
-        events.push_back(event);
-        while events.len() > 16 {
-            events.pop_front();
-        }
-    }
+    events.push(NativeEvent::resize(event));
 }
 
 fn handle_terminal_focus_event(
     focused: bool,
-    events: &Arc<Mutex<VecDeque<TerminalFocusEvent>>>,
+    events: &NativeEventQueue,
     current_focus: &Arc<AtomicBool>,
     renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
     initial_report: bool,
@@ -845,13 +706,8 @@ fn handle_terminal_focus_event(
     }
 }
 
-fn push_focus_event(events: &Arc<Mutex<VecDeque<TerminalFocusEvent>>>, event: TerminalFocusEvent) {
-    if let Ok(mut events) = events.lock() {
-        events.push_back(event);
-        while events.len() > 16 {
-            events.pop_front();
-        }
-    }
+fn push_focus_event(events: &NativeEventQueue, event: TerminalFocusEvent) {
+    events.push(NativeEvent::focus(event));
 }
 
 fn terminal_focus_event(focused: bool) -> TerminalFocusEvent {
@@ -1072,25 +928,22 @@ mod tests {
 
     #[test]
     fn keyboard_and_paste_events_share_one_ordered_queue() {
-        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let events = NativeEventQueue::default();
 
         push_keyboard_event(&events, Some(keyboard_event("a")));
         push_paste_event(&events, "pasted".to_string());
         push_keyboard_event(&events, Some(keyboard_event("b")));
 
-        let events = events.lock().expect("input events mutex poisoned");
-        assert!(matches!(
-            events.get(0),
-            Some(OrderedInputEvent::Keyboard(event)) if event.key == "a"
-        ));
-        assert!(matches!(
-            events.get(1),
-            Some(OrderedInputEvent::Paste(data)) if data == "pasted"
-        ));
-        assert!(matches!(
-            events.get(2),
-            Some(OrderedInputEvent::Keyboard(event)) if event.key == "b"
-        ));
+        let events = events.drain();
+        assert_eq!(
+            events[0].keyboard.as_ref().map(|event| event.key.as_str()),
+            Some("a")
+        );
+        assert_eq!(events[1].paste.as_deref(), Some("pasted"));
+        assert_eq!(
+            events[2].keyboard.as_ref().map(|event| event.key.as_str()),
+            Some("b")
+        );
     }
 
     #[test]
@@ -1101,7 +954,7 @@ mod tests {
 
     #[test]
     fn terminal_resize_updates_renderer_size_without_waiting_for_javascript() {
-        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let events = NativeEventQueue::default();
         let (renderer_tx, renderer_rx) = crossbeam_channel::bounded(1);
 
         push_resize_event(
@@ -1122,11 +975,11 @@ mod tests {
                 height: 40,
             }
         ));
+        let events = events.drain();
         assert_eq!(
-            events
-                .lock()
-                .expect("resize events mutex poisoned")
-                .front()
+            events[0]
+                .resize
+                .as_ref()
                 .map(|event| (event.cols, event.rows)),
             Some((100, 40))
         );
@@ -1134,7 +987,7 @@ mod tests {
 
     #[test]
     fn handle_terminal_focus_event_updates_focus_state_and_queues_event() {
-        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let events = NativeEventQueue::default();
         let focused = Arc::new(AtomicBool::new(true));
         let (renderer_tx, renderer_rx) = crossbeam_channel::bounded(1);
 
@@ -1147,22 +1000,21 @@ mod tests {
                 .expect("renderer command should be queued"),
             EngineCommand::SetTerminalFocused { focused: false }
         ));
-        let mut events = events.lock().expect("focus events mutex poisoned");
-        let event = events.pop_front().expect("focus event should be queued");
-        assert_eq!(event.r#type, "blur");
+        let events = events.drain();
+        assert_eq!(
+            events[0].focus.as_ref().map(|event| event.r#type.as_str()),
+            Some("blur")
+        );
     }
 
     #[test]
     fn initial_focus_confirmation_does_not_queue_a_public_event() {
-        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let events = NativeEventQueue::default();
         let focused = Arc::new(AtomicBool::new(true));
 
         handle_terminal_focus_event(true, &events, &focused, None, true);
 
         assert!(focused.load(Ordering::Relaxed));
-        assert!(events
-            .lock()
-            .expect("focus events mutex poisoned")
-            .is_empty());
+        assert!(events.drain().is_empty());
     }
 }

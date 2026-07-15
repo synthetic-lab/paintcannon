@@ -415,9 +415,6 @@ pub(crate) enum EngineCommand {
     FlushFrame {
         response: StdSender<io::Result<()>>,
     },
-    DrainTransitionEvents {
-        response: Sender<Vec<EngineTransitionEvent>>,
-    },
     SetRenderSize {
         width: usize,
         height: usize,
@@ -1615,10 +1612,6 @@ impl PaintEngine {
             .into_iter()
             .filter_map(|event| self.transition_event_for_dom(event))
             .collect()
-    }
-
-    fn has_pending_transition_events(&self) -> bool {
-        self.transitions.has_events()
     }
 
     #[cfg(test)]

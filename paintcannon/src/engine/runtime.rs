@@ -9,6 +9,7 @@ use super::{
     profile_log, scrollbar_suppresses_selection, EngineCommand, PaintEngine, SelectionAction,
 };
 use crate::event_notification::EventNotification;
+use crate::native_event::{NativeEvent, NativeEventQueue};
 use crate::style::Background;
 use crate::terminal::copy_text_to_clipboard;
 
@@ -20,6 +21,7 @@ pub(crate) struct EngineLoopOptions {
     pub(crate) synchronized: bool,
     pub(crate) terminal_foreground: Background,
     pub(crate) terminal_background: Background,
+    pub(crate) event_queue: Arc<NativeEventQueue>,
     pub(crate) event_notifier: Arc<dyn EventNotification>,
 }
 
@@ -30,6 +32,7 @@ pub(super) struct EngineLoopState {
     next_frame: Instant,
     color_profile: TermProfile,
     synchronized: bool,
+    event_queue: Arc<NativeEventQueue>,
     event_notifier: Arc<dyn EventNotification>,
 }
 
@@ -43,6 +46,7 @@ impl EngineLoopState {
             next_frame: Instant::now() + frame_interval,
             color_profile: options.color_profile,
             synchronized: options.synchronized,
+            event_queue: Arc::clone(&options.event_queue),
             event_notifier: Arc::clone(&options.event_notifier),
         }
     }
@@ -92,7 +96,7 @@ pub(crate) fn engine_loop(rx: Receiver<EngineCommand>, options: EngineLoopOption
         if flush_result.is_err() {
             engine.mark_paint_dirty();
         }
-        notify_transition_events(&engine, state.event_notifier.as_ref());
+        publish_transition_events(&mut engine, &state);
         state.next_frame =
             next_frame_deadline(state.next_frame, state.frame_interval, Instant::now());
     }
@@ -351,9 +355,6 @@ pub(super) fn apply_command(
             };
             let _ = response.send(result);
         }
-        EngineCommand::DrainTransitionEvents { response } => {
-            let _ = response.send(engine.drain_transition_events());
-        }
         EngineCommand::SetRenderSize { width, height } => {
             if state.width != width || state.height != height {
                 state.width = width;
@@ -376,14 +377,19 @@ pub(super) fn apply_command(
         }
     }
 
-    notify_transition_events(engine, state.event_notifier.as_ref());
+    publish_transition_events(engine, state);
     true
 }
 
-fn notify_transition_events(engine: &PaintEngine, notifier: &dyn EventNotification) {
-    if engine.has_pending_transition_events() {
-        notifier.notify();
+fn publish_transition_events(engine: &mut PaintEngine, state: &EngineLoopState) {
+    let events = engine.drain_transition_events();
+    if events.is_empty() {
+        return;
     }
+    for event in events {
+        state.event_queue.push(NativeEvent::transition(event));
+    }
+    state.event_notifier.notify();
 }
 
 fn frame_interval(fps: f64) -> Duration {
@@ -452,6 +458,7 @@ mod tests {
             synchronized: false,
             terminal_foreground: Background::White,
             terminal_background: Background::Black,
+            event_queue: Arc::new(NativeEventQueue::default()),
             event_notifier: Arc::new(NoopEventNotification),
         }
     }
@@ -500,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_transition_events_notify_javascript() {
+    fn transition_events_are_queued_and_notify_javascript() {
         let mut engine = PaintEngine::new();
         let id = engine.create_element(DivStyle::default());
         let node = engine.node_for(id).unwrap();
@@ -514,11 +521,27 @@ mod tests {
         engine
             .transitions
             .style_opacity_changed(node, 1.0, 0.5, Instant::now(), true);
-        let notifier = RecordingEventNotification::default();
+        let event_queue = Arc::new(NativeEventQueue::default());
+        let notifier = Arc::new(RecordingEventNotification::default());
+        let state = EngineLoopState::new(&EngineLoopOptions {
+            event_queue: Arc::clone(&event_queue),
+            event_notifier: notifier.clone(),
+            ..test_loop_options()
+        });
 
-        notify_transition_events(&engine, &notifier);
+        publish_transition_events(&mut engine, &state);
 
         assert_eq!(notifier.notifications.load(Ordering::Relaxed), 1);
+        let events = event_queue.drain();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "transition");
+        assert_eq!(
+            events[0]
+                .transition
+                .as_ref()
+                .map(|event| event.r#type.as_str()),
+            Some("transitionstart")
+        );
     }
 
     #[test]

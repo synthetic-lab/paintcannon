@@ -16,6 +16,7 @@ import {
   keyboardInput,
   mouseEvent,
   pasteInput,
+  resizeEvent,
   type MockNativePaintCannon,
 } from "../../paintcannon/test/mock-native.ts";
 
@@ -196,7 +197,7 @@ describe("paste events", () => {
     if (mockNative === undefined) {
       throw new Error("expected mock native instance");
     }
-    mockNative.inputEvents.push(pasteInput("from clipboard"));
+    mockNative.events.push(pasteInput("from clipboard"));
     notifyNativeEvents(root.paintCannon);
     root.paintCannon.stop();
 
@@ -234,7 +235,7 @@ describe("controlled text controls", () => {
     }
 
     await commit();
-    mockNative.inputEvents.push(
+    mockNative.events.push(
       keyboardInput({
         type: "keydown",
         key: "a",
@@ -268,7 +269,7 @@ describe("resize events", () => {
     paintCannon.addEventListener("resize", (event: PaintResizeEvent) => {
       sizes.push([event.cols, event.rows]);
     });
-    mockNative.resizeEvents.push({ cols: 100, rows: 40 });
+    mockNative.events.push(resizeEvent(100, 40));
     notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
@@ -357,7 +358,7 @@ describe("scroll events", () => {
       clientWidth: 10,
       clientHeight: 4,
     });
-    mockNative.mouseEvents.push(mouseEvent("wheel", { deltaY: -1 }));
+    mockNative.events.push(mouseEvent("wheel", { deltaY: -1 }));
 
     notifyNativeEvents(root.paintCannon);
     root.paintCannon.stop();
