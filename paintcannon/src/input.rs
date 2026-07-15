@@ -54,18 +54,30 @@ pub(crate) struct TerminalInput {
     thread: JoinHandle<()>,
 }
 
+pub(crate) struct TerminalInputOptions {
+    pub(crate) synthetic_keyup_delay_ms: u32,
+    pub(crate) force_compat_mode: bool,
+    pub(crate) alternate_screen: bool,
+    pub(crate) capture_mouse: bool,
+    pub(crate) capture_ctrl_c: bool,
+    pub(crate) initial_terminal_size: (u32, u32),
+}
+
 impl TerminalInput {
     pub(crate) fn start(
-        synthetic_keyup_delay_ms: u32,
-        force_compat_mode: bool,
-        alternate_screen: bool,
-        capture_mouse: bool,
-        capture_ctrl_c: bool,
-        initial_terminal_size: (u32, u32),
+        options: TerminalInputOptions,
         renderer_tx: Option<crossbeam_channel::Sender<EngineCommand>>,
         event_queue: Arc<NativeEventQueue>,
         event_notifier: Arc<dyn EventNotification>,
     ) -> Option<Self> {
+        let TerminalInputOptions {
+            synthetic_keyup_delay_ms,
+            force_compat_mode,
+            alternate_screen,
+            capture_mouse,
+            capture_ctrl_c,
+            initial_terminal_size,
+        } = options;
         if enable_raw_mode().is_err() {
             return None;
         }

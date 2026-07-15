@@ -15,7 +15,7 @@ use crate::engine::{
     EngineLoopOptions, MouseClick, ScrollbarHit as EngineScrollbarHit, StyleMutation, StyleReset,
 };
 use crate::event_notification::{EventNotification, EventNotifier};
-use crate::input::TerminalInput;
+use crate::input::{TerminalInput, TerminalInputOptions};
 use crate::layout::{ArenaScrollMetrics, ScrollbarAxis};
 use crate::native_event::{NativeEvent, NativeEventQueue};
 use crate::style::{
@@ -157,12 +157,14 @@ impl PaintCannon {
         };
         let thread = thread::spawn(move || engine_loop(rx, loop_options));
         let input = TerminalInput::start(
-            DEFAULT_SYNTHETIC_KEYUP_MS,
-            force_compat_mode.unwrap_or(false),
-            alternate_screen.unwrap_or(false),
-            capture_mouse.unwrap_or(false),
-            capture_ctrl_c.unwrap_or(false),
-            (size.cols, size.rows),
+            TerminalInputOptions {
+                synthetic_keyup_delay_ms: DEFAULT_SYNTHETIC_KEYUP_MS,
+                force_compat_mode: force_compat_mode.unwrap_or(false),
+                alternate_screen: alternate_screen.unwrap_or(false),
+                capture_mouse: capture_mouse.unwrap_or(false),
+                capture_ctrl_c: capture_ctrl_c.unwrap_or(false),
+                initial_terminal_size: (size.cols, size.rows),
+            },
             Some(tx.clone()),
             Arc::clone(&events),
             engine_event_notifier,
@@ -722,6 +724,8 @@ impl PaintCannon {
     }
 
     #[napi]
+    // Grouping these arguments would break the existing JavaScript API.
+    #[allow(clippy::too_many_arguments)]
     pub fn click_event_for_mouse_click(
         &self,
         x: u32,

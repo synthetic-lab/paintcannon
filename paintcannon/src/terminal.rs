@@ -157,13 +157,11 @@ fn allow_tmux_passthrough() -> bool {
         let mut show_command = Command::new("tmux");
         show_command.args(["show", "-Ap", "allow-passthrough"]);
         let show = command_output_with_timeout(show_command, Duration::from_secs(2));
-        if let Ok(output) = show {
-            if let Some(output) = output {
-                let value = String::from_utf8_lossy(&output.stdout);
-                let value = value.trim();
-                if value.ends_with(" on") || value.ends_with(" all") {
-                    return true;
-                }
+        if let Ok(Some(output)) = show {
+            let value = String::from_utf8_lossy(&output.stdout);
+            let value = value.trim();
+            if value.ends_with(" on") || value.ends_with(" all") {
+                return true;
             }
         }
 

@@ -3296,10 +3296,11 @@ mod tests {
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
-        let mut style = DivStyle::default();
-        style.width = width;
-        style.height = height;
-        style
+        DivStyle {
+            width,
+            height,
+            ..DivStyle::default()
+        }
     }
 
     fn fixed_box(arena: &mut LayoutArena, width: f32, height: f32) -> NodeId {
@@ -4561,8 +4562,10 @@ mod tests {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Auto, CssDimension::Auto));
         let text = arena.create_text("aa");
-        let mut image_style = DivStyle::default();
-        image_style.display = LayoutDisplay::Inline;
+        let image_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        };
         let image = arena.create_image(image_style, 16, 32, 8, 16);
         arena.append_child(row, text);
         arena.append_child(row, image);
@@ -4602,8 +4605,10 @@ mod tests {
     fn inline_input_contributes_to_line_size() {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Auto, CssDimension::Auto));
-        let mut input_style = DivStyle::default();
-        input_style.display = LayoutDisplay::Inline;
+        let input_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        };
         let text = arena.create_text("x");
         let input = arena.create_input(input_style, "hello");
         arena.append_child(row, text);
@@ -5531,8 +5536,10 @@ mod tests {
     fn inline_fragments_preserve_span_targets_across_wrapping() {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Length(4.0), CssDimension::Auto));
-        let mut span_style = DivStyle::default();
-        span_style.display = LayoutDisplay::Inline;
+        let span_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        };
         let span = arena.create_element(span_style);
         let text = arena.create_text("ab cd");
         arena.append_child(span, text);
@@ -5558,8 +5565,10 @@ mod tests {
     fn inline_fragments_keep_selection_order_across_spans() {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Length(3.0), CssDimension::Auto));
-        let mut span_style = DivStyle::default();
-        span_style.display = LayoutDisplay::Inline;
+        let span_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        };
         let first_span = arena.create_element(span_style.clone());
         let second_span = arena.create_element(span_style);
         let first_text = arena.create_text("ab");
@@ -5634,8 +5643,10 @@ mod tests {
     fn inline_fragments_record_replaced_nodes_for_hit_testing() {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Auto, CssDimension::Auto));
-        let mut image_style = DivStyle::default();
-        image_style.display = LayoutDisplay::Inline;
+        let image_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        };
         let image = arena.create_image(image_style, 16, 32, 8, 16);
         arena.append_child(row, image);
 

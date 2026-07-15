@@ -929,7 +929,6 @@ impl<'a, 'out> Painter<'a, 'out> {
         }
         let start = low;
 
-        low = start;
         high = children.len();
         while low < high {
             let mid = low + (high - low) / 2;
@@ -1551,10 +1550,11 @@ mod tests {
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
-        let mut style = DivStyle::default();
-        style.width = width;
-        style.height = height;
-        style
+        DivStyle {
+            width,
+            height,
+            ..DivStyle::default()
+        }
     }
 
     fn absolute_style(z_index: i32, background: Background) -> DivStyle {
@@ -1702,10 +1702,12 @@ mod tests {
         let mut root_style = block_style(CssDimension::Length(3.0), CssDimension::Length(1.0));
         root_style.background = Background::Blue;
         let root = arena.create_element(root_style);
-        let mut span_style = DivStyle::default();
-        span_style.display = LayoutDisplay::Inline;
-        span_style.color = Background::Red;
-        span_style.opacity = 0.5;
+        let span_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            color: Background::Red,
+            opacity: 0.5,
+            ..DivStyle::default()
+        };
         let span = arena.create_element(span_style);
         let text = arena.create_text("X");
         arena.append_child(root, span);
@@ -2124,16 +2126,20 @@ mod tests {
             CssDimension::Length(1.0),
         ));
 
-        let mut hidden_style = DivStyle::default();
-        hidden_style.display = LayoutDisplay::Inline;
-        hidden_style.visibility = CssVisibility::Hidden;
-        hidden_style.background = Background::Red;
+        let hidden_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            visibility: CssVisibility::Hidden,
+            background: Background::Red,
+            ..DivStyle::default()
+        };
         let hidden = arena.create_element(hidden_style);
         let hidden_text = arena.create_text("no");
         arena.append_child(hidden, hidden_text);
 
-        let mut visible_style = DivStyle::default();
-        visible_style.display = LayoutDisplay::Inline;
+        let visible_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        };
         let visible = arena.create_element(visible_style);
         let visible_text = arena.create_text("ok");
         arena.append_child(visible, visible_text);
@@ -2165,10 +2171,12 @@ mod tests {
             CssDimension::Length(1.0),
         ));
 
-        let mut shifted_style = DivStyle::default();
-        shifted_style.display = LayoutDisplay::Inline;
-        shifted_style.position = CssPosition::Relative;
-        shifted_style.left = CssLengthPercentageAuto::Length(2.0);
+        let shifted_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            position: CssPosition::Relative,
+            left: CssLengthPercentageAuto::Length(2.0),
+            ..DivStyle::default()
+        };
         let shifted = arena.create_element(shifted_style);
         let shifted_text = arena.create_text("A");
         arena.append_child(shifted, shifted_text);
@@ -2199,11 +2207,13 @@ mod tests {
             CssDimension::Length(1.0),
         ));
 
-        let mut top_style = DivStyle::default();
-        top_style.display = LayoutDisplay::Inline;
-        top_style.position = CssPosition::Relative;
-        top_style.left = CssLengthPercentageAuto::Length(1.0);
-        top_style.z_index = CssZIndex::Integer(1);
+        let top_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            position: CssPosition::Relative,
+            left: CssLengthPercentageAuto::Length(1.0),
+            z_index: CssZIndex::Integer(1),
+            ..DivStyle::default()
+        };
         let top = arena.create_element(top_style);
         let top_text = arena.create_text("A");
         arena.append_child(top, top_text);
@@ -2233,14 +2243,18 @@ mod tests {
             CssDimension::Length(1.0),
         ));
 
-        let mut hidden_style = DivStyle::default();
-        hidden_style.display = LayoutDisplay::Inline;
-        hidden_style.visibility = CssVisibility::Hidden;
+        let hidden_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            visibility: CssVisibility::Hidden,
+            ..DivStyle::default()
+        };
         let hidden = arena.create_element(hidden_style);
 
-        let mut visible_style = DivStyle::default();
-        visible_style.display = LayoutDisplay::Inline;
-        visible_style.visibility = CssVisibility::Visible;
+        let visible_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            visibility: CssVisibility::Visible,
+            ..DivStyle::default()
+        };
         let visible = arena.create_element(visible_style);
         let visible_text = arena.create_text("ok");
         arena.append_child(visible, visible_text);
@@ -2333,9 +2347,11 @@ mod tests {
         root_style.text_decoration_line = CssTextDecorationLine::Underline;
         let root = arena.create_element(root_style);
 
-        let mut child_style = DivStyle::default();
-        child_style.display = LayoutDisplay::Inline;
-        child_style.text_decoration_line = CssTextDecorationLine::LineThrough;
+        let child_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            text_decoration_line: CssTextDecorationLine::LineThrough,
+            ..DivStyle::default()
+        };
         let child = arena.create_element(child_style);
         let text = arena.create_text("hi");
         arena.append_child(child, text);
@@ -3068,8 +3084,10 @@ mod tests {
         viewport_style.white_space = crate::style::CssWhiteSpace::Pre;
         let viewport = arena.create_element(viewport_style);
 
-        let mut span_style = DivStyle::default();
-        span_style.display = LayoutDisplay::Inline;
+        let span_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        };
         let span = arena.create_element(span_style);
         let text = arena.create_text("aaaaa\nbbbbb");
         arena.append_child(span, text);
@@ -3220,8 +3238,10 @@ mod tests {
     fn inline_span_hit_region_targets_span_while_text_paints() {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Length(6.0), CssDimension::Auto));
-        let mut span_style = DivStyle::default();
-        span_style.display = LayoutDisplay::Inline;
+        let span_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        };
         let span = arena.create_element(span_style);
         let text = arena.create_text("hello");
         arena.append_child(span, text);
@@ -3252,10 +3272,12 @@ mod tests {
         row_style.color = Background::White;
         let row = arena.create_element(row_style);
 
-        let mut span_style = DivStyle::default();
-        span_style.display = LayoutDisplay::Inline;
-        span_style.background = Background::Red;
-        span_style.color = Background::Cyan;
+        let span_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            background: Background::Red,
+            color: Background::Cyan,
+            ..DivStyle::default()
+        };
         let span = arena.create_element(span_style);
         let text = arena.create_text("hi");
         arena.append_child(span, text);
@@ -3284,10 +3306,12 @@ mod tests {
         row_style.color = Background::White;
         let row = arena.create_element(row_style);
 
-        let mut inline_div_style = DivStyle::default();
-        inline_div_style.display = LayoutDisplay::Inline;
-        inline_div_style.background = Background::Green;
-        inline_div_style.color = Background::Magenta;
+        let inline_div_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            background: Background::Green,
+            color: Background::Magenta,
+            ..DivStyle::default()
+        };
         let inline_div = arena.create_element(inline_div_style);
         let text = arena.create_text("hi");
         arena.append_child(inline_div, text);
@@ -3316,16 +3340,20 @@ mod tests {
         row_style.color = Background::White;
         let row = arena.create_element(row_style);
 
-        let mut outer_style = DivStyle::default();
-        outer_style.display = LayoutDisplay::Inline;
-        outer_style.background = Background::Red;
-        outer_style.color = Background::Yellow;
+        let outer_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            background: Background::Red,
+            color: Background::Yellow,
+            ..DivStyle::default()
+        };
         let outer = arena.create_element(outer_style);
 
-        let mut inner_style = DivStyle::default();
-        inner_style.display = LayoutDisplay::Inline;
-        inner_style.background = Background::Magenta;
-        inner_style.color = Background::Cyan;
+        let inner_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            background: Background::Magenta,
+            color: Background::Cyan,
+            ..DivStyle::default()
+        };
         let inner = arena.create_element(inner_style);
 
         let text = arena.create_text("hi");
@@ -3356,14 +3384,18 @@ mod tests {
         row_style.color = Background::White;
         let row = arena.create_element(row_style);
 
-        let mut outer_style = DivStyle::default();
-        outer_style.display = LayoutDisplay::Inline;
-        outer_style.background = Background::Red;
-        outer_style.color = Background::Yellow;
+        let outer_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            background: Background::Red,
+            color: Background::Yellow,
+            ..DivStyle::default()
+        };
         let outer = arena.create_element(outer_style);
 
-        let mut inner_style = DivStyle::default();
-        inner_style.display = LayoutDisplay::Inline;
+        let inner_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        };
         let inner = arena.create_element(inner_style);
 
         let text = arena.create_text("hi");
@@ -3391,15 +3423,19 @@ mod tests {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Length(6.0), CssDimension::Auto));
 
-        let mut outer_style = DivStyle::default();
-        outer_style.display = LayoutDisplay::Inline;
-        outer_style.font_weight = CssFontWeight::Bold;
-        outer_style.font_style = CssFontStyle::Italic;
-        outer_style.text_decoration_line = CssTextDecorationLine::Underline;
+        let outer_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            font_weight: CssFontWeight::Bold,
+            font_style: CssFontStyle::Italic,
+            text_decoration_line: CssTextDecorationLine::Underline,
+            ..DivStyle::default()
+        };
         let outer = arena.create_element(outer_style);
 
-        let mut inner_style = DivStyle::default();
-        inner_style.display = LayoutDisplay::Inline;
+        let inner_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        };
         let inner = arena.create_element(inner_style);
 
         let text = arena.create_text("hi");
@@ -3428,18 +3464,22 @@ mod tests {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Length(6.0), CssDimension::Auto));
 
-        let mut outer_style = DivStyle::default();
-        outer_style.display = LayoutDisplay::Inline;
-        outer_style.font_weight = CssFontWeight::Bold;
-        outer_style.font_style = CssFontStyle::Italic;
-        outer_style.text_decoration_line = CssTextDecorationLine::Underline;
+        let outer_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            font_weight: CssFontWeight::Bold,
+            font_style: CssFontStyle::Italic,
+            text_decoration_line: CssTextDecorationLine::Underline,
+            ..DivStyle::default()
+        };
         let outer = arena.create_element(outer_style);
 
-        let mut inner_style = DivStyle::default();
-        inner_style.display = LayoutDisplay::Inline;
-        inner_style.font_weight = CssFontWeight::Normal;
-        inner_style.font_style = CssFontStyle::Normal;
-        inner_style.text_decoration_line = CssTextDecorationLine::None;
+        let inner_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            font_weight: CssFontWeight::Normal,
+            font_style: CssFontStyle::Normal,
+            text_decoration_line: CssTextDecorationLine::None,
+            ..DivStyle::default()
+        };
         let inner = arena.create_element(inner_style);
 
         let text = arena.create_text("hi");
@@ -3471,9 +3511,11 @@ mod tests {
         root_style.flex_direction = LayoutFlexDirection::Column;
         let root = arena.create_element(root_style);
 
-        let mut span_style = DivStyle::default();
-        span_style.display = LayoutDisplay::Inline;
-        span_style.color = Background::Cyan;
+        let span_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            color: Background::Cyan,
+            ..DivStyle::default()
+        };
         let span = arena.create_element(span_style);
         let text = arena.create_text("paintcannon-react");
         arena.append_child(span, text);
@@ -3506,9 +3548,11 @@ mod tests {
         root_style.align_items = Some(LayoutAlignItems::Center);
         let root = arena.create_element(root_style);
 
-        let mut span_style = DivStyle::default();
-        span_style.display = LayoutDisplay::Inline;
-        span_style.color = Background::Cyan;
+        let span_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            color: Background::Cyan,
+            ..DivStyle::default()
+        };
         let span = arena.create_element(span_style);
         let text = arena.create_text("paintcannon-react");
         arena.append_child(span, text);
@@ -3544,22 +3588,26 @@ mod tests {
         root_style.row_gap = CssLengthPercentage::Length(1.0);
         let root = arena.create_element(root_style);
 
-        let mut span_style = DivStyle::default();
-        span_style.display = LayoutDisplay::Inline;
-        span_style.color = Background::Cyan;
+        let span_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            color: Background::Cyan,
+            ..DivStyle::default()
+        };
         let span = arena.create_element(span_style);
         let title = arena.create_text("paintcannon-react");
         arena.append_child(span, title);
 
-        let mut button_style = DivStyle::default();
-        button_style.border_top = BorderStyle::ChunkyRounded;
-        button_style.border_right = BorderStyle::ChunkyRounded;
-        button_style.border_bottom = BorderStyle::ChunkyRounded;
-        button_style.border_left = BorderStyle::ChunkyRounded;
-        button_style.padding_top = CssLengthPercentage::Length(1.0);
-        button_style.padding_right = CssLengthPercentage::Length(1.0);
-        button_style.padding_bottom = CssLengthPercentage::Length(1.0);
-        button_style.padding_left = CssLengthPercentage::Length(1.0);
+        let button_style = DivStyle {
+            border_top: BorderStyle::ChunkyRounded,
+            border_right: BorderStyle::ChunkyRounded,
+            border_bottom: BorderStyle::ChunkyRounded,
+            border_left: BorderStyle::ChunkyRounded,
+            padding_top: CssLengthPercentage::Length(1.0),
+            padding_right: CssLengthPercentage::Length(1.0),
+            padding_bottom: CssLengthPercentage::Length(1.0),
+            padding_left: CssLengthPercentage::Length(1.0),
+            ..DivStyle::default()
+        };
         let button = arena.create_element(button_style);
         let button_text = arena.create_text("button");
         arena.append_child(button, button_text);
@@ -3606,22 +3654,26 @@ mod tests {
         app_style.row_gap = CssLengthPercentage::Length(1.0);
         let app = arena.create_element(app_style);
 
-        let mut span_style = DivStyle::default();
-        span_style.display = LayoutDisplay::Inline;
-        span_style.color = Background::Cyan;
+        let span_style = DivStyle {
+            display: LayoutDisplay::Inline,
+            color: Background::Cyan,
+            ..DivStyle::default()
+        };
         let span = arena.create_element(span_style);
         let title = arena.create_text("paintcannon-react");
         arena.append_child(span, title);
 
-        let mut button_style = DivStyle::default();
-        button_style.border_top = BorderStyle::ChunkyRounded;
-        button_style.border_right = BorderStyle::ChunkyRounded;
-        button_style.border_bottom = BorderStyle::ChunkyRounded;
-        button_style.border_left = BorderStyle::ChunkyRounded;
-        button_style.padding_top = CssLengthPercentage::Length(1.0);
-        button_style.padding_right = CssLengthPercentage::Length(1.0);
-        button_style.padding_bottom = CssLengthPercentage::Length(1.0);
-        button_style.padding_left = CssLengthPercentage::Length(1.0);
+        let button_style = DivStyle {
+            border_top: BorderStyle::ChunkyRounded,
+            border_right: BorderStyle::ChunkyRounded,
+            border_bottom: BorderStyle::ChunkyRounded,
+            border_left: BorderStyle::ChunkyRounded,
+            padding_top: CssLengthPercentage::Length(1.0),
+            padding_right: CssLengthPercentage::Length(1.0),
+            padding_bottom: CssLengthPercentage::Length(1.0),
+            padding_left: CssLengthPercentage::Length(1.0),
+            ..DivStyle::default()
+        };
         let button = arena.create_element(button_style);
         let button_text = arena.create_text("button");
         arena.append_child(button, button_text);

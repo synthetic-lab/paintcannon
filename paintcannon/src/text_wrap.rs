@@ -43,8 +43,8 @@ impl WrappedText {
                 index += 1;
                 continue;
             }
-            if is_word_start(&chars, index) {
-                let word_end = next_word_end(&chars, index);
+            if is_word_start(chars, index) {
+                let word_end = next_word_end(chars, index);
                 let word_width = text_width(&chars[index..word_end]);
                 if word_width <= wrap_width && col > 0 && col + word_width > wrap_width {
                     row += 1;

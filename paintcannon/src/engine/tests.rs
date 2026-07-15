@@ -10,10 +10,11 @@ use crate::style::{
 use crate::transition::TransitionEventType;
 
 fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
-    let mut style = DivStyle::default();
-    style.width = width;
-    style.height = height;
-    style
+    DivStyle {
+        width,
+        height,
+        ..DivStyle::default()
+    }
 }
 
 #[test]

@@ -258,10 +258,11 @@ mod tests {
     }
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
-        let mut style = DivStyle::default();
-        style.width = width;
-        style.height = height;
-        style
+        DivStyle {
+            width,
+            height,
+            ..DivStyle::default()
+        }
     }
 
     fn scroll_text_arena() -> (LayoutArena, taffy::NodeId) {

@@ -988,11 +988,9 @@ fn has_border(style: &DivStyle) -> bool {
 
 fn has_chunky_rounded_corner(style: &DivStyle) -> bool {
     (style.border_top == BorderStyle::ChunkyRounded
+        || style.border_bottom == BorderStyle::ChunkyRounded)
         && (style.border_left == BorderStyle::ChunkyRounded
-            || style.border_right == BorderStyle::ChunkyRounded))
-        || (style.border_bottom == BorderStyle::ChunkyRounded
-            && (style.border_left == BorderStyle::ChunkyRounded
-                || style.border_right == BorderStyle::ChunkyRounded))
+            || style.border_right == BorderStyle::ChunkyRounded)
 }
 
 fn is_chunky_rounded_corner(rect: ClipRect, style: &DivStyle, x: i32, y: i32) -> bool {
@@ -1129,12 +1127,13 @@ mod tests {
     use super::*;
 
     fn solid_border_style() -> DivStyle {
-        let mut style = DivStyle::default();
-        style.border_top = BorderStyle::Solid;
-        style.border_right = BorderStyle::Solid;
-        style.border_bottom = BorderStyle::Solid;
-        style.border_left = BorderStyle::Solid;
-        style
+        DivStyle {
+            border_top: BorderStyle::Solid,
+            border_right: BorderStyle::Solid,
+            border_bottom: BorderStyle::Solid,
+            border_left: BorderStyle::Solid,
+            ..DivStyle::default()
+        }
     }
 
     #[test]
@@ -1463,11 +1462,13 @@ mod tests {
     #[test]
     fn chunky_rounded_box_background_preserves_underlying_corner_cells() {
         let mut frame = Frame::new(4, 3, false);
-        let mut style = DivStyle::default();
-        style.border_top = BorderStyle::ChunkyRounded;
-        style.border_right = BorderStyle::ChunkyRounded;
-        style.border_bottom = BorderStyle::ChunkyRounded;
-        style.border_left = BorderStyle::ChunkyRounded;
+        let style = DivStyle {
+            border_top: BorderStyle::ChunkyRounded,
+            border_right: BorderStyle::ChunkyRounded,
+            border_bottom: BorderStyle::ChunkyRounded,
+            border_left: BorderStyle::ChunkyRounded,
+            ..DivStyle::default()
+        };
 
         frame.fill_rect(
             ClipRect::new(0, 0, 4, 3),
