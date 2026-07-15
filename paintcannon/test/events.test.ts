@@ -699,6 +699,24 @@ describe("core animation lifecycle", () => {
 });
 
 describe("core app focus events", () => {
+  it("dispatches an initial blur queued before listener registration", () => {
+    const paintCannon = new PaintCannon({ fps: 120 });
+    const mockNative = currentMockNative();
+    const events: string[] = [];
+
+    mockNative.queueFocusEvent("blur");
+    expect(paintCannon.hasFocus).toBe(false);
+
+    paintCannon.addEventListener("blur", event => {
+      events.push(`${event.type}:${event.hasFocus}`);
+    });
+    runKeyboardEventPump(paintCannon);
+    paintCannon.stop();
+
+    expect(events).toEqual(["blur:false"]);
+    expect(mockNative.renderCalls).toBe(1);
+  });
+
   it("dispatches terminal focus reports as PaintCannon focus and blur events", () => {
     const paintCannon = new PaintCannon({ fps: 120 });
     const mockNative = currentMockNative();
@@ -712,11 +730,11 @@ describe("core app focus events", () => {
       events.push(`${event.type}:${event.hasFocus}:${event.currentTarget === paintCannon}`);
     });
 
-    mockNative.focusEvents.push({ type: "blur" });
+    mockNative.queueFocusEvent("blur");
     runKeyboardEventPump(paintCannon);
     expect(paintCannon.hasFocus).toBe(false);
 
-    mockNative.focusEvents.push({ type: "focus" });
+    mockNative.queueFocusEvent("focus");
     runKeyboardEventPump(paintCannon);
     paintCannon.stop();
 
