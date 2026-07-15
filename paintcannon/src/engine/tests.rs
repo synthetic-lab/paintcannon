@@ -132,6 +132,61 @@ fn render_clamps_scroll_offset_after_viewport_grows() {
 }
 
 #[test]
+fn resize_metrics_query_before_paint_does_not_skip_scroll_clamping() {
+    let mut engine = PaintEngine::new();
+    let mut root_style = block_style(CssDimension::Length(10.0), CssDimension::Percent(1.0));
+    root_style.display = crate::style::LayoutDisplay::Flex;
+    root_style.flex_direction = LayoutFlexDirection::Row;
+    let root = engine.create_element(root_style);
+    let mut viewports = Vec::new();
+    for _ in 0..2 {
+        let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Percent(1.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        let viewport = engine.create_element(viewport_style);
+        let mut content_style = block_style(CssDimension::Length(5.0), CssDimension::Auto);
+        content_style.display = crate::style::LayoutDisplay::Flex;
+        content_style.flex_direction = LayoutFlexDirection::Column;
+        let content = engine.create_element(content_style);
+        for index in 0..10 {
+            let row =
+                engine.create_element(block_style(CssDimension::Length(5.0), CssDimension::Auto));
+            let text = engine.create_text(format!("{index}{index}{index}{index}{index}"));
+            engine.append_child(row, text);
+            engine.append_child(content, row);
+        }
+        engine.append_child(viewport, content);
+        engine.append_child(root, viewport);
+        viewports.push(viewport);
+    }
+    engine.set_root(root);
+
+    engine.render_frame(10, 3).unwrap();
+    for viewport in &viewports {
+        engine.set_scroll_offset_for_size(*viewport, 0, 100, 10, 3);
+    }
+    let small = engine.render_frame(10, 3).unwrap();
+    assert_eq!(small.cell(0, 0).unwrap().character, '7');
+    assert_eq!(small.cell(5, 0).unwrap().character, '7');
+
+    // Octo reads and re-pins its transcript from a resize RAF. That operation
+    // must not prevent the same layout pass from clamping every scroll node.
+    let resized_metrics = engine.scroll_metrics_for_size(viewports[1], 10, 8).unwrap();
+    assert_eq!(resized_metrics.client_height, 8);
+    let max_scroll = resized_metrics
+        .scroll_height
+        .saturating_sub(resized_metrics.client_height);
+    engine.set_scroll_offset_for_size(viewports[1], 0, max_scroll, 10, 8);
+    let large = engine.render_frame(10, 8).unwrap();
+
+    assert_eq!(engine.scroll_metrics(viewports[0]).unwrap().scroll_top, 2);
+    assert_eq!(engine.scroll_metrics(viewports[1]).unwrap().scroll_top, 2);
+    assert_eq!(large.cell(0, 0).unwrap().character, '2');
+    assert_eq!(large.cell(5, 0).unwrap().character, '2');
+    assert_eq!(large.cell(0, 7).unwrap().character, '9');
+    assert_eq!(large.cell(5, 7).unwrap().character, '9');
+}
+
+#[test]
 fn scroll_metrics_query_before_first_render_computes_layout() {
     let mut engine = PaintEngine::new();
 
