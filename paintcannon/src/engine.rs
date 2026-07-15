@@ -1624,6 +1624,10 @@ impl PaintEngine {
             .collect()
     }
 
+    fn has_pending_transition_events(&self) -> bool {
+        self.transitions.has_events()
+    }
+
     #[cfg(test)]
     pub(crate) fn has_active_transitions(&self) -> bool {
         self.transitions.has_active()

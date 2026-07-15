@@ -24,6 +24,7 @@ use crossterm::{
 use napi_derive::napi;
 
 use crate::engine::EngineCommand;
+use crate::event_notification::EventNotification;
 use crate::selection::{SelectionAction, SelectionMouseEvent, SelectionMouseEventType};
 use crate::terminal::{reset_pointer_shape, reset_terminal};
 
@@ -113,6 +114,7 @@ impl TerminalInput {
         capture_mouse: bool,
         capture_ctrl_c: bool,
         renderer_tx: Option<crossbeam_channel::Sender<EngineCommand>>,
+        event_notifier: Arc<dyn EventNotification>,
     ) -> Option<Self> {
         if enable_raw_mode().is_err() {
             return None;
@@ -174,6 +176,7 @@ impl TerminalInput {
         let thread_stop = Arc::clone(&stop);
         let thread_synthetic_keyup_delay_ms = Arc::clone(&synthetic_keyup_delay_ms);
         let thread_renderer_tx = renderer_tx;
+        let thread_event_notifier = event_notifier;
         let thread_keyboard_enhancement_pushed = Arc::clone(&keyboard_enhancement_pushed);
         let thread_alternate_screen_entered = Arc::clone(&alternate_screen_entered);
         let thread_mouse_capture_enabled = Arc::clone(&mouse_capture_enabled);
@@ -208,16 +211,19 @@ impl TerminalInput {
                                         break;
                                     }
 
-                                    handle_terminal_key_event(
+                                    if handle_terminal_key_event(
                                         event,
                                         &mut pressed_keys,
                                         &thread_input_events,
                                         &thread_synthetic_keyup_delay_ms,
                                         kitty_keyboard_enabled,
-                                    );
+                                    ) {
+                                        thread_event_notifier.notify();
+                                    }
                                 }
                                 TerminalEvent::Paste(data) => {
                                     push_paste_event(&thread_input_events, data);
+                                    thread_event_notifier.notify();
                                 }
                                 TerminalEvent::Mouse(event) => {
                                     handle_terminal_mouse_event(
@@ -230,6 +236,7 @@ impl TerminalInput {
                                             None
                                         },
                                     );
+                                    thread_event_notifier.notify();
                                 }
                                 TerminalEvent::Resize(cols, rows) => {
                                     push_resize_event(
@@ -240,34 +247,41 @@ impl TerminalInput {
                                         },
                                         thread_renderer_tx.as_ref(),
                                     );
+                                    thread_event_notifier.notify();
                                 }
                                 TerminalEvent::FocusGained => {
                                     let initial_report = awaiting_initial_focus_report;
                                     awaiting_initial_focus_report = false;
-                                    handle_terminal_focus_event(
+                                    if handle_terminal_focus_event(
                                         true,
                                         &thread_focus_events,
                                         &thread_focused,
                                         thread_renderer_tx.as_ref(),
                                         initial_report,
-                                    );
+                                    ) {
+                                        thread_event_notifier.notify();
+                                    }
                                 }
                                 TerminalEvent::FocusLost => {
                                     let initial_report = awaiting_initial_focus_report;
                                     awaiting_initial_focus_report = false;
-                                    handle_terminal_focus_event(
+                                    if handle_terminal_focus_event(
                                         false,
                                         &thread_focus_events,
                                         &thread_focused,
                                         thread_renderer_tx.as_ref(),
                                         initial_report,
-                                    );
+                                    ) {
+                                        thread_event_notifier.notify();
+                                    }
                                 }
                             }
                         }
                     }
                     Ok(false) => {
-                        synthesize_expired_keyups(&mut pressed_keys, &thread_input_events);
+                        if synthesize_expired_keyups(&mut pressed_keys, &thread_input_events) {
+                            thread_event_notifier.notify();
+                        }
                     }
                     Err(_) => break,
                 }
@@ -555,9 +569,9 @@ fn handle_terminal_key_event(
     events: &Arc<Mutex<VecDeque<OrderedInputEvent>>>,
     synthetic_keyup_delay_ms: &Arc<Mutex<u32>>,
     kitty_keyboard_enabled: bool,
-) {
+) -> bool {
     let Some(pressed_key) = pressed_key_from_terminal(event) else {
-        return;
+        return false;
     };
 
     let code = pressed_key.code.clone();
@@ -591,12 +605,13 @@ fn handle_terminal_key_event(
             pressed_key.synthetic_keyup_at = None;
         }
     }
+    true
 }
 
 fn synthesize_expired_keyups(
     pressed_keys: &mut HashMap<String, PressedKey>,
     events: &Arc<Mutex<VecDeque<OrderedInputEvent>>>,
-) {
+) -> bool {
     let now = Instant::now();
     let released: Vec<String> = pressed_keys
         .iter()
@@ -612,6 +627,7 @@ fn synthesize_expired_keyups(
         })
         .collect();
 
+    let synthesized = !released.is_empty();
     for code in released {
         if let Some(pressed_key) = pressed_keys.remove(&code) {
             push_keyboard_event(
@@ -620,6 +636,7 @@ fn synthesize_expired_keyups(
             );
         }
     }
+    synthesized
 }
 
 fn synthetic_keyup_deadline(delay_ms: &Arc<Mutex<u32>>) -> Option<Instant> {
@@ -815,13 +832,16 @@ fn handle_terminal_focus_event(
     current_focus: &Arc<AtomicBool>,
     renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
     initial_report: bool,
-) {
+) -> bool {
     current_focus.store(focused, Ordering::Relaxed);
     if let Some(renderer_tx) = renderer_tx {
         let _ = renderer_tx.send(EngineCommand::SetTerminalFocused { focused });
     }
     if !initial_report || !focused {
         push_focus_event(events, terminal_focus_event(focused));
+        true
+    } else {
+        false
     }
 }
 

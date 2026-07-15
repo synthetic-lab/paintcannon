@@ -197,7 +197,7 @@ describe("paste events", () => {
       throw new Error("expected mock native instance");
     }
     mockNative.inputEvents.push(pasteInput("from clipboard"));
-    runKeyboardEventPump(root.paintCannon);
+    notifyNativeEvents(root.paintCannon);
     root.paintCannon.stop();
 
     expect(events).toEqual(["from clipboard"]);
@@ -246,7 +246,7 @@ describe("controlled text controls", () => {
         repeat: false,
       }),
     );
-    runKeyboardEventPump(root.paintCannon);
+    notifyNativeEvents(root.paintCannon);
     await commit();
     root.paintCannon.stop();
 
@@ -257,7 +257,7 @@ describe("controlled text controls", () => {
 });
 
 describe("resize events", () => {
-  it("does not synchronously render inside the input pump", () => {
+  it("does not synchronously render during native event delivery", () => {
     const sizes: Array<[number, number]> = [];
     const paintCannon = new PaintCannon({ fps: 120 });
     const mockNative = mockNativeInstances[0];
@@ -269,7 +269,7 @@ describe("resize events", () => {
       sizes.push([event.cols, event.rows]);
     });
     mockNative.resizeEvents.push({ cols: 100, rows: 40 });
-    runKeyboardEventPump(paintCannon);
+    notifyNativeEvents(paintCannon);
     paintCannon.stop();
 
     expect(sizes).toEqual([[100, 40]]);
@@ -320,7 +320,7 @@ describe("host tree lifecycle", () => {
 });
 
 describe("scroll events", () => {
-  it("commits state updates from onScroll before the input pump returns", async () => {
+  it("commits state updates from onScroll before native event delivery returns", async () => {
     let scroller: PaintElement | undefined;
     let renderedTop = -1;
 
@@ -359,7 +359,7 @@ describe("scroll events", () => {
     });
     mockNative.mouseEvents.push(mouseEvent("wheel", { deltaY: -1 }));
 
-    runKeyboardEventPump(root.paintCannon);
+    notifyNativeEvents(root.paintCannon);
     root.paintCannon.stop();
 
     expect(renderedTop).toBe(0);
@@ -433,8 +433,12 @@ function dispatchKey(paintCannon: PaintCannon, key: string): void {
   );
 }
 
-function runKeyboardEventPump(paintCannon: PaintCannon): void {
-  (paintCannon as unknown as { runKeyboardEventPump(): void }).runKeyboardEventPump();
+function notifyNativeEvents(_paintCannon: PaintCannon): void {
+  const mockNative = mockNativeInstances[mockNativeInstances.length - 1];
+  if (mockNative === undefined) {
+    throw new Error("expected mock native instance");
+  }
+  mockNative.notifyEvents();
 }
 
 async function commit(): Promise<void> {

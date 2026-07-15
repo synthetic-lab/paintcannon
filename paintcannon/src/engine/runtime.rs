@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError};
@@ -7,6 +8,7 @@ use termprofile::TermProfile;
 use super::{
     profile_log, scrollbar_suppresses_selection, EngineCommand, PaintEngine, SelectionAction,
 };
+use crate::event_notification::EventNotification;
 use crate::style::Background;
 use crate::terminal::copy_text_to_clipboard;
 
@@ -18,6 +20,7 @@ pub(crate) struct EngineLoopOptions {
     pub(crate) synchronized: bool,
     pub(crate) terminal_foreground: Background,
     pub(crate) terminal_background: Background,
+    pub(crate) event_notifier: Arc<dyn EventNotification>,
 }
 
 pub(super) struct EngineLoopState {
@@ -27,6 +30,7 @@ pub(super) struct EngineLoopState {
     next_frame: Instant,
     color_profile: TermProfile,
     synchronized: bool,
+    event_notifier: Arc<dyn EventNotification>,
 }
 
 impl EngineLoopState {
@@ -39,6 +43,7 @@ impl EngineLoopState {
             next_frame: Instant::now() + frame_interval,
             color_profile: options.color_profile,
             synchronized: options.synchronized,
+            event_notifier: Arc::clone(&options.event_notifier),
         }
     }
 
@@ -87,6 +92,7 @@ pub(crate) fn engine_loop(rx: Receiver<EngineCommand>, options: EngineLoopOption
         if flush_result.is_err() {
             engine.mark_paint_dirty();
         }
+        notify_transition_events(&engine, state.event_notifier.as_ref());
         state.next_frame =
             next_frame_deadline(state.next_frame, state.frame_interval, Instant::now());
     }
@@ -370,7 +376,14 @@ pub(super) fn apply_command(
         }
     }
 
+    notify_transition_events(engine, state.event_notifier.as_ref());
     true
+}
+
+fn notify_transition_events(engine: &PaintEngine, notifier: &dyn EventNotification) {
+    if engine.has_pending_transition_events() {
+        notifier.notify();
+    }
 }
 
 fn frame_interval(fps: f64) -> Duration {
@@ -393,13 +406,34 @@ pub(super) fn next_frame_deadline(previous: Instant, interval: Duration, now: In
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::thread;
 
     use crossbeam_channel::bounded;
 
     use super::*;
     use crate::engine::{Dirtiness, DomId};
-    use crate::style::{CssDimension, DivStyle, LayoutOverflow};
+    use crate::style::{
+        CssDimension, DivStyle, LayoutOverflow, TransitionProperty, TransitionSpec,
+    };
+
+    struct NoopEventNotification;
+
+    impl EventNotification for NoopEventNotification {
+        fn notify(&self) {}
+    }
+
+    #[derive(Default)]
+    struct RecordingEventNotification {
+        notifications: AtomicUsize,
+    }
+
+    impl EventNotification for RecordingEventNotification {
+        fn notify(&self) {
+            self.notifications.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
         DivStyle {
@@ -418,6 +452,7 @@ mod tests {
             synchronized: false,
             terminal_foreground: Background::White,
             terminal_background: Background::Black,
+            event_notifier: Arc::new(NoopEventNotification),
         }
     }
 
@@ -462,6 +497,28 @@ mod tests {
         assert_eq!((state.width, state.height), (100, 40));
         assert_eq!(engine.dirtiness, Dirtiness::Layout);
         assert!(engine.previous_frame.is_none());
+    }
+
+    #[test]
+    fn pending_transition_events_notify_javascript() {
+        let mut engine = PaintEngine::new();
+        let id = engine.create_element(DivStyle::default());
+        let node = engine.node_for(id).unwrap();
+        engine.transitions.set_specs(
+            node,
+            vec![TransitionSpec {
+                property: TransitionProperty::Opacity,
+                duration_ms: 100,
+            }],
+        );
+        engine
+            .transitions
+            .style_opacity_changed(node, 1.0, 0.5, Instant::now(), true);
+        let notifier = RecordingEventNotification::default();
+
+        notify_transition_events(&engine, &notifier);
+
+        assert_eq!(notifier.notifications.load(Ordering::Relaxed), 1);
     }
 
     #[test]

@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use crossbeam_channel::{bounded, Sender};
+use napi::bindgen_prelude::Function;
 use napi::{Error, Result};
 use napi_derive::napi;
 use termprofile::{DetectorSettings, TermProfile};
@@ -14,6 +15,7 @@ use crate::engine::{
     EngineLoopOptions, EngineTransitionEvent, MouseClick, ScrollbarHit as EngineScrollbarHit,
     StyleMutation, StyleReset,
 };
+use crate::event_notification::{EventNotification, EventNotifier};
 use crate::input::{
     TerminalFocusEvent, TerminalInput, TerminalInputEvent, TerminalMouseEvent, TerminalResizeEvent,
 };
@@ -135,6 +137,7 @@ impl PaintCannon {
         capture_mouse: Option<bool>,
         capture_ctrl_c: Option<bool>,
         fps: Option<f64>,
+        on_events_available: Function<'_, (), ()>,
     ) -> Result<Self> {
         let fps = fps.unwrap_or(60.0);
         if !fps.is_finite() || fps <= 0.0 {
@@ -147,6 +150,8 @@ impl PaintCannon {
         let color_profile = TermProfile::detect(&io::stdout(), DetectorSettings::default());
         let size = query_terminal_size();
         let (terminal_foreground, terminal_background) = query_terminal_colors();
+        let event_notifier = Arc::new(EventNotifier::new(on_events_available)?);
+        let engine_event_notifier: Arc<dyn EventNotification> = event_notifier.clone();
         let loop_options = EngineLoopOptions {
             width: size.cols as usize,
             height: size.rows as usize,
@@ -155,6 +160,7 @@ impl PaintCannon {
             synchronized: io::stdout().is_terminal(),
             terminal_foreground,
             terminal_background,
+            event_notifier: engine_event_notifier.clone(),
         };
         let thread = thread::spawn(move || engine_loop(rx, loop_options));
         let input = TerminalInput::start(
@@ -164,6 +170,7 @@ impl PaintCannon {
             capture_mouse.unwrap_or(false),
             capture_ctrl_c.unwrap_or(false),
             Some(tx.clone()),
+            engine_event_notifier,
         );
         let kitty_keyboard_enabled = input
             .as_ref()

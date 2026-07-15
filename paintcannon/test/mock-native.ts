@@ -36,8 +36,9 @@ export function createMockNativeBinding(instances: MockNativePaintCannon[] = [])
         captureMouse?: boolean,
         captureCtrlC?: boolean,
         fps?: number,
+        onEventsAvailable?: () => void,
       ) {
-        super(forceCompatMode, alternateScreen, captureMouse, captureCtrlC, fps);
+        super(forceCompatMode, alternateScreen, captureMouse, captureCtrlC, fps, onEventsAvailable);
         instances.push(this);
       }
     },
@@ -51,6 +52,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
   interruptWhenStyleMutationFails = false;
   private focused = true;
   renderSyncCalls = 0;
+  eventNotifications = 0;
   stopCalls = 0;
   releaseTerminalCalls = 0;
   captureTerminalCalls = 0;
@@ -81,6 +83,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
     readonly captureMouse = false,
     readonly captureCtrlC = false,
     public fps = 60,
+    private readonly onEventsAvailable: () => void = () => {},
   ) {}
 
   createDiv(): number {
@@ -234,6 +237,11 @@ export class MockNativePaintCannon implements NativePaintCannon {
   }
 
   invalidateFrame(): void {}
+
+  notifyEvents(): void {
+    this.eventNotifications += 1;
+    this.onEventsAvailable();
+  }
 
   drainInputEvents(): NativeTerminalInputEvent[] {
     const events = this.inputEvents;

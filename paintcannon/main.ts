@@ -433,11 +433,10 @@ function installProcessCleanupHandlers(): void {
 
 export class PaintCannon {
   private readonly binding: NativePaintCannon;
-  private callbackIntervalMs: number;
+  private animationFrameIntervalMs: number;
   private stopped = false;
   private nextAnimationFrameId = 1;
   private animationFrameTimer: NodeJS.Timeout | undefined;
-  private keyboardEventTimer: NodeJS.Timeout | undefined;
   private suspendedByPaintCannon = false;
   private transactionDepth = 0;
   private nextTemporaryId = -1;
@@ -493,20 +492,20 @@ export class PaintCannon {
     this.suspendedByPaintCannon = false;
     this.binding.captureTerminal();
     this.binding.invalidateFrame();
-    this.scheduleKeyboardEventPump();
   };
 
   constructor(options: PaintCannonOptions = {}) {
     const binding = paintCannonDeps.loadNativeBinding();
     const alternateScreen = options.alternateScreen ?? false;
     const fps = options.fps ?? 60;
-    this.callbackIntervalMs = fpsToInterval(fps);
+    this.animationFrameIntervalMs = fpsToInterval(fps);
     this.binding = new binding.PaintCannon(
       options.forceCompatMode ?? false,
       alternateScreen,
       options.captureMouse ?? false,
       options.captureCtrlC ?? false,
       fps,
+      () => this.handleNativeEventNotification(),
     );
     this.captureCtrlZ = options.captureCtrlZ ?? false;
     this.captureMouse = options.captureMouse ?? false;
@@ -525,7 +524,6 @@ export class PaintCannon {
     if (options.syntheticKeyupDelayMs !== undefined) {
       this.setSyntheticKeyupDelay(options.syntheticKeyupDelayMs);
     }
-    this.scheduleKeyboardEventPump();
   }
 
   createElement<T extends PaintElementTagName>(tagName: T): PaintElementByTagName[T] {
@@ -683,7 +681,7 @@ export class PaintCannon {
   }
 
   setFrameRate(fps: number): void {
-    this.callbackIntervalMs = fpsToInterval(fps);
+    this.animationFrameIntervalMs = fpsToInterval(fps);
     this.binding.setFrameRate(fps);
 
     if (this.animationFrameTimer !== undefined) {
@@ -786,7 +784,6 @@ export class PaintCannon {
     } else {
       this.keyboardEventListeners[type].add(listener as KeyboardEventListener);
     }
-    this.scheduleKeyboardEventPump();
   }
 
   removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
@@ -824,10 +821,6 @@ export class PaintCannon {
     } else {
       this.keyboardEventListeners[type].delete(listener as KeyboardEventListener);
     }
-    if (!this.shouldPumpInputEvents() && this.keyboardEventTimer !== undefined) {
-      clearTimeout(this.keyboardEventTimer);
-      this.keyboardEventTimer = undefined;
-    }
   }
 
   addElementEventListener(
@@ -855,7 +848,6 @@ export class PaintCannon {
       eventListeners[type] = listeners;
     }
     listeners.add(listener);
-    this.scheduleKeyboardEventPump();
   }
 
   removeElementEventListener(
@@ -875,10 +867,6 @@ export class PaintCannon {
     }
     if (eventListeners !== undefined && Object.keys(eventListeners).length === 0) {
       this.elementEventListeners.delete(element.id);
-    }
-    if (!this.shouldPumpInputEvents() && this.keyboardEventTimer !== undefined) {
-      clearTimeout(this.keyboardEventTimer);
-      this.keyboardEventTimer = undefined;
     }
   }
 
@@ -901,10 +889,6 @@ export class PaintCannon {
     if (this.animationFrameTimer !== undefined) {
       clearTimeout(this.animationFrameTimer);
       this.animationFrameTimer = undefined;
-    }
-    if (this.keyboardEventTimer !== undefined) {
-      clearTimeout(this.keyboardEventTimer);
-      this.keyboardEventTimer = undefined;
     }
     this.animationFrameCallbacks.clear();
     this.keyboardEventListeners.keydown.clear();
@@ -935,10 +919,6 @@ export class PaintCannon {
     if (this.animationFrameTimer !== undefined) {
       clearTimeout(this.animationFrameTimer);
       this.animationFrameTimer = undefined;
-    }
-    if (this.keyboardEventTimer !== undefined) {
-      clearTimeout(this.keyboardEventTimer);
-      this.keyboardEventTimer = undefined;
     }
     livePaintCannons.delete(this);
     process.off("SIGCONT", this.handleSigcont);
@@ -1412,7 +1392,7 @@ export class PaintCannon {
     this.animationFrameTimer = setTimeout(() => {
       this.animationFrameTimer = undefined;
       this.runAnimationFrameTick();
-    }, this.callbackIntervalMs);
+    }, this.animationFrameIntervalMs);
   }
 
   private runAnimationFrameTick(): void {
@@ -1454,28 +1434,22 @@ export class PaintCannon {
     return true;
   }
 
-  private scheduleKeyboardEventPump(): void {
-    if (this.stopped || this.keyboardEventTimer !== undefined || !this.shouldPumpInputEvents()) {
-      return;
-    }
-
-    this.keyboardEventTimer = setTimeout(() => {
-      this.keyboardEventTimer = undefined;
-      this.runKeyboardEventPump();
-    }, this.callbackIntervalMs);
-  }
-
-  private runKeyboardEventPump(): void {
+  private handleNativeEventNotification(): void {
     if (this.stopped) {
       return;
     }
 
     const inputEvents: NativeTerminalInputEvent[] = this.binding.drainInputEvents();
+    const resizeEvents = this.binding.drainResizeEvents();
+    const focusEvents = this.binding.drainFocusEvents();
+    const transitionEvents = this.binding.drainTransitionEvents();
+    const mouseEvents = this.captureMouse ? this.binding.drainMouseEvents() : [];
+
     for (const nativeInput of inputEvents) {
       if (nativeInput.keyboard !== undefined && nativeInput.paste === undefined) {
         const event = new PaintKeyboardEvent(nativeInput.keyboard, this.keyboardEventTarget());
         if (this.handleDefaultControlEvent(event)) {
-          return;
+          continue;
         }
 
         this.dispatchKeyboardInputEvent(event);
@@ -1488,13 +1462,11 @@ export class PaintCannon {
       }
     }
 
-    const resizeEvents = this.binding.drainResizeEvents();
     if (resizeEvents.length > 0) {
       const latestResize = resizeEvents[resizeEvents.length - 1];
       this.dispatchResizeEvent(latestResize);
     }
 
-    const focusEvents = this.binding.drainFocusEvents();
     for (const nativeEvent of focusEvents) {
       const event = new PaintCannonFocusEvent(nativeEvent, this);
       const listeners = Array.from(this.focusEventListeners[event.type]);
@@ -1503,23 +1475,13 @@ export class PaintCannon {
       }
     }
 
-    const transitionEvents = this.binding.drainTransitionEvents();
     for (const event of transitionEvents) {
       this.dispatchTransitionEvent(event);
     }
 
-    if (this.captureMouse) {
-      const mouseEvents = this.binding.drainMouseEvents();
-      for (const event of mouseEvents) {
-        this.handleTerminalMouseEvent(event);
-      }
+    for (const event of mouseEvents) {
+      this.handleTerminalMouseEvent(event);
     }
-
-    this.scheduleKeyboardEventPump();
-  }
-
-  private keyboardListenerCount(): number {
-    return this.keyboardEventListeners.keydown.size + this.keyboardEventListeners.keyup.size;
   }
 
   private dispatchKeyboardInputEvent(event: PaintKeyboardEvent): void {
@@ -1570,27 +1532,6 @@ export class PaintCannon {
     if (input.value !== beforeValue) {
       this.dispatchChangeEvent(input);
     }
-  }
-
-  private focusListenerCount(): number {
-    return this.focusEventListeners.focus.size + this.focusEventListeners.blur.size;
-  }
-
-  private shouldPumpInputEvents(): boolean {
-    return (
-      this.keyboardListenerCount() > 0 ||
-      this.clipboardEventListeners.size > 0 ||
-      this.focusListenerCount() > 0 ||
-      this.resizeEventListeners.size > 0 ||
-      this.hasElementEventListeners("transitionstart") ||
-      this.hasElementEventListeners("transitionend") ||
-      this.hasElementEventListeners("keydown") ||
-      this.hasElementEventListeners("keyup") ||
-      this.hasElementEventListeners("paste") ||
-      this.textControls.size > 0 ||
-      !this.captureCtrlZ ||
-      this.captureMouse
-    );
   }
 
   private handleDefaultControlEvent(event: KeyboardEvent): boolean {
