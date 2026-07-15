@@ -31,19 +31,22 @@ function button(label: string, base: string, baseText: string, hover: string, ho
   element.style.borderColor = base;
   element.style.color = baseText;
   element.style.cursor = "pointer";
-  element.style.transition = "background-color 220ms, border-color 220ms, color 220ms";
+  element.style.transition =
+    "background-color 220ms, border-color 220ms, color 220ms, opacity 220ms";
   element.appendChild(pc.createTextNode(`  ${label}  `));
 
   element.addEventListener("mouseenter", () => {
     element.style.backgroundColor = hover;
     element.style.borderColor = hover;
     element.style.color = hoverText;
+    element.style.opacity = "0.65";
   });
 
   element.addEventListener("mouseleave", () => {
     element.style.backgroundColor = base;
     element.style.borderColor = base;
     element.style.color = baseText;
+    element.style.opacity = "1";
   });
 
   element.addEventListener("transitionstart", event => {

@@ -21,12 +21,12 @@ use crate::selection::{
     SelectionAction, SelectionMouseEvent, SelectionMouseEventType, SelectionState,
 };
 use crate::style::{
-    Background, BorderStyle, ColorTransitionProperty, CssDimension, CssFontStyle, CssFontWeight,
-    CssGridLine, CssGridPlacement, CssGridTemplateTrack, CssLengthPercentage,
-    CssLengthPercentageAuto, CssPosition, CssTextDecorationLine, CssTrackSizing, CssVisibility,
-    CssWhiteSpace, CssZIndex, CursorStyle, DivStyle, ImageRendering, LayoutAlignItems,
-    LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap, LayoutGridAutoFlow, LayoutJustifyContent,
-    LayoutOverflow, ScrollbarColor, ScrollbarGutter, TransitionSpec,
+    Background, BorderStyle, CssDimension, CssFontStyle, CssFontWeight, CssGridLine,
+    CssGridPlacement, CssGridTemplateTrack, CssLengthPercentage, CssLengthPercentageAuto,
+    CssPosition, CssTextDecorationLine, CssTrackSizing, CssVisibility, CssWhiteSpace, CssZIndex,
+    CursorStyle, DivStyle, ImageRendering, LayoutAlignItems, LayoutDisplay, LayoutFlexDirection,
+    LayoutFlexWrap, LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, ScrollbarColor,
+    ScrollbarGutter, TransitionProperty, TransitionSpec,
 };
 use crate::terminal::{copy_text_to_clipboard, query_terminal_size, write_pointer_shape};
 use crate::transition::{TransitionEvent, TransitionEventType, TransitionState};
@@ -38,7 +38,7 @@ pub(crate) struct DomId(pub(crate) u32);
 pub(crate) struct EngineTransitionEvent {
     pub(crate) event_type: TransitionEventType,
     pub(crate) target: DomId,
-    pub(crate) property: ColorTransitionProperty,
+    pub(crate) property: TransitionProperty,
 }
 
 #[derive(Clone, Debug)]
@@ -847,7 +847,7 @@ impl PaintEngine {
         let previous = self.arena.style(node).clone();
         self.transitions.style_color_changed(
             node,
-            ColorTransitionProperty::Color,
+            TransitionProperty::Color,
             previous.color,
             style.color,
             now,
@@ -855,7 +855,7 @@ impl PaintEngine {
         );
         self.transitions.style_color_changed(
             node,
-            ColorTransitionProperty::BackgroundColor,
+            TransitionProperty::BackgroundColor,
             previous.background,
             style.background,
             now,
@@ -863,9 +863,16 @@ impl PaintEngine {
         );
         self.transitions.style_color_changed(
             node,
-            ColorTransitionProperty::BorderColor,
+            TransitionProperty::BorderColor,
             previous.border_color,
             style.border_color,
+            now,
+            self.truecolor_enabled,
+        );
+        self.transitions.style_opacity_changed(
+            node,
+            previous.opacity,
+            style.opacity,
             now,
             self.truecolor_enabled,
         );
@@ -874,6 +881,8 @@ impl PaintEngine {
             || previous.white_space != style.white_space
             || previous.position != style.position;
         self.arena.set_style(node, style);
+        self.arena
+            .set_opacity_transition_active(node, self.transitions.has_active_opacity(node));
     }
 
     pub(crate) fn set_transition(&mut self, node: DomId, transitions: Vec<TransitionSpec>) -> bool {
@@ -1299,7 +1308,11 @@ impl PaintEngine {
             .refresh_focus_from_last_pointer(&output.frame);
         self.hit_regions = output.hit_regions;
         self.current_frame = Some(output.frame.clone());
-        self.transitions.finish_completed(now);
+        for (node, property) in self.transitions.finish_completed(now) {
+            if property == TransitionProperty::Opacity {
+                self.arena.set_opacity_transition_active(node, false);
+            }
+        }
         profile_log("frame_bookkeeping", bookkeeping_start.elapsed(), &[]);
         profile_log("render_frame_total", total_start.elapsed(), &[]);
         Some(output.frame)
@@ -2292,8 +2305,8 @@ mod tests {
 
     use crate::selection::{SelectionMouseEvent, SelectionMouseEventType};
     use crate::style::{
-        Background, ColorTransitionProperty, CssDimension, CssFontWeight, LayoutFlexDirection,
-        LayoutOverflow, TransitionSpec,
+        Background, CssDimension, CssFontWeight, LayoutFlexDirection, LayoutOverflow,
+        TransitionProperty, TransitionSpec,
     };
     use crate::transition::TransitionEventType;
 
@@ -3279,6 +3292,64 @@ mod tests {
     }
 
     #[test]
+    fn opacity_transition_fades_in_as_a_stacking_context_without_recomputing_layout() {
+        let mut engine = PaintEngine::new();
+        let mut root_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        root_style.background = Background::Blue;
+        let root = engine.create_element(root_style);
+        let mut child_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
+        child_style.background = Background::Red;
+        child_style.opacity = 0.0;
+        let child = engine.create_element(child_style.clone());
+        engine.append_child(root, child);
+        engine.set_root(root);
+        let start = std::time::Instant::now();
+        engine.render_frame_at(2, 1, start).unwrap();
+        let passes = engine.layout_passes();
+
+        engine.set_transition(
+            child,
+            vec![TransitionSpec {
+                property: TransitionProperty::Opacity,
+                duration_ms: 100,
+            }],
+        );
+        child_style.opacity = 1.0;
+        engine.set_style_at(child, child_style, start);
+
+        assert_eq!(
+            engine.drain_transition_events(),
+            vec![EngineTransitionEvent {
+                event_type: TransitionEventType::Start,
+                target: child,
+                property: TransitionProperty::Opacity,
+            }]
+        );
+        let midway = engine
+            .render_frame_at(2, 1, start + std::time::Duration::from_millis(50))
+            .unwrap();
+        assert_eq!(engine.layout_passes(), passes);
+        assert_eq!(
+            midway.cell(0, 0).unwrap().background,
+            Background::Rgb(128, 0, 128)
+        );
+
+        let finished = engine
+            .render_frame_at(2, 1, start + std::time::Duration::from_millis(100))
+            .unwrap();
+        assert_eq!(engine.layout_passes(), passes);
+        assert_eq!(finished.cell(0, 0).unwrap().background, Background::Red);
+        assert_eq!(
+            engine.drain_transition_events(),
+            vec![EngineTransitionEvent {
+                event_type: TransitionEventType::End,
+                target: child,
+                property: TransitionProperty::Opacity,
+            }]
+        );
+    }
+
+    #[test]
     fn color_transition_paints_without_recomputing_layout() {
         let mut engine = PaintEngine::new();
         let mut style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
@@ -3292,7 +3363,7 @@ mod tests {
         engine.set_transition(
             root,
             vec![TransitionSpec {
-                property: ColorTransitionProperty::BackgroundColor,
+                property: TransitionProperty::BackgroundColor,
                 duration_ms: 100,
             }],
         );
@@ -3305,7 +3376,7 @@ mod tests {
             vec![EngineTransitionEvent {
                 event_type: TransitionEventType::Start,
                 target: root,
-                property: ColorTransitionProperty::BackgroundColor,
+                property: TransitionProperty::BackgroundColor,
             }]
         );
 
@@ -3329,7 +3400,7 @@ mod tests {
             vec![EngineTransitionEvent {
                 event_type: TransitionEventType::End,
                 target: root,
-                property: ColorTransitionProperty::BackgroundColor,
+                property: TransitionProperty::BackgroundColor,
             }]
         );
     }
@@ -3350,7 +3421,7 @@ mod tests {
         engine.set_transition(
             root,
             vec![TransitionSpec {
-                property: ColorTransitionProperty::Color,
+                property: TransitionProperty::Color,
                 duration_ms: 100,
             }],
         );

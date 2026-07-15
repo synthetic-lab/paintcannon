@@ -9,9 +9,9 @@ use crate::layout::{
     LayoutNodeKind, TextAreaLayoutData,
 };
 use crate::style::{
-    Background, ColorTransitionProperty, CssFontStyle, CssFontWeight, CssPosition,
-    CssTextDecorationLine, CssVisibility, DivStyle, ImageRendering, LayoutDisplay,
-    LayoutFlexDirection, LayoutFlexWrap, LayoutOverflow,
+    Background, CssFontStyle, CssFontWeight, CssPosition, CssTextDecorationLine, CssVisibility,
+    DivStyle, ImageRendering, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap, LayoutOverflow,
+    TransitionProperty,
 };
 use crate::text::parse_text_for_single_line;
 use crate::text_wrap::WrappedText;
@@ -153,7 +153,7 @@ impl<'a, 'out> Painter<'a, 'out> {
     }
 
     fn paint_stacking_context(&mut self, id: NodeId, state: PaintState) {
-        let opacity = self.arena.style(id).opacity;
+        let opacity = self.paint_opacity(id, self.arena.style(id).opacity);
         if opacity < 1.0 {
             let layer = self.output.frame.layer();
             let backdrop = std::mem::replace(&mut self.output.frame, layer);
@@ -222,15 +222,11 @@ impl<'a, 'out> Painter<'a, 'out> {
         let visible = effective_visibility(style.visibility, state.visible);
         let layout = self.arena.layout(id);
         let painted_background = effective_background(
-            self.paint_color(
-                id,
-                ColorTransitionProperty::BackgroundColor,
-                style.background,
-            ),
+            self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
             state.background,
         );
         let foreground = effective_background(
-            self.paint_color(id, ColorTransitionProperty::Color, style.color),
+            self.paint_color(id, TransitionProperty::Color, style.color),
             state.foreground,
         );
         let selection_background = style.selection_background.or(state.selection_background);
@@ -304,7 +300,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             self.paint_horizontal_scrollbar(id, bounds, layout, painted_background, state.clip);
 
             let border_color =
-                self.paint_color(id, ColorTransitionProperty::BorderColor, style.border_color);
+                self.paint_color(id, TransitionProperty::BorderColor, style.border_color);
             self.output.frame.stroke_border(
                 bounds,
                 style,
@@ -393,16 +389,12 @@ impl<'a, 'out> Painter<'a, 'out> {
         let visible = effective_visibility(style.visibility, state.visible);
         if visible {
             state.background = effective_background(
-                self.paint_color(
-                    id,
-                    ColorTransitionProperty::BackgroundColor,
-                    style.background,
-                ),
+                self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
                 state.background,
             );
         }
         state.foreground = effective_background(
-            self.paint_color(id, ColorTransitionProperty::Color, style.color),
+            self.paint_color(id, TransitionProperty::Color, style.color),
             state.foreground,
         );
         state.selection_background = style.selection_background.or(state.selection_background);
@@ -425,15 +417,11 @@ impl<'a, 'out> Painter<'a, 'out> {
             layout.size.height,
         );
         let background = effective_background(
-            self.paint_color(
-                id,
-                ColorTransitionProperty::BackgroundColor,
-                style.background,
-            ),
+            self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
             state.background,
         );
         let foreground = effective_background(
-            self.paint_color(id, ColorTransitionProperty::Color, style.color),
+            self.paint_color(id, TransitionProperty::Color, style.color),
             state.foreground,
         );
         let selection_background = style.selection_background.or(state.selection_background);
@@ -592,11 +580,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             return;
         }
         let background = effective_background(
-            self.paint_color(
-                id,
-                ColorTransitionProperty::BackgroundColor,
-                style.background,
-            ),
+            self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
             state.background,
         );
         let selection_background = style.selection_background.or(state.selection_background);
@@ -621,7 +605,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             child_clip,
         );
         let border_color =
-            self.paint_color(id, ColorTransitionProperty::BorderColor, style.border_color);
+            self.paint_color(id, TransitionProperty::BorderColor, style.border_color);
         self.output.frame.stroke_border(
             bounds,
             style,
@@ -643,15 +627,11 @@ impl<'a, 'out> Painter<'a, 'out> {
             return;
         }
         let background = effective_background(
-            self.paint_color(
-                id,
-                ColorTransitionProperty::BackgroundColor,
-                style.background,
-            ),
+            self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
             state.background,
         );
         let foreground = effective_background(
-            self.paint_color(id, ColorTransitionProperty::Color, style.color),
+            self.paint_color(id, TransitionProperty::Color, style.color),
             state.foreground,
         );
         let placeholder_foreground =
@@ -684,7 +664,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             },
         );
         let border_color =
-            self.paint_color(id, ColorTransitionProperty::BorderColor, style.border_color);
+            self.paint_color(id, TransitionProperty::BorderColor, style.border_color);
         self.output.frame.stroke_border(
             bounds,
             style,
@@ -706,15 +686,11 @@ impl<'a, 'out> Painter<'a, 'out> {
             return;
         }
         let background = effective_background(
-            self.paint_color(
-                id,
-                ColorTransitionProperty::BackgroundColor,
-                style.background,
-            ),
+            self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
             state.background,
         );
         let foreground = effective_background(
-            self.paint_color(id, ColorTransitionProperty::Color, style.color),
+            self.paint_color(id, TransitionProperty::Color, style.color),
             state.foreground,
         );
         let placeholder_foreground =
@@ -749,7 +725,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             },
         );
         let border_color =
-            self.paint_color(id, ColorTransitionProperty::BorderColor, style.border_color);
+            self.paint_color(id, TransitionProperty::BorderColor, style.border_color);
         self.output.frame.stroke_border(
             bounds,
             style,
@@ -868,16 +844,12 @@ impl<'a, 'out> Painter<'a, 'out> {
             let visible = effective_visibility(style.visibility, state.visible);
             if visible {
                 state.background = effective_background(
-                    self.paint_color(
-                        node,
-                        ColorTransitionProperty::BackgroundColor,
-                        style.background,
-                    ),
+                    self.paint_color(node, TransitionProperty::BackgroundColor, style.background),
                     state.background,
                 );
             }
             state.foreground = effective_background(
-                self.paint_color(node, ColorTransitionProperty::Color, style.color),
+                self.paint_color(node, TransitionProperty::Color, style.color),
                 state.foreground,
             );
             state.selection_background = style.selection_background.or(state.selection_background);
@@ -988,7 +960,7 @@ impl<'a, 'out> Painter<'a, 'out> {
     fn paint_color(
         &self,
         node: NodeId,
-        property: ColorTransitionProperty,
+        property: TransitionProperty,
         style_color: Background,
     ) -> Background {
         self.options
@@ -1003,6 +975,20 @@ impl<'a, 'out> Painter<'a, 'out> {
                 )
             })
             .unwrap_or(style_color)
+    }
+
+    fn paint_opacity(&self, node: NodeId, style_opacity: f32) -> f32 {
+        self.options
+            .transitions
+            .map(|transitions| {
+                transitions.paint_opacity(
+                    node,
+                    style_opacity,
+                    self.options.now,
+                    self.options.truecolor_enabled,
+                )
+            })
+            .unwrap_or(style_opacity)
     }
 }
 

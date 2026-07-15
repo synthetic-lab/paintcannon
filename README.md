@@ -22,7 +22,7 @@ PaintCannon supports the following CSS:
 - `scrollbar-color` and `scrollbar-gutter` styling
 - 24-bit RGB and CSS named background, border, text, placeholder, and selection colors with
   256-color and 16-color fallbacks
-- CSS transitions for all color properties
+- CSS transitions for color and opacity properties
 - Mouse pointer styling (in supported terminals using the kitty protocol)
 - Terminal focus detection via `PaintCannon.hasFocus` and app-level
   `focus`/`blur` events
