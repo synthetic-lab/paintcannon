@@ -71,6 +71,13 @@ pub struct CursorVisualPosition {
 
 #[derive(Clone, Debug)]
 #[napi(object)]
+pub struct VisualLineRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+#[derive(Clone, Debug)]
+#[napi(object)]
 pub struct ScrollbarHit {
     pub target_id: u32,
     pub axis: String,
@@ -322,6 +329,27 @@ impl PaintCannon {
         response_rx
             .recv()
             .map(|position| position.map(|(row, column)| CursorVisualPosition { row, column }))
+            .map_err(|_| Error::from_reason("renderer thread stopped"))
+    }
+
+    #[napi]
+    pub fn get_text_area_visual_line_range(
+        &self,
+        id: u32,
+        row: u32,
+    ) -> Result<Option<VisualLineRange>> {
+        let (response_tx, response_rx) = bounded(1);
+        let (width, height) = self.layout_size();
+        self.send(EngineCommand::GetTextAreaVisualLineRange {
+            node: DomId(id),
+            row,
+            width,
+            height,
+            response: response_tx,
+        })?;
+        response_rx
+            .recv()
+            .map(|range| range.map(|(start, end)| VisualLineRange { start, end }))
             .map_err(|_| Error::from_reason("renderer thread stopped"))
     }
 

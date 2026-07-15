@@ -65,7 +65,9 @@ The core DOM subset supports:
 Textareas expose the non-standard `getCursorVisualPosition()` method for terminal editors. It
 returns the cursor's zero-based `{row, column}` in the soft-wrapped text, or `null` when layout is
 not available. The row is relative to the complete textarea value, not its currently scrolled
-viewport.
+viewport. Pass that row to `getVisualLineRange(row)` to get its `{start, end}` character offsets;
+`end` is exclusive, explicit newline characters are excluded, and both offsets use the same units
+as `cursorPosition`.
 
 ## Events
 

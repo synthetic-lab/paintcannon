@@ -60,6 +60,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
   scrollbarHitAtPoint: NativeScrollbarHit | null = null;
   cursorAtPoint: number | null = null;
   cursorVisualPositions = new Map<number, { row: number; column: number }>();
+  visualLineRanges = new Map<string, { start: number; end: number }>();
   inputEvents: NativeTerminalInputEvent[] = [];
   focusEvents: TerminalFocusEvent[] = [];
   mouseEvents: TerminalMouseEvent[] = [];
@@ -142,6 +143,10 @@ export class MockNativePaintCannon implements NativePaintCannon {
 
   getTextAreaCursorVisualPosition(id: number): { row: number; column: number } | null {
     return this.cursorVisualPositions.get(id) ?? null;
+  }
+
+  getTextAreaVisualLineRange(id: number, row: number): { start: number; end: number } | null {
+    return this.visualLineRanges.get(`${id}:${row}`) ?? null;
   }
 
   setTextControlCursorAtPoint(_id: number, _x: number, _y: number): number | null {
