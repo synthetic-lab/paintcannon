@@ -10,6 +10,11 @@ pub(crate) enum TerminalGlyph {
     Spaces(usize),
 }
 
+pub(crate) struct ParsedTextWithSourceMap {
+    pub(crate) characters: Vec<char>,
+    pub(crate) source_to_parsed_cursor: Vec<usize>,
+}
+
 pub(crate) fn parse_text_for_white_space(text: &str, white_space: CssWhiteSpace) -> Vec<char> {
     match white_space {
         CssWhiteSpace::Pre | CssWhiteSpace::PreWrap => preserve_white_space(text),
@@ -23,6 +28,38 @@ pub(crate) fn parse_text_for_single_line(text: &str) -> Vec<char> {
         .into_iter()
         .map(|character| if character == '\n' { ' ' } else { character })
         .collect()
+}
+
+pub(crate) fn parse_text_for_pre_wrap_with_source_map(text: &str) -> ParsedTextWithSourceMap {
+    let source = text.chars().collect::<Vec<_>>();
+    let mut characters = Vec::new();
+    let mut source_to_parsed_cursor = vec![0; source.len() + 1];
+    let mut source_index = 0;
+
+    while source_index < source.len() {
+        source_to_parsed_cursor[source_index] = characters.len();
+        let character = source[source_index];
+        let source_end = if character == '\r' && source.get(source_index + 1) == Some(&'\n') {
+            source_to_parsed_cursor[source_index + 1] = characters.len();
+            source_index + 2
+        } else {
+            source_index + 1
+        };
+        let normalized = if character == '\r' { '\n' } else { character };
+        match normalized {
+            '\t' => characters.extend(std::iter::repeat_n(' ', TAB_SIZE_CELLS)),
+            '\n' => characters.push('\n'),
+            '\u{000c}' => characters.push(' '),
+            character => push_safe_text_character(&mut characters, character),
+        }
+        source_index = source_end;
+        source_to_parsed_cursor[source_index] = characters.len();
+    }
+
+    ParsedTextWithSourceMap {
+        characters,
+        source_to_parsed_cursor,
+    }
 }
 
 pub(crate) fn character_cell_width(character: char) -> usize {
@@ -42,16 +79,7 @@ pub(crate) fn terminal_safe_glyph(character: char, cell_width: usize) -> Termina
 }
 
 fn preserve_white_space(text: &str) -> Vec<char> {
-    let mut chars = Vec::new();
-    for character in normalized_line_break_chars(text) {
-        match character {
-            '\t' => chars.extend(std::iter::repeat_n(' ', TAB_SIZE_CELLS)),
-            '\n' => chars.push('\n'),
-            '\u{000c}' => chars.push(' '),
-            character => push_safe_text_character(&mut chars, character),
-        }
-    }
-    chars
+    parse_text_for_pre_wrap_with_source_map(text).characters
 }
 
 fn collapse_white_space(text: &str, preserve_newlines: bool) -> Vec<char> {
@@ -155,5 +183,16 @@ mod tests {
         let chars = parse_text_for_white_space("a\u{0085}b", CssWhiteSpace::Pre);
 
         assert_eq!(chars.into_iter().collect::<String>(), "a\u{fffd}b");
+    }
+
+    #[test]
+    fn pre_wrap_source_map_preserves_original_character_offsets() {
+        let parsed = parse_text_for_pre_wrap_with_source_map("a\tb\r\nc");
+
+        assert_eq!(
+            parsed.characters.into_iter().collect::<String>(),
+            "a    b\nc"
+        );
+        assert_eq!(parsed.source_to_parsed_cursor, vec![0, 1, 5, 6, 6, 7, 8]);
     }
 }

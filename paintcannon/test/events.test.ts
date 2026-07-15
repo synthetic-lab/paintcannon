@@ -200,6 +200,12 @@ describe("textarea cursor APIs", () => {
     mockNative.cursorVisualPositions.set(textarea.id, { row: 3, column: 7 });
     expect(textarea.getCursorVisualPosition()).toEqual({ row: 3, column: 7 });
 
+    expect(textarea.getVisualLineRange(3)).toBeNull();
+    mockNative.visualLineRanges.set(`${textarea.id}:3`, { start: 12, end: 18 });
+    expect(textarea.getVisualLineRange(3)).toEqual({ start: 12, end: 18 });
+    expect(textarea.getVisualLineRange(-1)).toBeNull();
+    expect(textarea.getVisualLineRange(1.5)).toBeNull();
+
     paintCannon.stop();
   });
 });

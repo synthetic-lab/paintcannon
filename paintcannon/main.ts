@@ -16,6 +16,7 @@ import type {
   TerminalResizeEvent,
   TerminalSize,
   TransitionEvent as NativeTransitionEvent,
+  VisualLineRange as NativeVisualLineRange,
 } from "#paintcannon-native";
 
 export type { PaintFile, PaintFileList, PaintFileType } from "./terminal-files.ts";
@@ -52,6 +53,7 @@ export interface PaintCannonOptions {
 
 export type AnimationFrameCallback = (timestamp: number) => void;
 export type CursorVisualPosition = NativeCursorVisualPosition;
+export type VisualLineRange = NativeVisualLineRange;
 export const KEYBOARD_EVENT_TYPES = ["keydown", "keyup"] as const;
 export const CLIPBOARD_EVENT_TYPES = ["paste"] as const;
 export const PAINT_CANNON_FOCUS_EVENT_TYPES = ["focus", "blur"] as const;
@@ -619,6 +621,7 @@ export class PaintCannon {
       (id, x, y) => this.binding.setTextControlCursorAtPoint(id, x, y),
       (id, direction) => this.binding.moveTextAreaCursorVertically(id, direction),
       id => this.binding.getTextAreaCursorVisualPosition(id),
+      (id, row) => this.binding.getTextAreaVisualLineRange(id, row),
       (id, property, value) => this.setNativeStyleProperty(id, property, value),
     );
     this.registerElement(element);
@@ -3009,6 +3012,10 @@ export class TextAreaElement extends TextControlElementBase<TextAreaElementEvent
     private readonly getNativeTextAreaCursorVisualPosition: (
       id: number,
     ) => CursorVisualPosition | null,
+    private readonly getNativeTextAreaVisualLineRange: (
+      id: number,
+      row: number,
+    ) => VisualLineRange | null,
     setNativeStyleProperty: SetNativeStyleProperty,
   ) {
     super(
@@ -3046,6 +3053,13 @@ export class TextAreaElement extends TextControlElementBase<TextAreaElementEvent
 
   getCursorVisualPosition(): CursorVisualPosition | null {
     return this.getNativeTextAreaCursorVisualPosition(this.id);
+  }
+
+  getVisualLineRange(row: number): VisualLineRange | null {
+    if (!Number.isSafeInteger(row) || row < 0 || row > 0xffffffff) {
+      return null;
+    }
+    return this.getNativeTextAreaVisualLineRange(this.id, row);
   }
 }
 

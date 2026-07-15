@@ -367,6 +367,13 @@ pub(crate) enum EngineCommand {
         height: usize,
         response: Sender<Option<(u32, u32)>>,
     },
+    GetTextAreaVisualLineRange {
+        node: DomId,
+        row: u32,
+        width: usize,
+        height: usize,
+        response: Sender<Option<(u32, u32)>>,
+    },
     SetTextControlCursorAtPoint {
         node: DomId,
         x: u32,
@@ -1046,6 +1053,18 @@ impl PaintEngine {
         let node = self.node_for(node)?;
         self.ensure_layout_for_size(width, height);
         self.arena.textarea_cursor_visual_position(node)
+    }
+
+    pub(crate) fn textarea_visual_line_range_for_size(
+        &mut self,
+        node: DomId,
+        row: u32,
+        width: usize,
+        height: usize,
+    ) -> Option<(u32, u32)> {
+        let node = self.node_for(node)?;
+        self.ensure_layout_for_size(width, height);
+        self.arena.textarea_visual_line_range(node, row)
     }
 
     pub(crate) fn set_text_control_cursor_at_point_for_size(
@@ -2070,6 +2089,16 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         } => {
             let _ =
                 response.send(engine.textarea_cursor_visual_position_for_size(node, width, height));
+        }
+        EngineCommand::GetTextAreaVisualLineRange {
+            node,
+            row,
+            width,
+            height,
+            response,
+        } => {
+            let _ =
+                response.send(engine.textarea_visual_line_range_for_size(node, row, width, height));
         }
         EngineCommand::SetTextControlCursorAtPoint {
             node,
@@ -3398,6 +3427,10 @@ mod tests {
         assert_eq!(
             engine.textarea_cursor_visual_position_for_size(textarea, 8, 4),
             Some((1, 1))
+        );
+        assert_eq!(
+            engine.textarea_visual_line_range_for_size(textarea, 1, 8, 4),
+            Some((4, 8))
         );
         assert_eq!(engine.layout_passes(), layout_passes);
     }

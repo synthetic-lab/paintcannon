@@ -449,6 +449,23 @@ impl LayoutArena {
         ))
     }
 
+    pub(crate) fn textarea_visual_line_range(&self, node: NodeId, row: u32) -> Option<(u32, u32)> {
+        let LayoutNodeKind::TextArea(textarea) = &self.nodes[node_index(node)].kind else {
+            return None;
+        };
+        let wrap_width = float_to_cells(self.layout(node).content_box_size().width) as usize;
+        if wrap_width == 0 {
+            return None;
+        }
+
+        let range =
+            WrappedText::new(&textarea.value, wrap_width).visual_line_range(row as usize)?;
+        Some((
+            range.start.min(u32::MAX as usize) as u32,
+            range.end.min(u32::MAX as usize) as u32,
+        ))
+    }
+
     pub(crate) fn set_text_control_cursor_at_point(
         &mut self,
         node: NodeId,
@@ -4651,6 +4668,10 @@ mod tests {
             arena.textarea_cursor_visual_position(textarea),
             Some((1, 0))
         );
+        assert_eq!(arena.textarea_visual_line_range(textarea, 0), Some((0, 4)));
+        assert_eq!(arena.textarea_visual_line_range(textarea, 1), Some((4, 8)));
+        assert_eq!(arena.textarea_visual_line_range(textarea, 2), Some((8, 8)));
+        assert_eq!(arena.textarea_visual_line_range(textarea, 3), None);
 
         arena.set_textarea_value(textarea, "hahahaha", 5);
         arena.compute_layout(
@@ -4887,6 +4908,8 @@ mod tests {
             arena.textarea_cursor_visual_position(textarea),
             Some((1, 0))
         );
+        assert_eq!(arena.textarea_visual_line_range(textarea, 0), Some((0, 6)));
+        assert_eq!(arena.textarea_visual_line_range(textarea, 1), Some((6, 7)));
     }
 
     #[test]
