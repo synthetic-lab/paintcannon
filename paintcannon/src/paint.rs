@@ -1627,6 +1627,47 @@ mod tests {
     }
 
     #[test]
+    fn translucent_text_treats_overlapped_chunky_corner_as_a_filled_cell() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
+        root_style.position = CssPosition::Relative;
+        let root = arena.create_element(root_style);
+
+        let mut lower_style = absolute_style(1, Background::Rgb(200, 0, 0));
+        lower_style.border_color = Background::Rgb(0, 200, 0);
+        lower_style.border_top = BorderStyle::ChunkyRounded;
+        lower_style.border_right = BorderStyle::ChunkyRounded;
+        lower_style.border_bottom = BorderStyle::ChunkyRounded;
+        lower_style.border_left = BorderStyle::ChunkyRounded;
+        let lower = arena.create_element(lower_style);
+
+        let mut upper_style = absolute_style(2, Background::Default);
+        upper_style.width = CssDimension::Length(1.0);
+        upper_style.height = CssDimension::Length(1.0);
+        upper_style.color = Background::Rgb(255, 255, 255);
+        upper_style.opacity = 0.5;
+        let upper = arena.create_element(upper_style);
+        let text = arena.create_text("t");
+
+        arena.append_child(root, lower);
+        arena.append_child(root, upper);
+        arena.append_child(upper, text);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(3.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+
+        let output = paint_arena(&arena, root, 3, 2, false);
+        let cell = output.frame.cell(0, 0).unwrap();
+        assert_eq!(cell.character, 't');
+        assert_eq!(cell.foreground, Background::Rgb(128, 228, 128));
+        assert_eq!(cell.background, Background::Rgb(0, 200, 0));
+    }
+
+    #[test]
     fn opacity_blends_an_overlapping_box_with_the_lower_background() {
         let mut arena = LayoutArena::new();
         let mut root_style = block_style(CssDimension::Length(3.0), CssDimension::Length(2.0));
