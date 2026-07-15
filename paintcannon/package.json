@@ -61,6 +61,7 @@
     "demo:margin": "npm run build:debug && node dist/examples/margin.js",
     "demo:overflow": "npm run build:debug && node dist/examples/overflow.js",
     "demo:opacity": "npm run build:debug && node dist/examples/opacity.js",
+    "demo:opacity-transition": "npm run build:debug && node dist/examples/opacity-transition.js",
     "demo:pong": "npm run build:debug && node dist/examples/pong.js",
     "demo:native-scroll": "npm run build:debug && node dist/examples/native-scroll.js",
     "demo:scroll": "npm run build:debug && node dist/examples/scroll.js",
