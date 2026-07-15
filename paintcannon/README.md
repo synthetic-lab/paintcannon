@@ -116,8 +116,13 @@ PaintCannon detects PNG, JPEG, WebP, and GIF files. For a text-only paste,
 Run `npm run demo:paste-images` from the workspace root to paste or drag PNG files into a live
 PaintCannon image renderer.
 
-It also exposes `requestAnimationFrame()` and `cancelAnimationFrame()` so UI code can synchronize
-with PaintCannon's render loop.
+The Rust renderer owns a fixed-cadence render loop, configured with the `fps`
+constructor option (60 by default). It only runs layout for layout-dirty
+changes, only paints dirty frames or active transitions, and only writes
+terminal bytes when the frame diff is non-empty. `requestAnimationFrame()` and
+`cancelAnimationFrame()` schedule JS updates at the configured cadence, while
+`renderSync()` is available when shutdown or another explicit barrier must wait
+for the current state to reach the terminal.
 
 Terminal focus detection is separate from element focus. PaintCannon enables xterm focus reporting
 from Rust, listens for terminal focus gain/loss reports, and exposes them through the

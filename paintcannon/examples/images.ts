@@ -41,7 +41,6 @@ root.appendChild(label);
 root.appendChild(row);
 root.appendChild(hint);
 pc.setRoot(root);
-pc.render();
 
 pc.addEventListener("keydown", event => {
   if (event.key === "q" || event.key === "Escape") {

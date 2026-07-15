@@ -57,7 +57,7 @@ function renderGoodbye() {
   goodbye.style.color = "#f9fafb";
   goodbye.appendChild(second.createTextNode(`goodbye ${new Date().toISOString()}`));
   second.setRoot(goodbye);
-  second.render();
+  second.renderSync();
   second.stop();
 }
 
@@ -80,13 +80,3 @@ first.addEventListener("keydown", (event: KeyboardEvent) => {
 process.once("SIGINT", () => {
   stopFirstAndContinue();
 });
-
-function frame() {
-  if (stopped) {
-    return;
-  }
-  first.render();
-  first.requestAnimationFrame(frame);
-}
-
-first.requestAnimationFrame(frame);

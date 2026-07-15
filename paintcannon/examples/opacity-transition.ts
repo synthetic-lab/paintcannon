@@ -87,5 +87,3 @@ function panel(
 
   return element;
 }
-
-pc.render();

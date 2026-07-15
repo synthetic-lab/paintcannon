@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
 use std::sync::mpsc;
-use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
@@ -12,8 +11,8 @@ use termprofile::{DetectorSettings, TermProfile};
 
 use crate::engine::{
     apply_style_mutation, engine_loop, ClickEvent as EngineClickEvent, DomId, EngineCommand,
-    EngineTransitionEvent, MouseClick, ScrollbarHit as EngineScrollbarHit, StyleMutation,
-    StyleReset,
+    EngineLoopOptions, EngineTransitionEvent, MouseClick, ScrollbarHit as EngineScrollbarHit,
+    StyleMutation, StyleReset,
 };
 use crate::input::{
     TerminalFocusEvent, TerminalInput, TerminalInputEvent, TerminalMouseEvent, TerminalResizeEvent,
@@ -124,9 +123,7 @@ pub struct PaintCannon {
     thread: Option<JoinHandle<()>>,
     input: Option<TerminalInput>,
     kitty_keyboard_enabled: bool,
-    layout_size: Mutex<(usize, usize)>,
     next_dom_id: u32,
-    color_profile: TermProfile,
 }
 
 #[napi]
@@ -137,20 +134,29 @@ impl PaintCannon {
         alternate_screen: Option<bool>,
         capture_mouse: Option<bool>,
         capture_ctrl_c: Option<bool>,
-    ) -> Self {
+        fps: Option<f64>,
+    ) -> Result<Self> {
+        let fps = fps.unwrap_or(60.0);
+        if !fps.is_finite() || fps <= 0.0 {
+            return Err(Error::from_reason(format!(
+                "frame rate must be a positive finite number, got {fps}"
+            )));
+        }
         let (tx, rx) = bounded(RENDER_QUEUE_CAPACITY);
         termprofile::set_color_cache_enabled(true);
         let color_profile = TermProfile::detect(&io::stdout(), DetectorSettings::default());
         let size = query_terminal_size();
         let (terminal_foreground, terminal_background) = query_terminal_colors();
-        let thread = thread::spawn(move || engine_loop(rx));
-        let _ = tx.send(EngineCommand::SetTruecolorEnabled {
-            enabled: color_profile == TermProfile::TrueColor,
-        });
-        let _ = tx.send(EngineCommand::SetTerminalColors {
-            foreground: terminal_foreground,
-            background: terminal_background,
-        });
+        let loop_options = EngineLoopOptions {
+            width: size.cols as usize,
+            height: size.rows as usize,
+            fps,
+            color_profile,
+            synchronized: io::stdout().is_terminal(),
+            terminal_foreground,
+            terminal_background,
+        };
+        let thread = thread::spawn(move || engine_loop(rx, loop_options));
         let input = TerminalInput::start(
             DEFAULT_SYNTHETIC_KEYUP_MS,
             force_compat_mode.unwrap_or(false),
@@ -164,15 +170,13 @@ impl PaintCannon {
             .map(TerminalInput::kitty_keyboard_enabled)
             .unwrap_or(false);
 
-        Self {
+        Ok(Self {
             tx,
             thread: Some(thread),
             input,
             kitty_keyboard_enabled,
-            layout_size: Mutex::new((size.cols as usize, size.rows as usize)),
             next_dom_id: 1,
-            color_profile,
-        }
+        })
     }
 
     #[napi]
@@ -294,12 +298,9 @@ impl PaintCannon {
     #[napi]
     pub fn move_text_area_cursor_vertically(&self, id: u32, direction: i32) -> Result<Option<u32>> {
         let (response_tx, response_rx) = bounded(1);
-        let (width, height) = self.layout_size();
         self.send(EngineCommand::MoveTextAreaCursorVertically {
             node: DomId(id),
             direction,
-            width,
-            height,
             response: response_tx,
         })?;
         response_rx
@@ -313,11 +314,8 @@ impl PaintCannon {
         id: u32,
     ) -> Result<Option<CursorVisualPosition>> {
         let (response_tx, response_rx) = bounded(1);
-        let (width, height) = self.layout_size();
         self.send(EngineCommand::GetTextAreaCursorVisualPosition {
             node: DomId(id),
-            width,
-            height,
             response: response_tx,
         })?;
         response_rx
@@ -333,12 +331,9 @@ impl PaintCannon {
         row: u32,
     ) -> Result<Option<VisualLineRange>> {
         let (response_tx, response_rx) = bounded(1);
-        let (width, height) = self.layout_size();
         self.send(EngineCommand::GetTextAreaVisualLineRange {
             node: DomId(id),
             row,
-            width,
-            height,
             response: response_tx,
         })?;
         response_rx
@@ -350,13 +345,10 @@ impl PaintCannon {
     #[napi]
     pub fn set_text_control_cursor_at_point(&self, id: u32, x: u32, y: u32) -> Result<Option<u32>> {
         let (response_tx, response_rx) = bounded(1);
-        let (width, height) = self.layout_size();
         self.send(EngineCommand::SetTextControlCursorAtPoint {
             node: DomId(id),
             x,
             y,
-            width,
-            height,
             response: response_tx,
         })?;
         response_rx
@@ -674,14 +666,6 @@ impl PaintCannon {
         query_terminal_size()
     }
 
-    fn layout_size(&self) -> (usize, usize) {
-        *self.layout_size.lock().expect("layout size mutex poisoned")
-    }
-
-    fn set_layout_size(&self, width: usize, height: usize) {
-        *self.layout_size.lock().expect("layout size mutex poisoned") = (width, height);
-    }
-
     #[napi(getter)]
     pub fn kitty_keyboard_enabled(&self) -> bool {
         self.kitty_keyboard_enabled
@@ -703,25 +687,9 @@ impl PaintCannon {
     }
 
     #[napi]
-    pub fn render(&self) -> Result<()> {
-        let (width, height) = self.layout_size();
-        self.send(EngineCommand::RenderAsync {
-            width,
-            height,
-            color_profile: self.color_profile,
-            synchronized: io::stdout().is_terminal(),
-        })
-    }
-
-    #[napi]
     pub fn render_sync(&self) -> Result<()> {
         let (response_tx, response_rx) = mpsc::channel();
-        let (width, height) = self.layout_size();
         self.send(EngineCommand::RenderStdout {
-            width,
-            height,
-            color_profile: self.color_profile,
-            synchronized: io::stdout().is_terminal(),
             response: response_tx,
         })?;
         response_rx
@@ -758,9 +726,6 @@ impl PaintCannon {
             .as_ref()
             .map(TerminalInput::drain_resize_events)
             .unwrap_or_default();
-        if let Some(event) = events.last() {
-            self.set_layout_size(event.cols as usize, event.rows as usize);
-        }
         events
     }
 
@@ -790,17 +755,13 @@ impl PaintCannon {
     }
 
     #[napi]
-    pub fn has_active_transitions(&self) -> bool {
-        let (response_tx, response_rx) = bounded(1);
-        if self
-            .send(EngineCommand::HasActiveTransitions {
-                response: response_tx,
-            })
-            .is_err()
-        {
-            return false;
+    pub fn set_frame_rate(&self, fps: f64) -> Result<()> {
+        if !fps.is_finite() || fps <= 0.0 {
+            return Err(Error::from_reason(format!(
+                "frame rate must be a positive finite number, got {fps}"
+            )));
         }
-        response_rx.recv().unwrap_or(false)
+        self.send(EngineCommand::SetFrameRate { fps })
     }
 
     #[napi]
@@ -870,13 +831,10 @@ impl PaintCannon {
         scroll_top: u32,
     ) -> Result<Option<ScrollMetrics>> {
         let (response_tx, response_rx) = bounded(1);
-        let (width, height) = self.layout_size();
         self.send(EngineCommand::SetScrollOffset {
             node: DomId(id),
             scroll_left,
             scroll_top,
-            width,
-            height,
             response: response_tx,
         })?;
         response_rx
@@ -888,11 +846,8 @@ impl PaintCannon {
     #[napi]
     pub fn scroll_metrics(&self, id: u32) -> Result<Option<ScrollMetrics>> {
         let (response_tx, response_rx) = bounded(1);
-        let (width, height) = self.layout_size();
         self.send(EngineCommand::GetScrollMetrics {
             node: DomId(id),
-            width,
-            height,
             response: response_tx,
         })?;
         response_rx
@@ -1420,35 +1375,6 @@ mod tests {
     use crate::style::{
         CssDimension, CssLengthPercentageAuto, CssPosition, CssVisibility, CssZIndex,
     };
-
-    #[test]
-    fn render_request_after_mutation_is_not_dropped_behind_an_earlier_frame() {
-        let (tx, rx) = bounded(4);
-        let paint_cannon = PaintCannon {
-            tx,
-            thread: None,
-            input: None,
-            kitty_keyboard_enabled: false,
-            layout_size: Mutex::new((80, 24)),
-            next_dom_id: 1,
-            color_profile: TermProfile::TrueColor,
-        };
-
-        paint_cannon.render().unwrap();
-        paint_cannon
-            .tx
-            .send(EngineCommand::SetTerminalFocused { focused: false })
-            .unwrap();
-        paint_cannon.render().unwrap();
-
-        let commands = rx.try_iter().collect::<Vec<_>>();
-        assert!(matches!(commands[0], EngineCommand::RenderAsync { .. }));
-        assert!(matches!(
-            commands[1],
-            EngineCommand::SetTerminalFocused { focused: false }
-        ));
-        assert!(matches!(commands[2], EngineCommand::RenderAsync { .. }));
-    }
 
     #[test]
     fn can_fold_style_mutation_into_create_command() {

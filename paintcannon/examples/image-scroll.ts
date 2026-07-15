@@ -98,7 +98,6 @@ pc.addEventListener("keydown", event => {
 });
 
 updateStatus(viewport.scrollTop, viewport.scrollHeight, viewport.clientHeight);
-pc.render();
 
 function row(text: string) {
   const element = pc.createElement("div");

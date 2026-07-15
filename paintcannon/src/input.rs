@@ -238,6 +238,7 @@ impl TerminalInput {
                                             cols: u32::from(cols),
                                             rows: u32::from(rows),
                                         },
+                                        thread_renderer_tx.as_ref(),
                                     );
                                 }
                                 TerminalEvent::FocusGained => {
@@ -792,7 +793,14 @@ fn push_mouse_event(events: &Arc<Mutex<VecDeque<TerminalMouseEvent>>>, event: Te
 fn push_resize_event(
     events: &Arc<Mutex<VecDeque<TerminalResizeEvent>>>,
     event: TerminalResizeEvent,
+    renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
 ) {
+    if let Some(renderer_tx) = renderer_tx {
+        let _ = renderer_tx.send(EngineCommand::SetRenderSize {
+            width: event.cols as usize,
+            height: event.rows as usize,
+        });
+    }
     if let Ok(mut events) = events.lock() {
         events.push_back(event);
         while events.len() > 16 {
@@ -1069,6 +1077,39 @@ mod tests {
     fn terminal_focus_events_use_browser_event_names() {
         assert_eq!(terminal_focus_event(true).r#type, "focus");
         assert_eq!(terminal_focus_event(false).r#type, "blur");
+    }
+
+    #[test]
+    fn terminal_resize_updates_renderer_size_without_waiting_for_javascript() {
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let (renderer_tx, renderer_rx) = crossbeam_channel::bounded(1);
+
+        push_resize_event(
+            &events,
+            TerminalResizeEvent {
+                cols: 100,
+                rows: 40,
+            },
+            Some(&renderer_tx),
+        );
+
+        assert!(matches!(
+            renderer_rx
+                .recv()
+                .expect("renderer size command should be queued"),
+            EngineCommand::SetRenderSize {
+                width: 100,
+                height: 40,
+            }
+        ));
+        assert_eq!(
+            events
+                .lock()
+                .expect("resize events mutex poisoned")
+                .front()
+                .map(|event| (event.cols, event.rows)),
+            Some((100, 40))
+        );
     }
 
     #[test]

@@ -60,7 +60,7 @@ async function main(): Promise<void> {
   line.style.color = "#f9fafb";
   line.appendChild(pc.createTextNode(String(message ?? "goodbye")));
   pc.setRoot(line);
-  pc.render();
+  pc.renderSync();
   pc.stop();
 }
 

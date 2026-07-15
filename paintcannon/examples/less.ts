@@ -115,7 +115,6 @@ pc.addEventListener("keydown", (event: KeyboardEvent) => {
   updateStatus();
 });
 
-pc.render();
 updateStatus();
 
 function updateStatus(): void {

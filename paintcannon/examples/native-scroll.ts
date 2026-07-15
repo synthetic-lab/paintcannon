@@ -161,7 +161,6 @@ pc.addEventListener("keydown", (event: KeyboardEvent) => {
   updateAllStatuses();
 });
 
-pc.render();
 updateAllStatuses();
 
 function paneRow(): DivElement {

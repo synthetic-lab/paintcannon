@@ -95,13 +95,10 @@ function tick() {
     status.nodeValue = `detached and reattached ${moves} times`;
   }
 
-  pc.render();
-
   if (moves < 10) {
     pc.requestAnimationFrame(tick);
   } else {
     status.nodeValue = "node survived every detach";
-    pc.render();
     setTimeout(() => pc.stop(), 700);
   }
 }

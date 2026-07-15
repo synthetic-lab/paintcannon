@@ -56,5 +56,3 @@ function button(label: string, base: string, baseText: string, hover: string, ho
 
   return element;
 }
-
-pc.render();

@@ -70,7 +70,6 @@ root.appendChild(status);
 root.appendChild(log);
 
 name.control.focus();
-pc.render();
 
 pc.addEventListener("keydown", event => {
   if (event.key === "Escape") {

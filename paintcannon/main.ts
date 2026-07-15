@@ -80,13 +80,6 @@ export const FORM_ELEMENT_EVENT_TYPES = ["submit"] as const;
 export const CHANGE_ELEMENT_EVENT_TYPES = ["change"] as const;
 export const TRANSITION_ELEMENT_EVENT_TYPES = ["transitionstart", "transitionend"] as const;
 const TRANSITION_ELEMENT_EVENT_TYPE_SET = new Set<string>(TRANSITION_ELEMENT_EVENT_TYPES);
-const TRANSITIONABLE_STYLE_PROPERTIES = new Set([
-  "color",
-  "background",
-  "background-color",
-  "border-color",
-  "opacity",
-]);
 export const ELEMENT_EVENT_TYPES = [
   ...KEYBOARD_EVENT_TYPES,
   ...CLIPBOARD_EVENT_TYPES,
@@ -444,15 +437,12 @@ export class PaintCannon {
   private stopped = false;
   private nextAnimationFrameId = 1;
   private animationFrameTimer: NodeJS.Timeout | undefined;
-  private transitionAnimationActive = false;
-  private transitionCheckDeferred = false;
   private keyboardEventTimer: NodeJS.Timeout | undefined;
   private suspendedByPaintCannon = false;
   private transactionDepth = 0;
   private nextTemporaryId = -1;
   private batchCommands: NativeBatchCommand[] = [];
   private batchNodes = new Map<number, PaintNodeBase>();
-  private renderDeferred = false;
   private readonly captureCtrlZ: boolean;
   private readonly captureMouse: boolean;
   private readonly animationFrameCallbacks = new Map<number, AnimationFrameCallback>();
@@ -503,20 +493,21 @@ export class PaintCannon {
     this.suspendedByPaintCannon = false;
     this.binding.captureTerminal();
     this.binding.invalidateFrame();
-    this.binding.render();
     this.scheduleKeyboardEventPump();
   };
 
   constructor(options: PaintCannonOptions = {}) {
     const binding = paintCannonDeps.loadNativeBinding();
     const alternateScreen = options.alternateScreen ?? false;
+    const fps = options.fps ?? 60;
+    this.frameIntervalMs = fpsToInterval(fps);
     this.binding = new binding.PaintCannon(
       options.forceCompatMode ?? false,
       alternateScreen,
       options.captureMouse ?? false,
       options.captureCtrlC ?? false,
+      fps,
     );
-    this.frameIntervalMs = fpsToInterval(options.fps ?? 60);
     this.captureCtrlZ = options.captureCtrlZ ?? false;
     this.captureMouse = options.captureMouse ?? false;
     if (alternateScreen) {
@@ -693,6 +684,7 @@ export class PaintCannon {
 
   setFrameRate(fps: number): void {
     this.frameIntervalMs = fpsToInterval(fps);
+    this.binding.setFrameRate(fps);
 
     if (this.animationFrameTimer !== undefined) {
       clearTimeout(this.animationFrameTimer);
@@ -890,17 +882,14 @@ export class PaintCannon {
     }
   }
 
-  render(): void {
+  renderSync(): void {
     if (this.stopped) {
-      return;
+      throw new Error("paintcannon renderer has been stopped");
     }
-
     if (this.isTransactionActive()) {
-      this.renderDeferred = true;
-      return;
+      throw new Error("cannot render synchronously during a transaction");
     }
-
-    this.binding.render();
+    this.binding.renderSync();
   }
 
   stop(): void {
@@ -909,7 +898,6 @@ export class PaintCannon {
     }
 
     this.stopped = true;
-    this.transitionAnimationActive = false;
     if (this.animationFrameTimer !== undefined) {
       clearTimeout(this.animationFrameTimer);
       this.animationFrameTimer = undefined;
@@ -944,7 +932,6 @@ export class PaintCannon {
     }
 
     this.stopped = true;
-    this.transitionAnimationActive = false;
     if (this.animationFrameTimer !== undefined) {
       clearTimeout(this.animationFrameTimer);
       this.animationFrameTimer = undefined;
@@ -977,9 +964,7 @@ export class PaintCannon {
   }
 
   setScrollLeft(element: PaintElementBase, value: number): void {
-    if (this.setScrollOffset(element, value, this.getScrollTop(element)) !== null) {
-      this.render();
-    }
+    this.setScrollOffset(element, value, this.getScrollTop(element));
   }
 
   getScrollTop(element: PaintElementBase): number {
@@ -987,9 +972,7 @@ export class PaintCannon {
   }
 
   setScrollTop(element: PaintElementBase, value: number): void {
-    if (this.setScrollOffset(element, this.getScrollLeft(element), value) !== null) {
-      this.render();
-    }
+    this.setScrollOffset(element, this.getScrollLeft(element), value);
   }
 
   getScrollWidth(element: PaintElementBase): number {
@@ -1293,19 +1276,12 @@ export class PaintCannon {
   }
 
   private setNativeStyleProperty(id: number, property: string, value: string): void {
-    const mayStartTransition =
-      TRANSITIONABLE_STYLE_PROPERTIES.has(property) &&
-      this.elements.get(id)?.style.transition.trim() !== "";
     if (this.isTransactionActive()) {
       this.batchCommands.push({ type: "setStyleProperty", id, property, value });
-      this.transitionCheckDeferred ||= mayStartTransition;
       return;
     }
 
     this.binding.setStyleProperty(id, property, value);
-    if (mayStartTransition) {
-      this.refreshTransitionAnimation();
-    }
   }
 
   private isTransactionActive(): boolean {
@@ -1326,11 +1302,7 @@ export class PaintCannon {
 
   private flushTransaction(): void {
     const commands = this.batchCommands;
-    const renderDeferred = this.renderDeferred;
-    const transitionCheckDeferred = this.transitionCheckDeferred;
     this.batchCommands = [];
-    this.renderDeferred = false;
-    this.transitionCheckDeferred = false;
 
     try {
       if (commands.length > 0) {
@@ -1340,20 +1312,11 @@ export class PaintCannon {
     } finally {
       this.batchNodes.clear();
     }
-
-    if (renderDeferred && !this.stopped) {
-      this.binding.render();
-    }
-    if (transitionCheckDeferred && !this.stopped) {
-      this.refreshTransitionAnimation();
-    }
   }
 
   private rollbackTransaction(): void {
     this.batchCommands = [];
     this.batchNodes.clear();
-    this.renderDeferred = false;
-    this.transitionCheckDeferred = false;
   }
 
   private applyBatchIdMappings(mappings: NativeBatchIdMapping[]): void {
@@ -1442,10 +1405,7 @@ export class PaintCannon {
   }
 
   private scheduleAnimationFrameTick(): void {
-    if (
-      this.animationFrameTimer !== undefined ||
-      (this.animationFrameCallbacks.size === 0 && !this.transitionAnimationActive)
-    ) {
+    if (this.animationFrameTimer !== undefined || this.animationFrameCallbacks.size === 0) {
       return;
     }
 
@@ -1477,28 +1437,7 @@ export class PaintCannon {
     }
 
     if (!this.stopped) {
-      try {
-        this.render();
-      } catch (error) {
-        if (this.stopAfterCtrlCRendererError(error)) {
-          return;
-        }
-        throw error;
-      }
-      if (this.transitionAnimationActive) {
-        this.transitionAnimationActive = this.binding.hasActiveTransitions();
-      }
       this.scheduleAnimationFrameTick();
-    }
-  }
-
-  private refreshTransitionAnimation(): void {
-    this.transitionAnimationActive = this.binding.hasActiveTransitions();
-    if (this.transitionAnimationActive) {
-      this.scheduleAnimationFrameTick();
-    } else if (this.animationFrameCallbacks.size === 0 && this.animationFrameTimer !== undefined) {
-      clearTimeout(this.animationFrameTimer);
-      this.animationFrameTimer = undefined;
     }
   }
 
@@ -1532,7 +1471,6 @@ export class PaintCannon {
     }
 
     const inputEvents: NativeTerminalInputEvent[] = this.binding.drainInputEvents();
-    let handledAnyEvent = false;
     for (const nativeInput of inputEvents) {
       if (nativeInput.keyboard !== undefined && nativeInput.paste === undefined) {
         const event = new PaintKeyboardEvent(nativeInput.keyboard, this.keyboardEventTarget());
@@ -1548,15 +1486,12 @@ export class PaintCannon {
       } else {
         throw new Error("native input event must contain exactly one input variant");
       }
-
-      handledAnyEvent = true;
     }
 
     const resizeEvents = this.binding.drainResizeEvents();
     if (resizeEvents.length > 0) {
       const latestResize = resizeEvents[resizeEvents.length - 1];
       this.dispatchResizeEvent(latestResize);
-      handledAnyEvent = true;
     }
 
     const focusEvents = this.binding.drainFocusEvents();
@@ -1566,27 +1501,18 @@ export class PaintCannon {
       for (const listener of listeners) {
         listener(event);
       }
-      handledAnyEvent = true;
     }
 
     const transitionEvents = this.binding.drainTransitionEvents();
     for (const event of transitionEvents) {
-      if (this.dispatchTransitionEvent(event)) {
-        handledAnyEvent = true;
-      }
+      this.dispatchTransitionEvent(event);
     }
 
     if (this.captureMouse) {
       const mouseEvents = this.binding.drainMouseEvents();
       for (const event of mouseEvents) {
-        if (this.handleTerminalMouseEvent(event)) {
-          handledAnyEvent = true;
-        }
+        this.handleTerminalMouseEvent(event);
       }
-    }
-
-    if (handledAnyEvent) {
-      this.render();
     }
 
     this.scheduleKeyboardEventPump();
@@ -1804,7 +1730,6 @@ export class PaintCannon {
     this.focusedTextControl = element;
     element.setFocused(true);
     this.dispatchFocusEvent("focus", element);
-    this.render();
   }
 
   blurInput(element: TextControlElement): void {
@@ -1814,7 +1739,6 @@ export class PaintCannon {
 
     this.blurFocusedInput(element, true);
     this.focusedTextControl = undefined;
-    this.render();
   }
 
   private blurFocusedInput(element: TextControlElement, syncNative: boolean): void {

@@ -561,7 +561,7 @@ describe("core node lifecycle", () => {
 });
 
 describe("core resize events", () => {
-  it("dispatches the latest resize and uses the normal render path", () => {
+  it("dispatches the latest resize without synchronous rendering in the input pump", () => {
     const paintCannon = new PaintCannon({ fps: 120 });
     const mockNative = currentMockNative();
     const sizes: Array<[number, number]> = [];
@@ -574,35 +574,37 @@ describe("core resize events", () => {
     paintCannon.stop();
 
     expect(sizes).toEqual([[100, 40]]);
-    expect(mockNative.renderCalls).toBe(1);
     expect(mockNative.renderSyncCalls).toBe(0);
   });
 });
 
 describe("core animation lifecycle", () => {
-  it("renders frames until a laid-out opacity transition completes", () => {
+  it("updates the native render loop frame rate", () => {
+    const paintCannon = new PaintCannon({ fps: 30 });
+    const mockNative = currentMockNative();
+
+    expect(mockNative.fps).toBe(30);
+    paintCannon.setFrameRate(90);
+    expect(mockNative.fps).toBe(90);
+
+    paintCannon.stop();
+  });
+
+  it("runs only requested animation frame callbacks", () => {
     vi.useFakeTimers();
     const paintCannon = new PaintCannon({ fps: 60 });
-    const mockNative = currentMockNative();
-    const overlay = paintCannon.createElement("div");
+    let callbackCalls = 0;
 
     try {
-      overlay.style.opacity = 0;
-      overlay.style.transition = "opacity 200ms";
-      paintCannon.render();
-
-      mockNative.activeTransitions = true;
-      overlay.style.opacity = 0.2;
+      paintCannon.requestAnimationFrame(() => {
+        callbackCalls += 1;
+      });
 
       vi.advanceTimersByTime(17);
-      expect(mockNative.renderCalls).toBe(2);
-
-      mockNative.activeTransitions = false;
-      vi.advanceTimersByTime(17);
-      expect(mockNative.renderCalls).toBe(3);
+      expect(callbackCalls).toBe(1);
 
       vi.advanceTimersByTime(100);
-      expect(mockNative.renderCalls).toBe(3);
+      expect(callbackCalls).toBe(1);
     } finally {
       paintCannon.stop();
       vi.useRealTimers();
@@ -714,7 +716,6 @@ describe("core app focus events", () => {
     paintCannon.stop();
 
     expect(events).toEqual(["blur:false"]);
-    expect(mockNative.renderCalls).toBe(1);
   });
 
   it("dispatches terminal focus reports as PaintCannon focus and blur events", () => {
@@ -740,7 +741,6 @@ describe("core app focus events", () => {
 
     expect(events).toEqual(["blur:false:true", "focus:true:true"]);
     expect(paintCannon.hasFocus).toBe(true);
-    expect(mockNative.renderCalls).toBe(2);
   });
 });
 

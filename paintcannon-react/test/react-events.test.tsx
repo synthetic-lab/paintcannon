@@ -257,7 +257,7 @@ describe("controlled text controls", () => {
 });
 
 describe("resize events", () => {
-  it("uses the normal render path instead of sync rendering inside the input pump", () => {
+  it("does not synchronously render inside the input pump", () => {
     const sizes: Array<[number, number]> = [];
     const paintCannon = new PaintCannon({ fps: 120 });
     const mockNative = mockNativeInstances[0];
@@ -273,13 +273,12 @@ describe("resize events", () => {
     paintCannon.stop();
 
     expect(sizes).toEqual([[100, 40]]);
-    expect(mockNative.renderCalls).toBe(1);
     expect(mockNative.renderSyncCalls).toBe(0);
   });
 });
 
 describe("app exit", () => {
-  it("does not render the empty unmount over the final frame", async () => {
+  it("flushes the final frame before unmounting", async () => {
     const root = render(<Div>persistent output</Div>, { fps: 120 });
     const mockNative = mockNativeInstances[0];
     if (mockNative === undefined) {
@@ -287,12 +286,10 @@ describe("app exit", () => {
     }
 
     await commit();
-    const rendersBeforeExit = mockNative.renderCalls;
-
     root.exit();
     await root.waitUntilExit();
 
-    expect(mockNative.renderCalls).toBe(rendersBeforeExit);
+    expect(mockNative.renderSyncCalls).toBe(1);
     expect(mockNative.stopCalls).toBe(1);
   });
 });

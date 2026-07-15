@@ -42,5 +42,3 @@ pc.addEventListener("keydown", (event: KeyboardEvent) => {
     process.exit(0);
   }
 });
-
-pc.render();

@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 use std::sync::{mpsc::Sender as StdSender, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use taffy::{AvailableSpace, NodeId, Size};
-use termprofile::{DetectorSettings, TermProfile};
+use termprofile::TermProfile;
 
 use crate::frame::Frame;
 use crate::image::load_png_image;
@@ -72,6 +72,44 @@ pub(crate) struct ScrollbarHit {
     pub(crate) max_scroll: u32,
     pub(crate) client_length: u32,
     pub(crate) scroll_length: u32,
+}
+
+pub(crate) struct EngineLoopOptions {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) fps: f64,
+    pub(crate) color_profile: TermProfile,
+    pub(crate) synchronized: bool,
+    pub(crate) terminal_foreground: Background,
+    pub(crate) terminal_background: Background,
+}
+
+struct EngineLoopState {
+    width: usize,
+    height: usize,
+    frame_interval: Duration,
+    next_frame: Instant,
+    color_profile: TermProfile,
+    synchronized: bool,
+}
+
+impl EngineLoopState {
+    fn new(options: &EngineLoopOptions) -> Self {
+        let frame_interval = frame_interval(options.fps);
+        Self {
+            width: options.width,
+            height: options.height,
+            frame_interval,
+            next_frame: Instant::now() + frame_interval,
+            color_profile: options.color_profile,
+            synchronized: options.synchronized,
+        }
+    }
+
+    fn set_frame_rate(&mut self, fps: f64) {
+        self.frame_interval = frame_interval(fps);
+        self.next_frame = Instant::now() + self.frame_interval;
+    }
 }
 
 pub(crate) enum StyleMutation {
@@ -353,43 +391,31 @@ pub(crate) enum EngineCommand {
     MoveTextAreaCursorVertically {
         node: DomId,
         direction: i32,
-        width: usize,
-        height: usize,
         response: Sender<Option<u32>>,
     },
     GetTextAreaCursorVisualPosition {
         node: DomId,
-        width: usize,
-        height: usize,
         response: Sender<Option<(u32, u32)>>,
     },
     GetTextAreaVisualLineRange {
         node: DomId,
         row: u32,
-        width: usize,
-        height: usize,
         response: Sender<Option<(u32, u32)>>,
     },
     SetTextControlCursorAtPoint {
         node: DomId,
         x: u32,
         y: u32,
-        width: usize,
-        height: usize,
         response: Sender<Option<u32>>,
     },
     SetScrollOffset {
         node: DomId,
         scroll_left: u32,
         scroll_top: u32,
-        width: usize,
-        height: usize,
         response: Sender<Option<ArenaScrollMetrics>>,
     },
     GetScrollMetrics {
         node: DomId,
-        width: usize,
-        height: usize,
         response: Sender<Option<ArenaScrollMetrics>>,
     },
     HitTestPoint {
@@ -420,31 +446,18 @@ pub(crate) enum EngineCommand {
         height: usize,
         response: Sender<Option<Frame>>,
     },
-    RenderAsync {
-        width: usize,
-        height: usize,
-        color_profile: TermProfile,
-        synchronized: bool,
-    },
     RenderStdout {
-        width: usize,
-        height: usize,
-        color_profile: TermProfile,
-        synchronized: bool,
         response: StdSender<io::Result<()>>,
     },
     DrainTransitionEvents {
         response: Sender<Vec<EngineTransitionEvent>>,
     },
-    HasActiveTransitions {
-        response: Sender<bool>,
+    SetRenderSize {
+        width: usize,
+        height: usize,
     },
-    SetTruecolorEnabled {
-        enabled: bool,
-    },
-    SetTerminalColors {
-        foreground: Background,
-        background: Background,
+    SetFrameRate {
+        fps: f64,
     },
     SetTerminalFocused {
         focused: bool,
@@ -465,6 +478,7 @@ pub(crate) struct PaintEngine {
     parents: HashMap<DomId, DomId>,
     children: HashMap<DomId, Vec<DomId>>,
     layout_dirty: bool,
+    paint_dirty: bool,
     last_layout_size: Option<(usize, usize)>,
     previous_frame: Option<Frame>,
     current_frame: Option<Frame>,
@@ -493,6 +507,7 @@ impl PaintEngine {
             parents: HashMap::new(),
             children: HashMap::new(),
             layout_dirty: false,
+            paint_dirty: false,
             last_layout_size: None,
             previous_frame: None,
             current_frame: None,
@@ -510,9 +525,18 @@ impl PaintEngine {
         }
     }
 
+    fn mark_layout_dirty(&mut self) {
+        self.layout_dirty = true;
+        self.paint_dirty = true;
+    }
+
+    fn mark_paint_dirty(&mut self) {
+        self.paint_dirty = true;
+    }
+
     #[cfg(test)]
     pub(crate) fn create_element(&mut self, style: DivStyle) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_element(style);
         self.register_node(node)
     }
@@ -560,20 +584,20 @@ impl PaintEngine {
     }
 
     pub(crate) fn create_element_with_id(&mut self, id: DomId, style: DivStyle) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_element(style);
         self.register_node_with_id(id, node)
     }
 
     #[cfg(test)]
     pub(crate) fn create_text(&mut self, text: impl Into<String>) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_text(text);
         self.register_node(node)
     }
 
     pub(crate) fn create_text_with_id(&mut self, id: DomId, text: impl Into<String>) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_text(text);
         self.register_node_with_id(id, node)
     }
@@ -587,7 +611,7 @@ impl PaintEngine {
         cell_width_px: u32,
         cell_height_px: u32,
     ) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node =
             self.arena
                 .create_image(style, width_px, height_px, cell_width_px, cell_height_px);
@@ -600,14 +624,14 @@ impl PaintEngine {
         style: DivStyle,
         value: impl Into<String>,
     ) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_input(style, value);
         self.register_node_with_id(id, node)
     }
 
     #[cfg(test)]
     pub(crate) fn create_textarea(&mut self, style: DivStyle, value: impl Into<String>) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_textarea(style, value);
         self.register_node(node)
     }
@@ -618,7 +642,7 @@ impl PaintEngine {
         style: DivStyle,
         value: impl Into<String>,
     ) -> DomId {
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         let node = self.arena.create_textarea(style, value);
         self.register_node_with_id(id, node)
     }
@@ -641,7 +665,7 @@ impl PaintEngine {
         }
 
         self.children.entry(parent).or_default().push(child);
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena.append_child(parent_node, child_node);
         true
     }
@@ -678,7 +702,7 @@ impl PaintEngine {
             .position(|id| *id == before)
             .unwrap_or(siblings.len());
         siblings.insert(index, child);
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena
             .insert_child_before(parent_node, child_node, before_node);
         true
@@ -689,7 +713,7 @@ impl PaintEngine {
             return false;
         }
         self.root = Some(root);
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         true
     }
 
@@ -702,7 +726,7 @@ impl PaintEngine {
         style.overflow_y = LayoutOverflow::Hidden;
         self.arena.set_style(node, style);
         self.viewport = Some(viewport);
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         true
     }
 
@@ -783,7 +807,7 @@ impl PaintEngine {
             }
         }
 
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         removed.len()
     }
 
@@ -794,7 +818,7 @@ impl PaintEngine {
 
         if self.root == Some(node) {
             self.root = None;
-            self.layout_dirty = true;
+            self.mark_layout_dirty();
             return true;
         }
 
@@ -808,7 +832,7 @@ impl PaintEngine {
         if let Some(siblings) = self.children.get_mut(&parent) {
             siblings.retain(|id| *id != node);
         }
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         true
     }
 
@@ -875,10 +899,14 @@ impl PaintEngine {
             now,
             transitions_enabled,
         );
-        self.layout_dirty = self.layout_dirty
-            || previous.to_taffy() != style.to_taffy()
+        if previous.to_taffy() != style.to_taffy()
             || previous.white_space != style.white_space
-            || previous.position != style.position;
+            || previous.position != style.position
+        {
+            self.mark_layout_dirty();
+        } else {
+            self.mark_paint_dirty();
+        }
         self.arena.set_style(node, style);
         self.arena
             .set_opacity_transition_active(node, self.transitions.has_active_opacity(node));
@@ -892,24 +920,28 @@ impl PaintEngine {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn set_truecolor_enabled(&mut self, enabled: bool) {
+        if self.truecolor_enabled == enabled {
+            return;
+        }
         self.truecolor_enabled = enabled;
-    }
-
-    pub(crate) fn set_terminal_colors(&mut self, foreground: Background, background: Background) {
-        self.terminal_foreground = foreground;
-        self.terminal_background = background;
+        self.mark_paint_dirty();
     }
 
     pub(crate) fn set_terminal_focused(&mut self, focused: bool) {
+        if self.terminal_focused == focused {
+            return;
+        }
         self.terminal_focused = focused;
+        self.mark_paint_dirty();
     }
 
     pub(crate) fn set_text(&mut self, node: DomId, text: impl Into<String>) -> bool {
         let Some(node) = self.node_for(node) else {
             return false;
         };
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena.set_text(node, text);
         true
     }
@@ -955,7 +987,7 @@ impl PaintEngine {
         let Some(node) = self.node_for(node) else {
             return false;
         };
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena.set_image_pixels_and_cell_size(
             node,
             width_px,
@@ -977,7 +1009,7 @@ impl PaintEngine {
             return false;
         };
         let value = value.into();
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena.set_input_value(node, value.clone(), cursor);
         self.arena.set_textarea_value(node, value, cursor);
         true
@@ -989,6 +1021,7 @@ impl PaintEngine {
         };
         self.arena.set_input_focused(node, focused);
         self.arena.set_textarea_focused(node, focused);
+        self.mark_paint_dirty();
         true
     }
 
@@ -1003,6 +1036,7 @@ impl PaintEngine {
         let placeholder = placeholder.into();
         self.arena.set_input_placeholder(node, placeholder.clone());
         self.arena.set_textarea_placeholder(node, placeholder);
+        self.mark_paint_dirty();
         true
     }
 
@@ -1015,7 +1049,7 @@ impl PaintEngine {
         let Some(node) = self.node_for(node) else {
             return false;
         };
-        self.layout_dirty = true;
+        self.mark_layout_dirty();
         self.arena.set_textarea_value(node, value, cursor);
         true
     }
@@ -1025,6 +1059,7 @@ impl PaintEngine {
             return false;
         };
         self.arena.set_textarea_focused(node, focused);
+        self.mark_paint_dirty();
         true
     }
 
@@ -1037,6 +1072,7 @@ impl PaintEngine {
             return false;
         };
         self.arena.set_textarea_placeholder(node, placeholder);
+        self.mark_paint_dirty();
         true
     }
 
@@ -1049,7 +1085,11 @@ impl PaintEngine {
     ) -> Option<u32> {
         let node = self.node_for(node)?;
         self.ensure_layout_for_size(width, height);
-        self.arena.move_textarea_cursor_vertically(node, direction)
+        let cursor = self.arena.move_textarea_cursor_vertically(node, direction);
+        if cursor.is_some() {
+            self.mark_paint_dirty();
+        }
+        cursor
     }
 
     pub(crate) fn textarea_cursor_visual_position_for_size(
@@ -1085,7 +1125,11 @@ impl PaintEngine {
     ) -> Option<u32> {
         let node = self.node_for(node)?;
         self.ensure_layout_for_size(width, height);
-        self.arena.set_text_control_cursor_at_point(node, x, y)
+        let cursor = self.arena.set_text_control_cursor_at_point(node, x, y);
+        if cursor.is_some() {
+            self.mark_paint_dirty();
+        }
+        cursor
     }
 
     pub(crate) fn scroll_metrics(&mut self, node: DomId) -> Option<ArenaScrollMetrics> {
@@ -1109,8 +1153,13 @@ impl PaintEngine {
         scroll_left: u32,
         scroll_top: u32,
     ) -> Option<ArenaScrollMetrics> {
-        self.node_for(node)
-            .and_then(|node| self.arena.set_scroll_offset(node, scroll_left, scroll_top))
+        let metrics = self
+            .node_for(node)
+            .and_then(|node| self.arena.set_scroll_offset(node, scroll_left, scroll_top));
+        if metrics.is_some() {
+            self.mark_paint_dirty();
+        }
+        metrics
     }
 
     pub(crate) fn set_scroll_offset_for_size(
@@ -1133,8 +1182,27 @@ impl PaintEngine {
         color_profile: TermProfile,
         synchronized: bool,
     ) -> io::Result<()> {
+        self.render_to_at(
+            width,
+            height,
+            out,
+            color_profile,
+            synchronized,
+            Instant::now(),
+        )
+    }
+
+    fn render_to_at(
+        &mut self,
+        width: usize,
+        height: usize,
+        out: &mut impl Write,
+        color_profile: TermProfile,
+        synchronized: bool,
+        now: Instant,
+    ) -> io::Result<()> {
         let total_start = Instant::now();
-        let Some(frame) = self.render_frame(width, height) else {
+        let Some(frame) = self.render_frame_at(width, height, now) else {
             return Ok(());
         };
         let diff_start = Instant::now();
@@ -1161,6 +1229,44 @@ impl PaintEngine {
         Ok(())
     }
 
+    #[cfg(test)]
+    fn render_if_dirty_to(
+        &mut self,
+        width: usize,
+        height: usize,
+        out: &mut impl Write,
+        color_profile: TermProfile,
+        synchronized: bool,
+        now: Instant,
+    ) -> io::Result<bool> {
+        if !self.prepare_frame_tick() {
+            return Ok(false);
+        }
+        self.render_dirty_to(width, height, out, color_profile, synchronized, now)
+    }
+
+    fn prepare_frame_tick(&mut self) -> bool {
+        if self.transitions.has_active() {
+            self.mark_paint_dirty();
+        }
+        self.paint_dirty
+    }
+
+    fn render_dirty_to(
+        &mut self,
+        width: usize,
+        height: usize,
+        out: &mut impl Write,
+        color_profile: TermProfile,
+        synchronized: bool,
+        now: Instant,
+    ) -> io::Result<bool> {
+        self.render_to_at(width, height, out, color_profile, synchronized, now)?;
+        self.paint_dirty = false;
+        Ok(true)
+    }
+
+    #[cfg(test)]
     pub(crate) fn render_frame(&mut self, width: usize, height: usize) -> Option<Frame> {
         self.render_frame_at(width, height, Instant::now())
     }
@@ -1521,6 +1627,7 @@ impl PaintEngine {
 
     pub(crate) fn invalidate_frame(&mut self) {
         self.previous_frame = None;
+        self.mark_paint_dirty();
     }
 
     pub(crate) fn drain_transition_events(&mut self) -> Vec<EngineTransitionEvent> {
@@ -1531,6 +1638,7 @@ impl PaintEngine {
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn has_active_transitions(&self) -> bool {
         self.transitions.has_active()
     }
@@ -1940,17 +2048,55 @@ fn reset_style_property(style: &mut DivStyle, reset: StyleReset) {
     }
 }
 
-pub(crate) fn engine_loop(rx: Receiver<EngineCommand>) {
+pub(crate) fn engine_loop(rx: Receiver<EngineCommand>, options: EngineLoopOptions) {
     let mut engine = PaintEngine::new();
+    engine.truecolor_enabled = options.color_profile == TermProfile::TrueColor;
+    engine.terminal_foreground = options.terminal_foreground;
+    engine.terminal_background = options.terminal_background;
+    let mut state = EngineLoopState::new(&options);
 
-    while let Ok(command) = rx.recv() {
-        if !apply_command(&mut engine, command) {
-            break;
+    loop {
+        let now = Instant::now();
+        if now < state.next_frame {
+            match rx.recv_timeout(state.next_frame - now) {
+                Ok(command) => {
+                    if !apply_command(&mut engine, &mut state, command) {
+                        break;
+                    }
+                    continue;
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
         }
+
+        let render_result = if engine.prepare_frame_tick() {
+            let frame_time = Instant::now();
+            let mut out = io::stdout().lock();
+            engine.render_dirty_to(
+                state.width,
+                state.height,
+                &mut out,
+                state.color_profile,
+                state.synchronized,
+                frame_time,
+            )
+        } else {
+            Ok(false)
+        };
+        if render_result.is_err() {
+            engine.mark_paint_dirty();
+        }
+        state.next_frame =
+            next_frame_deadline(state.next_frame, state.frame_interval, Instant::now());
     }
 }
 
-fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
+fn apply_command(
+    engine: &mut PaintEngine,
+    state: &mut EngineLoopState,
+    command: EngineCommand,
+) -> bool {
     match command {
         EngineCommand::Batch { commands } => {
             let start = Instant::now();
@@ -1965,7 +2111,7 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
                 if !pending_destroys.is_empty() {
                     engine.destroy_nodes(pending_destroys.drain(..));
                 }
-                if !apply_command(engine, command) {
+                if !apply_command(engine, state, command) {
                     profile_log(
                         "batch_apply",
                         start.elapsed(),
@@ -2089,67 +2235,64 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         EngineCommand::MoveTextAreaCursorVertically {
             node,
             direction,
-            width,
-            height,
             response,
         } => {
-            let _ = response.send(
-                engine.move_textarea_cursor_vertically_for_size(node, direction, width, height),
-            );
+            let _ = response.send(engine.move_textarea_cursor_vertically_for_size(
+                node,
+                direction,
+                state.width,
+                state.height,
+            ));
         }
-        EngineCommand::GetTextAreaCursorVisualPosition {
-            node,
-            width,
-            height,
-            response,
-        } => {
-            let _ =
-                response.send(engine.textarea_cursor_visual_position_for_size(node, width, height));
+        EngineCommand::GetTextAreaCursorVisualPosition { node, response } => {
+            let _ = response.send(engine.textarea_cursor_visual_position_for_size(
+                node,
+                state.width,
+                state.height,
+            ));
         }
         EngineCommand::GetTextAreaVisualLineRange {
             node,
             row,
-            width,
-            height,
             response,
         } => {
-            let _ =
-                response.send(engine.textarea_visual_line_range_for_size(node, row, width, height));
+            let _ = response.send(engine.textarea_visual_line_range_for_size(
+                node,
+                row,
+                state.width,
+                state.height,
+            ));
         }
         EngineCommand::SetTextControlCursorAtPoint {
             node,
             x,
             y,
-            width,
-            height,
             response,
         } => {
-            let _ = response
-                .send(engine.set_text_control_cursor_at_point_for_size(node, x, y, width, height));
+            let _ = response.send(engine.set_text_control_cursor_at_point_for_size(
+                node,
+                x,
+                y,
+                state.width,
+                state.height,
+            ));
         }
         EngineCommand::SetScrollOffset {
             node,
             scroll_left,
             scroll_top,
-            width,
-            height,
             response,
         } => {
             let _ = response.send(engine.set_scroll_offset_for_size(
                 node,
                 scroll_left,
                 scroll_top,
-                width,
-                height,
+                state.width,
+                state.height,
             ));
         }
-        EngineCommand::GetScrollMetrics {
-            node,
-            width,
-            height,
-            response,
-        } => {
-            let _ = response.send(engine.scroll_metrics_for_size(node, width, height));
+        EngineCommand::GetScrollMetrics { node, response } => {
+            let _ = response.send(engine.scroll_metrics_for_size(node, state.width, state.height));
         }
         EngineCommand::HitTestPoint { x, y, response } => {
             let _ = response.send(engine.target_at(x, y));
@@ -2173,16 +2316,7 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
                 &action,
                 SelectionAction::Redraw | SelectionAction::CopyToClipboard(_)
             ) {
-                let size = query_terminal_size();
-                let color_profile = TermProfile::detect(&io::stdout(), DetectorSettings::default());
-                let mut out = io::stdout().lock();
-                let _ = engine.render_to(
-                    size.cols as usize,
-                    size.rows as usize,
-                    &mut out,
-                    color_profile,
-                    io::stdout().is_terminal(),
-                );
+                engine.mark_paint_dirty();
             }
             let _ = response.send(action);
         }
@@ -2197,42 +2331,34 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
         } => {
             let _ = response.send(engine.render_frame(width, height));
         }
-        EngineCommand::RenderAsync {
-            width,
-            height,
-            color_profile,
-            synchronized,
-        } => {
-            let mut out = io::stdout().lock();
-            let _ = engine.render_to(width, height, &mut out, color_profile, synchronized);
-        }
-        EngineCommand::RenderStdout {
-            width,
-            height,
-            color_profile,
-            synchronized,
-            response,
-        } => {
+        EngineCommand::RenderStdout { response } => {
             let result = {
                 let mut out = io::stdout().lock();
-                engine.render_to(width, height, &mut out, color_profile, synchronized)
+                engine.render_to(
+                    state.width,
+                    state.height,
+                    &mut out,
+                    state.color_profile,
+                    state.synchronized,
+                )
             };
+            if result.is_ok() {
+                engine.paint_dirty = false;
+            }
             let _ = response.send(result);
         }
         EngineCommand::DrainTransitionEvents { response } => {
             let _ = response.send(engine.drain_transition_events());
         }
-        EngineCommand::HasActiveTransitions { response } => {
-            let _ = response.send(engine.has_active_transitions());
+        EngineCommand::SetRenderSize { width, height } => {
+            if state.width != width || state.height != height {
+                state.width = width;
+                state.height = height;
+                engine.mark_layout_dirty();
+            }
         }
-        EngineCommand::SetTruecolorEnabled { enabled } => {
-            engine.set_truecolor_enabled(enabled);
-        }
-        EngineCommand::SetTerminalColors {
-            foreground,
-            background,
-        } => {
-            engine.set_terminal_colors(foreground, background);
+        EngineCommand::SetFrameRate { fps } => {
+            state.set_frame_rate(fps);
         }
         EngineCommand::SetTerminalFocused { focused } => {
             engine.set_terminal_focused(focused);
@@ -2247,6 +2373,24 @@ fn apply_command(engine: &mut PaintEngine, command: EngineCommand) -> bool {
     }
 
     true
+}
+
+fn frame_interval(fps: f64) -> Duration {
+    Duration::from_secs_f64(1.0 / fps).max(Duration::from_nanos(1))
+}
+
+fn next_frame_deadline(previous: Instant, interval: Duration, now: Instant) -> Instant {
+    if previous > now {
+        return previous;
+    }
+
+    let interval_nanos = interval.as_nanos();
+    let elapsed_nanos = now.duration_since(previous).as_nanos();
+    let steps = elapsed_nanos / interval_nanos + 1;
+    let advance_nanos = interval_nanos.saturating_mul(steps).min(u64::MAX as u128) as u64;
+    previous
+        .checked_add(Duration::from_nanos(advance_nanos))
+        .unwrap_or(now + interval)
 }
 
 fn scrollbar_suppresses_selection(engine: &mut PaintEngine, event: SelectionMouseEvent) -> bool {
@@ -2317,6 +2461,116 @@ mod tests {
         style.width = width;
         style.height = height;
         style
+    }
+
+    fn test_loop_options() -> EngineLoopOptions {
+        EngineLoopOptions {
+            width: 80,
+            height: 24,
+            fps: 0.001,
+            color_profile: TermProfile::TrueColor,
+            synchronized: false,
+            terminal_foreground: Background::White,
+            terminal_background: Background::Black,
+        }
+    }
+
+    #[test]
+    fn clean_ticks_skip_paint_and_paint_only_changes_skip_layout() {
+        let mut engine = PaintEngine::new();
+        let input = engine.create_input_with_id(
+            DomId(1),
+            block_style(CssDimension::Length(6.0), CssDimension::Length(1.0)),
+            "value",
+        );
+        engine.set_root(input);
+        engine.set_input_focused(input, true);
+
+        let mut output = Vec::new();
+        assert!(engine
+            .render_if_dirty_to(
+                6,
+                1,
+                &mut output,
+                TermProfile::TrueColor,
+                false,
+                Instant::now()
+            )
+            .unwrap());
+        let layout_passes = engine.layout_passes();
+        output.clear();
+
+        assert!(!engine
+            .render_if_dirty_to(
+                6,
+                1,
+                &mut output,
+                TermProfile::TrueColor,
+                false,
+                Instant::now()
+            )
+            .unwrap());
+        assert!(output.is_empty());
+
+        engine.set_terminal_focused(false);
+        assert!(engine.paint_dirty);
+        assert!(!engine.layout_dirty);
+        assert!(engine
+            .render_if_dirty_to(
+                6,
+                1,
+                &mut output,
+                TermProfile::TrueColor,
+                false,
+                Instant::now()
+            )
+            .unwrap());
+        assert_eq!(engine.layout_passes(), layout_passes);
+    }
+
+    #[test]
+    fn frame_deadlines_keep_the_original_cadence_and_skip_missed_ticks() {
+        let start = Instant::now();
+        let interval = Duration::from_millis(10);
+
+        assert_eq!(
+            next_frame_deadline(
+                start + interval,
+                interval,
+                start + Duration::from_millis(12)
+            ),
+            start + Duration::from_millis(20)
+        );
+        assert_eq!(
+            next_frame_deadline(
+                start + interval,
+                interval,
+                start + Duration::from_millis(45)
+            ),
+            start + Duration::from_millis(50)
+        );
+    }
+
+    #[test]
+    fn render_size_changes_dirty_layout_without_rendering_immediately() {
+        let mut engine = PaintEngine::new();
+        let mut state = EngineLoopState::new(&test_loop_options());
+        engine.layout_dirty = false;
+        engine.paint_dirty = false;
+
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::SetRenderSize {
+                width: 100,
+                height: 40,
+            },
+        ));
+
+        assert_eq!((state.width, state.height), (100, 40));
+        assert!(engine.layout_dirty);
+        assert!(engine.paint_dirty);
+        assert!(engine.previous_frame.is_none());
     }
 
     fn scroll_engine() -> (PaintEngine, DomId) {
@@ -2981,9 +3235,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let allocated_slots = engine.arena.stats().allocated_slot_count;
+        let mut loop_state = EngineLoopState::new(&test_loop_options());
 
         assert!(apply_command(
             &mut engine,
+            &mut loop_state,
             EngineCommand::Batch {
                 commands: removed
                     .iter()
@@ -3328,9 +3584,19 @@ mod tests {
                 property: TransitionProperty::Opacity,
             }]
         );
-        let midway = engine
-            .render_frame_at(2, 1, start + std::time::Duration::from_millis(50))
-            .unwrap();
+        engine.paint_dirty = false;
+        let mut output = Vec::new();
+        assert!(engine
+            .render_if_dirty_to(
+                2,
+                1,
+                &mut output,
+                TermProfile::TrueColor,
+                false,
+                start + Duration::from_millis(50),
+            )
+            .unwrap());
+        let midway = engine.current_frame.as_ref().unwrap();
         assert_eq!(engine.layout_passes(), passes);
         assert_eq!(
             midway.cell(0, 0).unwrap().background,
@@ -3628,7 +3894,7 @@ mod tests {
     #[test]
     fn command_loop_creates_renders_and_hit_tests() {
         let (tx, rx) = bounded(32);
-        let thread = thread::spawn(move || engine_loop(rx));
+        let thread = thread::spawn(move || engine_loop(rx, test_loop_options()));
 
         let (response_tx, response_rx) = bounded(1);
         tx.send(EngineCommand::CreateElement {
@@ -3679,7 +3945,7 @@ mod tests {
     #[test]
     fn command_loop_batches_explicit_id_creates() {
         let (tx, rx) = bounded(32);
-        let thread = thread::spawn(move || engine_loop(rx));
+        let thread = thread::spawn(move || engine_loop(rx, test_loop_options()));
 
         tx.send(EngineCommand::Batch {
             commands: vec![
@@ -3719,7 +3985,7 @@ mod tests {
     #[test]
     fn command_loop_acknowledges_shutdown_after_earlier_commands() {
         let (tx, rx) = bounded(32);
-        let thread = thread::spawn(move || engine_loop(rx));
+        let thread = thread::spawn(move || engine_loop(rx, test_loop_options()));
 
         tx.send(EngineCommand::CreateTextWithId {
             id: DomId(1),
@@ -3738,9 +4004,9 @@ mod tests {
     }
 
     #[test]
-    fn command_loop_scroll_metrics_use_explicit_command_size() {
+    fn command_loop_scroll_metrics_use_current_render_size() {
         let (tx, rx) = bounded(32);
-        let thread = thread::spawn(move || engine_loop(rx));
+        let thread = thread::spawn(move || engine_loop(rx, test_loop_options()));
 
         let mut viewport_style =
             block_style(CssDimension::Percent(1.0), CssDimension::Percent(1.0));
@@ -3762,21 +4028,27 @@ mod tests {
         .unwrap();
         tx.send(EngineCommand::SetRoot { root: DomId(1) }).unwrap();
 
+        tx.send(EngineCommand::SetRenderSize {
+            width: 10,
+            height: 5,
+        })
+        .unwrap();
         let (response_tx, response_rx) = bounded(1);
         tx.send(EngineCommand::GetScrollMetrics {
             node: DomId(1),
-            width: 10,
-            height: 5,
             response: response_tx,
         })
         .unwrap();
         let small = response_rx.recv().unwrap().unwrap();
 
+        tx.send(EngineCommand::SetRenderSize {
+            width: 10,
+            height: 12,
+        })
+        .unwrap();
         let (response_tx, response_rx) = bounded(1);
         tx.send(EngineCommand::GetScrollMetrics {
             node: DomId(1),
-            width: 10,
-            height: 12,
             response: response_tx,
         })
         .unwrap();

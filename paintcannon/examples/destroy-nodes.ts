@@ -55,13 +55,10 @@ function tick() {
     status.nodeValue = `destroyed ${destroyed}/8 nodes`;
   }
 
-  pc.render();
-
   if (destroyed < 8 || frame < 110) {
     pc.requestAnimationFrame(tick);
   } else {
     status.nodeValue = "all nodes destroyed";
-    pc.render();
     setTimeout(() => pc.stop(), 500);
   }
 }
