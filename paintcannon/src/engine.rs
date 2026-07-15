@@ -3598,6 +3598,24 @@ mod tests {
     }
 
     #[test]
+    fn initially_blurred_terminal_hides_cursor_on_first_frame() {
+        let mut engine = PaintEngine::new();
+        let input = engine.create_input_with_id(
+            DomId(1),
+            block_style(CssDimension::Length(6.0), CssDimension::Length(1.0)),
+            "abcdef",
+        );
+        engine.set_root(input);
+        engine.set_input_focused(input, true);
+        engine.set_input_value(input, "abcdef", 3);
+        engine.set_terminal_focused(false);
+
+        let frame = engine.render_frame(6, 1).unwrap();
+
+        assert!(!frame.cell(3, 0).unwrap().reversed);
+    }
+
+    #[test]
     fn clicking_textarea_uses_soft_wrapped_visual_position() {
         let mut engine = PaintEngine::new();
         let textarea = engine.create_textarea(

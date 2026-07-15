@@ -262,6 +262,11 @@ export class MockNativePaintCannon implements NativePaintCannon {
     return events;
   }
 
+  queueFocusEvent(type: "focus" | "blur"): void {
+    this.focused = type === "focus";
+    this.focusEvents.push({ type });
+  }
+
   drainTransitionEvents(): NativeTransitionEvent[] {
     const events = this.transitionEvents;
     this.transitionEvents = [];

@@ -129,9 +129,6 @@ impl TerminalInput {
         }
 
         let focus_change_enabled = Arc::new(Mutex::new(false));
-        if execute!(io::stdout(), EnableFocusChange).is_ok() {
-            set_bool(&focus_change_enabled, true);
-        }
 
         let bracketed_paste_enabled = Arc::new(Mutex::new(false));
         if execute!(io::stdout(), EnableBracketedPaste).is_ok() {
@@ -183,10 +180,10 @@ impl TerminalInput {
         let thread_focus_change_enabled = Arc::clone(&focus_change_enabled);
         let thread_bracketed_paste_enabled = Arc::clone(&bracketed_paste_enabled);
         let thread_terminal_captured = Arc::clone(&terminal_captured);
-
         let thread = thread::spawn(move || {
             let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
             let mut mouse_down: Option<MouseDown> = None;
+            let mut awaiting_initial_focus_report = true;
 
             while !thread_stop.load(Ordering::Relaxed) {
                 match terminal_event::poll(Duration::from_millis(25)) {
@@ -244,19 +241,25 @@ impl TerminalInput {
                                     );
                                 }
                                 TerminalEvent::FocusGained => {
+                                    let initial_report = awaiting_initial_focus_report;
+                                    awaiting_initial_focus_report = false;
                                     handle_terminal_focus_event(
                                         true,
                                         &thread_focus_events,
                                         &thread_focused,
                                         thread_renderer_tx.as_ref(),
+                                        initial_report,
                                     );
                                 }
                                 TerminalEvent::FocusLost => {
+                                    let initial_report = awaiting_initial_focus_report;
+                                    awaiting_initial_focus_report = false;
                                     handle_terminal_focus_event(
                                         false,
                                         &thread_focus_events,
                                         &thread_focused,
                                         thread_renderer_tx.as_ref(),
+                                        initial_report,
                                     );
                                 }
                             }
@@ -276,6 +279,10 @@ impl TerminalInput {
                 );
             }
         });
+
+        if execute!(io::stdout(), EnableFocusChange).is_ok() {
+            set_bool(&focus_change_enabled, true);
+        }
 
         Some(Self {
             input_events,
@@ -799,12 +806,15 @@ fn handle_terminal_focus_event(
     events: &Arc<Mutex<VecDeque<TerminalFocusEvent>>>,
     current_focus: &Arc<AtomicBool>,
     renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
+    initial_report: bool,
 ) {
     current_focus.store(focused, Ordering::Relaxed);
     if let Some(renderer_tx) = renderer_tx {
         let _ = renderer_tx.send(EngineCommand::SetTerminalFocused { focused });
     }
-    push_focus_event(events, terminal_focus_event(focused));
+    if !initial_report || !focused {
+        push_focus_event(events, terminal_focus_event(focused));
+    }
 }
 
 fn push_focus_event(events: &Arc<Mutex<VecDeque<TerminalFocusEvent>>>, event: TerminalFocusEvent) {
@@ -1067,7 +1077,7 @@ mod tests {
         let focused = Arc::new(AtomicBool::new(true));
         let (renderer_tx, renderer_rx) = crossbeam_channel::bounded(1);
 
-        handle_terminal_focus_event(false, &events, &focused, Some(&renderer_tx));
+        handle_terminal_focus_event(false, &events, &focused, Some(&renderer_tx), true);
 
         assert!(!focused.load(Ordering::Relaxed));
         assert!(matches!(
@@ -1079,5 +1089,19 @@ mod tests {
         let mut events = events.lock().expect("focus events mutex poisoned");
         let event = events.pop_front().expect("focus event should be queued");
         assert_eq!(event.r#type, "blur");
+    }
+
+    #[test]
+    fn initial_focus_confirmation_does_not_queue_a_public_event() {
+        let events = Arc::new(Mutex::new(VecDeque::new()));
+        let focused = Arc::new(AtomicBool::new(true));
+
+        handle_terminal_focus_event(true, &events, &focused, None, true);
+
+        assert!(focused.load(Ordering::Relaxed));
+        assert!(events
+            .lock()
+            .expect("focus events mutex poisoned")
+            .is_empty());
     }
 }
