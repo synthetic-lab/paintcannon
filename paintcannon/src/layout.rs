@@ -56,6 +56,7 @@ pub(crate) struct LayoutArena {
     scroll_nodes: HashSet<NodeId>,
     absolute_nodes: HashSet<NodeId>,
     stacking_candidates: HashSet<NodeId>,
+    opacity_transition_nodes: HashSet<NodeId>,
     dirty_textareas: HashSet<NodeId>,
     layout_passes: u64,
     layout_mode_stack: Vec<RunMode>,
@@ -242,6 +243,7 @@ impl LayoutArena {
             scroll_nodes: HashSet::new(),
             absolute_nodes: HashSet::new(),
             stacking_candidates: HashSet::new(),
+            opacity_transition_nodes: HashSet::new(),
             dirty_textareas: HashSet::new(),
             layout_passes: 0,
             layout_mode_stack: Vec::new(),
@@ -656,6 +658,7 @@ impl LayoutArena {
         self.scroll_nodes.remove(&node);
         self.absolute_nodes.remove(&node);
         self.stacking_candidates.remove(&node);
+        self.opacity_transition_nodes.remove(&node);
         self.dirty_textareas.remove(&node);
         let item = &mut self.nodes[index];
         debug_assert!(item.occupied, "layout node removed twice");
@@ -680,6 +683,7 @@ impl LayoutArena {
     }
 
     pub(crate) fn set_style(&mut self, node: NodeId, style: DivStyle) {
+        let opacity_transition_active = self.opacity_transition_nodes.contains(&node);
         let item = &mut self.nodes[node_index(node)];
         let taffy_style = style.to_taffy();
         let layout_changed = item.taffy_style != taffy_style
@@ -702,6 +706,7 @@ impl LayoutArena {
         if item.style.position != CssPosition::Static
             || item.style.z_index != CssZIndex::Auto
             || item.style.opacity < 1.0
+            || opacity_transition_active
         {
             self.stacking_candidates.insert(node);
         } else {
@@ -710,6 +715,29 @@ impl LayoutArena {
         self.update_scroll_node(node);
         if layout_changed {
             self.clear_cache_subtree_and_ancestors(node);
+        }
+    }
+
+    pub(crate) fn set_opacity_transition_active(&mut self, node: NodeId, active: bool) {
+        let changed = if active {
+            self.opacity_transition_nodes.insert(node)
+        } else {
+            self.opacity_transition_nodes.remove(&node)
+        };
+        if !changed {
+            return;
+        }
+
+        self.stacking_tree_dirty = true;
+        let item = &self.nodes[node_index(node)];
+        if active
+            || item.style.position != CssPosition::Static
+            || item.style.z_index != CssZIndex::Auto
+            || item.style.opacity < 1.0
+        {
+            self.stacking_candidates.insert(node);
+        } else {
+            self.stacking_candidates.remove(&node);
         }
     }
 
@@ -858,7 +886,7 @@ impl LayoutArena {
 
     pub(crate) fn creates_stacking_context(&self, node: NodeId) -> bool {
         let item = &self.nodes[node_index(node)];
-        if item.style.opacity < 1.0 {
+        if item.style.opacity < 1.0 || self.opacity_transition_nodes.contains(&node) {
             return true;
         }
         if item.style.z_index == CssZIndex::Auto {
@@ -879,6 +907,7 @@ impl LayoutArena {
     pub(crate) fn is_stacking_item(&self, node: NodeId) -> bool {
         let item = &self.nodes[node_index(node)];
         item.style.opacity < 1.0
+            || self.opacity_transition_nodes.contains(&node)
             || item.style.position != CssPosition::Static
             || (item.style.z_index != CssZIndex::Auto
                 && item.parent.is_some_and(|parent| {

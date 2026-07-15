@@ -833,10 +833,19 @@ fn composite_cell(
     let source_has_ink = !source.character.is_whitespace() || source.wide_continuation;
 
     if source_has_ink && source_foreground_painted {
+        let backdrop_foreground_fills_cell = foreground_glyph_fills_cell(backdrop.character);
+        let backdrop_surface = if backdrop_foreground_fills_cell {
+            backdrop_foreground
+        } else {
+            backdrop_background
+        };
         let mut result = source;
-        result.foreground = blend_rgb(source_foreground, backdrop_background, opacity);
+        result.foreground = blend_rgb(source_foreground, backdrop_surface, opacity);
         if source_background_painted {
-            result.background = blend_rgb(source_background, backdrop_background, opacity);
+            result.background = blend_rgb(source_background, backdrop_surface, opacity);
+        } else if backdrop_foreground_fills_cell {
+            result.background =
+                Background::Rgb(backdrop_surface.0, backdrop_surface.1, backdrop_surface.2);
         } else {
             result.background = visual_background(backdrop);
         }
@@ -851,6 +860,10 @@ fn composite_cell(
     } else {
         (backdrop, false, false)
     }
+}
+
+fn foreground_glyph_fills_cell(character: char) -> bool {
+    matches!(character, '█' | '🭁' | '🭌' | '🭒' | '🭝')
 }
 
 fn visual_background(cell: Cell) -> Background {
@@ -1249,6 +1262,69 @@ mod tests {
         assert_eq!(first.character, 'X');
         assert_eq!(second.character, 'X');
         assert_eq!(first.foreground, second.foreground);
+    }
+
+    #[test]
+    fn translucent_text_treats_all_chunky_corners_as_full_cell_coverage() {
+        let source = Cell {
+            character: 't',
+            foreground: Background::Rgb(255, 255, 255),
+            background: Background::Rgb(0, 0, 200),
+            ..Cell::default()
+        };
+
+        for character in ['🭁', '🭌', '🭒', '🭝'] {
+            let backdrop = Cell {
+                character,
+                foreground: Background::Rgb(0, 200, 0),
+                background: Background::Rgb(200, 0, 0),
+                ..Cell::default()
+            };
+            let cell = composite_cell(
+                backdrop,
+                source,
+                true,
+                true,
+                0.5,
+                Background::White,
+                Background::Black,
+            )
+            .0;
+
+            assert_eq!(cell.character, 't');
+            assert_eq!(cell.foreground, Background::Rgb(128, 228, 128));
+            assert_eq!(cell.background, Background::Rgb(0, 100, 100));
+        }
+    }
+
+    #[test]
+    fn translucent_text_treats_full_block_as_full_cell_coverage() {
+        let backdrop = Cell {
+            character: '█',
+            foreground: Background::Rgb(0, 200, 0),
+            background: Background::Rgb(200, 0, 0),
+            ..Cell::default()
+        };
+        let source = Cell {
+            character: 't',
+            foreground: Background::Rgb(255, 255, 255),
+            ..Cell::default()
+        };
+
+        let cell = composite_cell(
+            backdrop,
+            source,
+            true,
+            false,
+            0.5,
+            Background::White,
+            Background::Black,
+        )
+        .0;
+
+        assert_eq!(cell.character, 't');
+        assert_eq!(cell.foreground, Background::Rgb(128, 228, 128));
+        assert_eq!(cell.background, Background::Rgb(0, 200, 0));
     }
 
     #[test]

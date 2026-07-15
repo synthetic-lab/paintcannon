@@ -340,15 +340,16 @@ impl CursorStyle {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ColorTransitionProperty {
+pub(crate) enum TransitionProperty {
     Color,
     BackgroundColor,
     BorderColor,
+    Opacity,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TransitionSpec {
-    pub(crate) property: ColorTransitionProperty,
+    pub(crate) property: TransitionProperty,
     pub(crate) duration_ms: u64,
 }
 
@@ -992,30 +993,38 @@ pub(crate) fn parse_transition(value: &str) -> Vec<TransitionSpec> {
         match tokens[0] {
             "all" => {
                 transitions.push(TransitionSpec {
-                    property: ColorTransitionProperty::Color,
+                    property: TransitionProperty::Color,
                     duration_ms,
                 });
                 transitions.push(TransitionSpec {
-                    property: ColorTransitionProperty::BackgroundColor,
+                    property: TransitionProperty::BackgroundColor,
                     duration_ms,
                 });
                 transitions.push(TransitionSpec {
-                    property: ColorTransitionProperty::BorderColor,
+                    property: TransitionProperty::BorderColor,
+                    duration_ms,
+                });
+                transitions.push(TransitionSpec {
+                    property: TransitionProperty::Opacity,
                     duration_ms,
                 });
             }
             "color" => transitions.push(TransitionSpec {
-                property: ColorTransitionProperty::Color,
+                property: TransitionProperty::Color,
                 duration_ms,
             }),
             "background" | "background-color" | "backgroundColor" => {
                 transitions.push(TransitionSpec {
-                    property: ColorTransitionProperty::BackgroundColor,
+                    property: TransitionProperty::BackgroundColor,
                     duration_ms,
                 });
             }
             "border-color" | "borderColor" => transitions.push(TransitionSpec {
-                property: ColorTransitionProperty::BorderColor,
+                property: TransitionProperty::BorderColor,
+                duration_ms,
+            }),
+            "opacity" => transitions.push(TransitionSpec {
+                property: TransitionProperty::Opacity,
                 duration_ms,
             }),
             _ => {}
@@ -1636,5 +1645,19 @@ mod tests {
         assert_eq!(parse_opacity("150%").unwrap(), 1.0);
         assert!(parse_opacity("opaque").is_err());
         assert!(parse_opacity("NaN").is_err());
+    }
+
+    #[test]
+    fn transition_accepts_opacity_and_includes_it_in_all() {
+        assert_eq!(
+            parse_transition("opacity 120ms"),
+            vec![TransitionSpec {
+                property: TransitionProperty::Opacity,
+                duration_ms: 120,
+            }]
+        );
+        assert!(parse_transition("all 200ms")
+            .iter()
+            .any(|transition| transition.property == TransitionProperty::Opacity));
     }
 }

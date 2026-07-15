@@ -1369,11 +1369,12 @@ fn transition_event_to_napi(event: EngineTransitionEvent) -> TransitionEvent {
     }
 }
 
-fn transition_property_name(property: crate::style::ColorTransitionProperty) -> &'static str {
+fn transition_property_name(property: crate::style::TransitionProperty) -> &'static str {
     match property {
-        crate::style::ColorTransitionProperty::Color => "color",
-        crate::style::ColorTransitionProperty::BackgroundColor => "background-color",
-        crate::style::ColorTransitionProperty::BorderColor => "border-color",
+        crate::style::TransitionProperty::Color => "color",
+        crate::style::TransitionProperty::BackgroundColor => "background-color",
+        crate::style::TransitionProperty::BorderColor => "border-color",
+        crate::style::TransitionProperty::Opacity => "opacity",
     }
 }
 
@@ -1529,6 +1530,14 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn opacity_transition_events_use_the_css_property_name() {
+        assert_eq!(
+            transition_property_name(crate::style::TransitionProperty::Opacity),
+            "opacity"
+        );
     }
 
     #[test]

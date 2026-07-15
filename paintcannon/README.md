@@ -25,7 +25,7 @@ PaintCannon supports the following CSS layout and paint features:
 - CSS `opacity`, composited once for an element and its descendants as a stacking-context group
 - 24-bit RGB and CSS named background, border, text, placeholder, and selection colors with
   256-color and 16-color fallbacks
-- CSS transitions for color properties
+- CSS transitions for color and opacity properties
 - Mouse pointer styling in supported terminals
 - Terminal focus detection via `PaintCannon.hasFocus` and app-level `focus`/`blur` events
 

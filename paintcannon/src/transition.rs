@@ -3,13 +3,13 @@ use std::time::{Duration, Instant};
 
 use taffy::NodeId;
 
-use crate::style::{Background, ColorTransitionProperty, TransitionSpec};
+use crate::style::{Background, TransitionProperty, TransitionSpec};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TransitionEvent {
     pub(crate) event_type: TransitionEventType,
     pub(crate) target: NodeId,
-    pub(crate) property: ColorTransitionProperty,
+    pub(crate) property: TransitionProperty,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,21 +20,35 @@ pub(crate) enum TransitionEventType {
 
 #[derive(Default)]
 pub(crate) struct TransitionState {
-    specs: HashMap<NodeId, HashMap<ColorTransitionProperty, Duration>>,
-    active: HashMap<TransitionKey, ActiveColorTransition>,
+    specs: HashMap<NodeId, HashMap<TransitionProperty, Duration>>,
+    active: HashMap<TransitionKey, ActiveTransition>,
     events: VecDeque<TransitionEvent>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct TransitionKey {
     node: NodeId,
-    property: ColorTransitionProperty,
+    property: TransitionProperty,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ActiveTransition {
+    Color(ActiveColorTransition),
+    Opacity(ActiveOpacityTransition),
 }
 
 #[derive(Clone, Copy, Debug)]
 struct ActiveColorTransition {
     from: Background,
     to: Background,
+    started_at: Instant,
+    duration: Duration,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveOpacityTransition {
+    from: f32,
+    to: f32,
     started_at: Instant,
     duration: Duration,
 }
@@ -67,7 +81,7 @@ impl TransitionState {
     pub(crate) fn style_color_changed(
         &mut self,
         node: NodeId,
-        property: ColorTransitionProperty,
+        property: TransitionProperty,
         previous_style_color: Background,
         next_style_color: Background,
         now: Instant,
@@ -102,17 +116,17 @@ impl TransitionState {
         let from = self
             .active
             .get(&key)
-            .map(|transition| transition.color_at(now))
+            .and_then(|transition| transition.color_at(now))
             .unwrap_or(previous_style_color);
 
         self.active.insert(
             key,
-            ActiveColorTransition {
+            ActiveTransition::Color(ActiveColorTransition {
                 from,
                 to: next_style_color,
                 started_at: now,
                 duration,
-            },
+            }),
         );
         self.events.push_back(TransitionEvent {
             event_type: TransitionEventType::Start,
@@ -124,7 +138,7 @@ impl TransitionState {
     pub(crate) fn paint_color(
         &self,
         node: NodeId,
-        property: ColorTransitionProperty,
+        property: TransitionProperty,
         style_color: Background,
         now: Instant,
         truecolor_enabled: bool,
@@ -135,25 +149,110 @@ impl TransitionState {
 
         self.active
             .get(&TransitionKey { node, property })
-            .map(|transition| transition.color_at(now))
+            .and_then(|transition| transition.color_at(now))
             .unwrap_or(style_color)
     }
 
-    pub(crate) fn finish_completed(&mut self, now: Instant) {
+    pub(crate) fn style_opacity_changed(
+        &mut self,
+        node: NodeId,
+        previous_opacity: f32,
+        next_opacity: f32,
+        now: Instant,
+        truecolor_enabled: bool,
+    ) {
+        if previous_opacity == next_opacity {
+            return;
+        }
+
+        let property = TransitionProperty::Opacity;
+        let key = TransitionKey { node, property };
+        let duration = self
+            .specs
+            .get(&node)
+            .and_then(|specs| specs.get(&property))
+            .copied();
+
+        if !truecolor_enabled {
+            self.active.remove(&key);
+            return;
+        }
+
+        let Some(duration) = duration else {
+            self.active.remove(&key);
+            return;
+        };
+        let from = self
+            .active
+            .get(&key)
+            .and_then(|transition| transition.opacity_at(now))
+            .unwrap_or(previous_opacity);
+
+        self.active.insert(
+            key,
+            ActiveTransition::Opacity(ActiveOpacityTransition {
+                from,
+                to: next_opacity,
+                started_at: now,
+                duration,
+            }),
+        );
+        self.events.push_back(TransitionEvent {
+            event_type: TransitionEventType::Start,
+            target: node,
+            property,
+        });
+    }
+
+    pub(crate) fn paint_opacity(
+        &self,
+        node: NodeId,
+        style_opacity: f32,
+        now: Instant,
+        truecolor_enabled: bool,
+    ) -> f32 {
+        if !truecolor_enabled {
+            return style_opacity;
+        }
+
+        self.active
+            .get(&TransitionKey {
+                node,
+                property: TransitionProperty::Opacity,
+            })
+            .and_then(|transition| transition.opacity_at(now))
+            .unwrap_or(style_opacity)
+    }
+
+    pub(crate) fn has_active_opacity(&self, node: NodeId) -> bool {
+        matches!(
+            self.active.get(&TransitionKey {
+                node,
+                property: TransitionProperty::Opacity,
+            }),
+            Some(ActiveTransition::Opacity(_))
+        )
+    }
+
+    pub(crate) fn finish_completed(&mut self, now: Instant) -> Vec<(NodeId, TransitionProperty)> {
         let completed = self
             .active
             .iter()
             .filter_map(|(key, transition)| transition.is_complete(now).then_some(*key))
             .collect::<Vec<_>>();
 
-        for key in completed {
-            self.active.remove(&key);
+        for key in &completed {
+            self.active.remove(key);
             self.events.push_back(TransitionEvent {
                 event_type: TransitionEventType::End,
                 target: key.node,
                 property: key.property,
             });
         }
+        completed
+            .into_iter()
+            .map(|key| (key.node, key.property))
+            .collect()
     }
 
     #[cfg(test)]
@@ -178,6 +277,44 @@ impl ActiveColorTransition {
 
     fn is_complete(self, now: Instant) -> bool {
         now.duration_since(self.started_at) >= self.duration
+    }
+}
+
+impl ActiveOpacityTransition {
+    fn opacity_at(self, now: Instant) -> f32 {
+        if self.duration.is_zero() {
+            return self.to;
+        }
+        let progress =
+            now.duration_since(self.started_at).as_secs_f32() / self.duration.as_secs_f32();
+        interpolate_float(self.from, self.to, progress.clamp(0.0, 1.0))
+    }
+
+    fn is_complete(self, now: Instant) -> bool {
+        now.duration_since(self.started_at) >= self.duration
+    }
+}
+
+impl ActiveTransition {
+    fn color_at(self, now: Instant) -> Option<Background> {
+        match self {
+            Self::Color(transition) => Some(transition.color_at(now)),
+            Self::Opacity(_) => None,
+        }
+    }
+
+    fn opacity_at(self, now: Instant) -> Option<f32> {
+        match self {
+            Self::Opacity(transition) => Some(transition.opacity_at(now)),
+            Self::Color(_) => None,
+        }
+    }
+
+    fn is_complete(self, now: Instant) -> bool {
+        match self {
+            Self::Color(transition) => transition.is_complete(now),
+            Self::Opacity(transition) => transition.is_complete(now),
+        }
     }
 }
 
@@ -281,14 +418,14 @@ mod tests {
         transitions.set_specs(
             node(1),
             vec![TransitionSpec {
-                property: ColorTransitionProperty::BackgroundColor,
+                property: TransitionProperty::BackgroundColor,
                 duration_ms: 100,
             }],
         );
 
         transitions.style_color_changed(
             node(1),
-            ColorTransitionProperty::BackgroundColor,
+            TransitionProperty::BackgroundColor,
             Background::Rgb(0, 0, 255),
             Background::Rgb(0, 255, 255),
             start,
@@ -301,13 +438,13 @@ mod tests {
             vec![TransitionEvent {
                 event_type: TransitionEventType::Start,
                 target: node(1),
-                property: ColorTransitionProperty::BackgroundColor,
+                property: TransitionProperty::BackgroundColor,
             }]
         );
 
         let midway = transitions.paint_color(
             node(1),
-            ColorTransitionProperty::BackgroundColor,
+            TransitionProperty::BackgroundColor,
             Background::Rgb(0, 255, 255),
             start + Duration::from_millis(50),
             true,
@@ -323,7 +460,7 @@ mod tests {
             vec![TransitionEvent {
                 event_type: TransitionEventType::End,
                 target: node(1),
-                property: ColorTransitionProperty::BackgroundColor,
+                property: TransitionProperty::BackgroundColor,
             }]
         );
     }
@@ -335,14 +472,14 @@ mod tests {
         transitions.set_specs(
             node(1),
             vec![TransitionSpec {
-                property: ColorTransitionProperty::Color,
+                property: TransitionProperty::Color,
                 duration_ms: 100,
             }],
         );
 
         transitions.style_color_changed(
             node(1),
-            ColorTransitionProperty::Color,
+            TransitionProperty::Color,
             Background::Rgb(255, 0, 0),
             Background::Rgb(0, 255, 0),
             start,
@@ -354,12 +491,77 @@ mod tests {
         assert_eq!(
             transitions.paint_color(
                 node(1),
-                ColorTransitionProperty::Color,
+                TransitionProperty::Color,
                 Background::Rgb(0, 255, 0),
                 start + Duration::from_millis(50),
                 false,
             ),
             Background::Rgb(0, 255, 0)
+        );
+    }
+
+    #[test]
+    fn starts_paints_and_ends_opacity_transition() {
+        let mut transitions = TransitionState::default();
+        let start = Instant::now();
+        transitions.set_specs(
+            node(1),
+            vec![TransitionSpec {
+                property: TransitionProperty::Opacity,
+                duration_ms: 100,
+            }],
+        );
+
+        transitions.style_opacity_changed(node(1), 1.0, 0.25, start, true);
+
+        assert!(transitions.has_active_opacity(node(1)));
+        assert_eq!(
+            transitions.drain_events(),
+            vec![TransitionEvent {
+                event_type: TransitionEventType::Start,
+                target: node(1),
+                property: TransitionProperty::Opacity,
+            }]
+        );
+        assert_eq!(
+            transitions.paint_opacity(node(1), 0.25, start + Duration::from_millis(50), true,),
+            0.625,
+        );
+
+        assert_eq!(
+            transitions.finish_completed(start + Duration::from_millis(100)),
+            vec![(node(1), TransitionProperty::Opacity)],
+        );
+        assert!(!transitions.has_active());
+        assert_eq!(
+            transitions.drain_events(),
+            vec![TransitionEvent {
+                event_type: TransitionEventType::End,
+                target: node(1),
+                property: TransitionProperty::Opacity,
+            }]
+        );
+    }
+
+    #[test]
+    fn disables_opacity_transitions_without_truecolor() {
+        let mut transitions = TransitionState::default();
+        let start = Instant::now();
+        transitions.set_specs(
+            node(1),
+            vec![TransitionSpec {
+                property: TransitionProperty::Opacity,
+                duration_ms: 100,
+            }],
+        );
+
+        transitions.style_opacity_changed(node(1), 1.0, 0.25, start, false);
+
+        assert!(!transitions.has_active());
+        assert!(transitions.drain_events().is_empty());
+        assert_eq!(
+            transitions.paint_opacity(node(1), 0.25, start + Duration::from_millis(50), false,),
+            0.25,
         );
     }
 }
