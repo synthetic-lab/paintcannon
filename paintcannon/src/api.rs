@@ -815,6 +815,20 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn has_active_transitions(&self) -> bool {
+        let (response_tx, response_rx) = bounded(1);
+        if self
+            .send(EngineCommand::HasActiveTransitions {
+                response: response_tx,
+            })
+            .is_err()
+        {
+            return false;
+        }
+        response_rx.recv().unwrap_or(false)
+    }
+
+    #[napi]
     pub fn click_event_for_mouse_click(
         &self,
         x: u32,

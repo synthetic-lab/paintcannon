@@ -80,6 +80,13 @@ export const FORM_ELEMENT_EVENT_TYPES = ["submit"] as const;
 export const CHANGE_ELEMENT_EVENT_TYPES = ["change"] as const;
 export const TRANSITION_ELEMENT_EVENT_TYPES = ["transitionstart", "transitionend"] as const;
 const TRANSITION_ELEMENT_EVENT_TYPE_SET = new Set<string>(TRANSITION_ELEMENT_EVENT_TYPES);
+const TRANSITIONABLE_STYLE_PROPERTIES = new Set([
+  "color",
+  "background",
+  "background-color",
+  "border-color",
+  "opacity",
+]);
 export const ELEMENT_EVENT_TYPES = [
   ...KEYBOARD_EVENT_TYPES,
   ...CLIPBOARD_EVENT_TYPES,
@@ -437,6 +444,8 @@ export class PaintCannon {
   private stopped = false;
   private nextAnimationFrameId = 1;
   private animationFrameTimer: NodeJS.Timeout | undefined;
+  private transitionAnimationActive = false;
+  private transitionCheckDeferred = false;
   private keyboardEventTimer: NodeJS.Timeout | undefined;
   private suspendedByPaintCannon = false;
   private transactionDepth = 0;
@@ -900,6 +909,7 @@ export class PaintCannon {
     }
 
     this.stopped = true;
+    this.transitionAnimationActive = false;
     if (this.animationFrameTimer !== undefined) {
       clearTimeout(this.animationFrameTimer);
       this.animationFrameTimer = undefined;
@@ -934,6 +944,7 @@ export class PaintCannon {
     }
 
     this.stopped = true;
+    this.transitionAnimationActive = false;
     if (this.animationFrameTimer !== undefined) {
       clearTimeout(this.animationFrameTimer);
       this.animationFrameTimer = undefined;
@@ -1282,12 +1293,19 @@ export class PaintCannon {
   }
 
   private setNativeStyleProperty(id: number, property: string, value: string): void {
+    const mayStartTransition =
+      TRANSITIONABLE_STYLE_PROPERTIES.has(property) &&
+      this.elements.get(id)?.style.transition.trim() !== "";
     if (this.isTransactionActive()) {
       this.batchCommands.push({ type: "setStyleProperty", id, property, value });
+      this.transitionCheckDeferred ||= mayStartTransition;
       return;
     }
 
     this.binding.setStyleProperty(id, property, value);
+    if (mayStartTransition) {
+      this.refreshTransitionAnimation();
+    }
   }
 
   private isTransactionActive(): boolean {
@@ -1309,8 +1327,10 @@ export class PaintCannon {
   private flushTransaction(): void {
     const commands = this.batchCommands;
     const renderDeferred = this.renderDeferred;
+    const transitionCheckDeferred = this.transitionCheckDeferred;
     this.batchCommands = [];
     this.renderDeferred = false;
+    this.transitionCheckDeferred = false;
 
     try {
       if (commands.length > 0) {
@@ -1324,12 +1344,16 @@ export class PaintCannon {
     if (renderDeferred && !this.stopped) {
       this.binding.render();
     }
+    if (transitionCheckDeferred && !this.stopped) {
+      this.refreshTransitionAnimation();
+    }
   }
 
   private rollbackTransaction(): void {
     this.batchCommands = [];
     this.batchNodes.clear();
     this.renderDeferred = false;
+    this.transitionCheckDeferred = false;
   }
 
   private applyBatchIdMappings(mappings: NativeBatchIdMapping[]): void {
@@ -1418,7 +1442,10 @@ export class PaintCannon {
   }
 
   private scheduleAnimationFrameTick(): void {
-    if (this.animationFrameTimer !== undefined || this.animationFrameCallbacks.size === 0) {
+    if (
+      this.animationFrameTimer !== undefined ||
+      (this.animationFrameCallbacks.size === 0 && !this.transitionAnimationActive)
+    ) {
       return;
     }
 
@@ -1458,7 +1485,20 @@ export class PaintCannon {
         }
         throw error;
       }
+      if (this.transitionAnimationActive) {
+        this.transitionAnimationActive = this.binding.hasActiveTransitions();
+      }
       this.scheduleAnimationFrameTick();
+    }
+  }
+
+  private refreshTransitionAnimation(): void {
+    this.transitionAnimationActive = this.binding.hasActiveTransitions();
+    if (this.transitionAnimationActive) {
+      this.scheduleAnimationFrameTick();
+    } else if (this.animationFrameCallbacks.size === 0 && this.animationFrameTimer !== undefined) {
+      clearTimeout(this.animationFrameTimer);
+      this.animationFrameTimer = undefined;
     }
   }
 

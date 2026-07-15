@@ -66,6 +66,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
   mouseEvents: TerminalMouseEvent[] = [];
   resizeEvents: TerminalResizeEvent[] = [];
   transitionEvents: NativeTransitionEvent[] = [];
+  activeTransitions = false;
   rootId: number | undefined;
   viewportId: number | undefined;
   appendedChildren: Array<{ parent: number; child: number }> = [];
@@ -265,6 +266,10 @@ export class MockNativePaintCannon implements NativePaintCannon {
     const events = this.transitionEvents;
     this.transitionEvents = [];
     return events;
+  }
+
+  hasActiveTransitions(): boolean {
+    return this.activeTransitions;
   }
 
   clickEventForMouseClick(): null {

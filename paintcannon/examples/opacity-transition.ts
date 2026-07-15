@@ -88,8 +88,4 @@ function panel(
   return element;
 }
 
-function tick(): void {
-  pc.requestAnimationFrame(tick);
-}
-
-tick();
+pc.render();
