@@ -689,7 +689,7 @@ impl PaintCannon {
     #[napi]
     pub fn render_sync(&self) -> Result<()> {
         let (response_tx, response_rx) = mpsc::channel();
-        self.send(EngineCommand::RenderStdout {
+        self.send(EngineCommand::FlushFrame {
             response: response_tx,
         })?;
         response_rx

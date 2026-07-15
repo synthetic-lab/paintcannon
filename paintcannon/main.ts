@@ -433,7 +433,7 @@ function installProcessCleanupHandlers(): void {
 
 export class PaintCannon {
   private readonly binding: NativePaintCannon;
-  private frameIntervalMs: number;
+  private callbackIntervalMs: number;
   private stopped = false;
   private nextAnimationFrameId = 1;
   private animationFrameTimer: NodeJS.Timeout | undefined;
@@ -500,7 +500,7 @@ export class PaintCannon {
     const binding = paintCannonDeps.loadNativeBinding();
     const alternateScreen = options.alternateScreen ?? false;
     const fps = options.fps ?? 60;
-    this.frameIntervalMs = fpsToInterval(fps);
+    this.callbackIntervalMs = fpsToInterval(fps);
     this.binding = new binding.PaintCannon(
       options.forceCompatMode ?? false,
       alternateScreen,
@@ -683,7 +683,7 @@ export class PaintCannon {
   }
 
   setFrameRate(fps: number): void {
-    this.frameIntervalMs = fpsToInterval(fps);
+    this.callbackIntervalMs = fpsToInterval(fps);
     this.binding.setFrameRate(fps);
 
     if (this.animationFrameTimer !== undefined) {
@@ -1412,7 +1412,7 @@ export class PaintCannon {
     this.animationFrameTimer = setTimeout(() => {
       this.animationFrameTimer = undefined;
       this.runAnimationFrameTick();
-    }, this.frameIntervalMs);
+    }, this.callbackIntervalMs);
   }
 
   private runAnimationFrameTick(): void {
@@ -1462,7 +1462,7 @@ export class PaintCannon {
     this.keyboardEventTimer = setTimeout(() => {
       this.keyboardEventTimer = undefined;
       this.runKeyboardEventPump();
-    }, this.frameIntervalMs);
+    }, this.callbackIntervalMs);
   }
 
   private runKeyboardEventPump(): void {
@@ -1805,26 +1805,27 @@ export class PaintCannon {
     return metrics;
   }
 
-  private handleTerminalMouseEvent(input: TerminalMouseEvent): boolean {
+  private handleTerminalMouseEvent(input: TerminalMouseEvent): void {
     if (input.type === "wheel") {
-      return this.handleWheelEvent(input);
+      this.handleWheelEvent(input);
+      return;
     }
 
     if (input.type === "mousedown" && this.handleScrollbarMouseDown(input)) {
-      return true;
+      return;
     }
 
     if (input.type === "mousedrag" && this.handleScrollbarMouseDrag(input)) {
-      return true;
+      return;
     }
 
     if (input.type === "mouseup" && this.handleScrollbarMouseUp()) {
-      return true;
+      return;
     }
 
     if (input.type === "click" && this.suppressNextScrollbarClick) {
       this.suppressNextScrollbarClick = false;
-      return true;
+      return;
     }
 
     const hasMouseEnter = this.hasElementEventListeners("mouseenter");
@@ -1833,7 +1834,7 @@ export class PaintCannon {
     const hasClick = this.hasElementEventListeners("click");
 
     if (input.type === "mousemove" && !hasMouseEnter && !hasMouseLeave && !hasMouseMove) {
-      return false;
+      return;
     }
 
     const targetId = this.binding.targetIdForPoint(input.x, input.y);
@@ -1845,7 +1846,7 @@ export class PaintCannon {
       !isTextControl(target) &&
       !(target instanceof ButtonElement)
     ) {
-      return false;
+      return;
     }
 
     if (input.type === "mousemove") {
@@ -1855,29 +1856,23 @@ export class PaintCannon {
       if (target !== undefined && hasMouseMove) {
         this.dispatchMouseEvent("mousemove", target, input, true);
       }
-      return true;
+      return;
     }
 
     if (input.type === "click" && target !== undefined) {
-      let handled = false;
       if (isTextControl(target)) {
         this.focusInput(target);
         target.setCursorPositionFromNativePoint(input.x, input.y);
-        handled = true;
       }
       if (hasClick) {
         const event = this.dispatchMouseEvent("click", target, input, true);
         if (target instanceof ButtonElement && !event.defaultPrevented) {
-          handled = this.submitButtonForm(target) || handled;
+          this.submitButtonForm(target);
         }
-        handled = true;
       } else if (target instanceof ButtonElement) {
-        handled = this.submitButtonForm(target);
+        this.submitButtonForm(target);
       }
-      return handled;
     }
-
-    return false;
   }
 
   private handleScrollbarMouseDown(input: TerminalMouseEvent): boolean {
@@ -2244,27 +2239,26 @@ export class PaintCannon {
     }
   }
 
-  private dispatchResizeEvent(input: TerminalResizeEvent): boolean {
+  private dispatchResizeEvent(input: TerminalResizeEvent): void {
     const listeners = Array.from(this.resizeEventListeners);
     if (listeners.length === 0) {
-      return false;
+      return;
     }
 
     const event = new PaintResizeEvent(input.cols, input.rows);
     for (const listener of listeners) {
       listener(event);
     }
-    return true;
   }
 
-  private dispatchTransitionEvent(nativeEvent: NativeTransitionEvent): boolean {
+  private dispatchTransitionEvent(nativeEvent: NativeTransitionEvent): void {
     if (!isTransitionElementEventType(nativeEvent.type)) {
-      return false;
+      return;
     }
 
     const target = this.elements.get(nativeEvent.targetId);
     if (target === undefined) {
-      return false;
+      return;
     }
 
     const type = nativeEvent.type;
@@ -2281,13 +2275,11 @@ export class PaintCannon {
       for (const listener of listeners) {
         (listener as TransitionEventListener)(event);
         if (event.propagationStopped) {
-          return true;
+          return;
         }
       }
       currentTarget = this.parents.get(currentTarget.id);
     }
-
-    return true;
   }
 
   private elementPath(element: PaintElement | undefined): PaintElement[] {

@@ -446,7 +446,7 @@ pub(crate) enum EngineCommand {
         height: usize,
         response: Sender<Option<Frame>>,
     },
-    RenderStdout {
+    FlushFrame {
         response: StdSender<io::Result<()>>,
     },
     DrainTransitionEvents {
@@ -468,6 +468,13 @@ pub(crate) enum EngineCommand {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Dirtiness {
+    Clean,
+    Paint,
+    Layout,
+}
+
 pub(crate) struct PaintEngine {
     arena: LayoutArena,
     root: Option<DomId>,
@@ -477,8 +484,7 @@ pub(crate) struct PaintEngine {
     node_to_dom: HashMap<NodeId, DomId>,
     parents: HashMap<DomId, DomId>,
     children: HashMap<DomId, Vec<DomId>>,
-    layout_dirty: bool,
-    paint_dirty: bool,
+    dirtiness: Dirtiness,
     last_layout_size: Option<(usize, usize)>,
     previous_frame: Option<Frame>,
     current_frame: Option<Frame>,
@@ -506,8 +512,7 @@ impl PaintEngine {
             node_to_dom: HashMap::new(),
             parents: HashMap::new(),
             children: HashMap::new(),
-            layout_dirty: false,
-            paint_dirty: false,
+            dirtiness: Dirtiness::Clean,
             last_layout_size: None,
             previous_frame: None,
             current_frame: None,
@@ -526,12 +531,13 @@ impl PaintEngine {
     }
 
     fn mark_layout_dirty(&mut self) {
-        self.layout_dirty = true;
-        self.paint_dirty = true;
+        self.dirtiness = Dirtiness::Layout;
     }
 
     fn mark_paint_dirty(&mut self) {
-        self.paint_dirty = true;
+        if self.dirtiness == Dirtiness::Clean {
+            self.dirtiness = Dirtiness::Paint;
+        }
     }
 
     #[cfg(test)]
@@ -1174,7 +1180,8 @@ impl PaintEngine {
         self.set_scroll_offset(node, scroll_left, scroll_top)
     }
 
-    pub(crate) fn render_to(
+    #[cfg(test)]
+    pub(crate) fn flush_frame_to(
         &mut self,
         width: usize,
         height: usize,
@@ -1182,7 +1189,7 @@ impl PaintEngine {
         color_profile: TermProfile,
         synchronized: bool,
     ) -> io::Result<()> {
-        self.render_to_at(
+        self.flush_frame_to_at(
             width,
             height,
             out,
@@ -1192,7 +1199,21 @@ impl PaintEngine {
         )
     }
 
-    fn render_to_at(
+    fn flush_frame_to_at(
+        &mut self,
+        width: usize,
+        height: usize,
+        out: &mut impl Write,
+        color_profile: TermProfile,
+        synchronized: bool,
+        now: Instant,
+    ) -> io::Result<()> {
+        self.write_frame_to_at(width, height, out, color_profile, synchronized, now)?;
+        self.dirtiness = Dirtiness::Clean;
+        Ok(())
+    }
+
+    fn write_frame_to_at(
         &mut self,
         width: usize,
         height: usize,
@@ -1222,7 +1243,7 @@ impl PaintEngine {
         out.flush()?;
         profile_log("stdout_flush", flush_start.elapsed(), &[]);
         profile_log(
-            "render_to_total",
+            "frame_flush_total",
             total_start.elapsed(),
             &[("width", width.to_string()), ("height", height.to_string())],
         );
@@ -1230,7 +1251,7 @@ impl PaintEngine {
     }
 
     #[cfg(test)]
-    fn render_if_dirty_to(
+    fn flush_if_dirty_to(
         &mut self,
         width: usize,
         height: usize,
@@ -1242,17 +1263,17 @@ impl PaintEngine {
         if !self.prepare_frame_tick() {
             return Ok(false);
         }
-        self.render_dirty_to(width, height, out, color_profile, synchronized, now)
+        self.flush_dirty_frame_to(width, height, out, color_profile, synchronized, now)
     }
 
     fn prepare_frame_tick(&mut self) -> bool {
         if self.transitions.has_active() {
             self.mark_paint_dirty();
         }
-        self.paint_dirty
+        self.dirtiness != Dirtiness::Clean
     }
 
-    fn render_dirty_to(
+    fn flush_dirty_frame_to(
         &mut self,
         width: usize,
         height: usize,
@@ -1261,8 +1282,7 @@ impl PaintEngine {
         synchronized: bool,
         now: Instant,
     ) -> io::Result<bool> {
-        self.render_to_at(width, height, out, color_profile, synchronized, now)?;
-        self.paint_dirty = false;
+        self.flush_frame_to_at(width, height, out, color_profile, synchronized, now)?;
         Ok(true)
     }
 
@@ -1645,7 +1665,7 @@ impl PaintEngine {
 
     fn ensure_layout(&mut self, width: usize, height: usize, root: NodeId) {
         let size = (width, height);
-        if !self.layout_dirty && self.last_layout_size == Some(size) {
+        if self.dirtiness != Dirtiness::Layout && self.last_layout_size == Some(size) {
             return;
         }
 
@@ -1679,7 +1699,7 @@ impl PaintEngine {
             style.overflow_y = overflow_y;
             self.arena.set_style(viewport, style);
         }
-        self.layout_dirty = false;
+        self.dirtiness = Dirtiness::Paint;
         self.last_layout_size = Some(size);
     }
 
@@ -2070,10 +2090,10 @@ pub(crate) fn engine_loop(rx: Receiver<EngineCommand>, options: EngineLoopOption
             }
         }
 
-        let render_result = if engine.prepare_frame_tick() {
+        let flush_result = if engine.prepare_frame_tick() {
             let frame_time = Instant::now();
             let mut out = io::stdout().lock();
-            engine.render_dirty_to(
+            engine.flush_dirty_frame_to(
                 state.width,
                 state.height,
                 &mut out,
@@ -2084,7 +2104,7 @@ pub(crate) fn engine_loop(rx: Receiver<EngineCommand>, options: EngineLoopOption
         } else {
             Ok(false)
         };
-        if render_result.is_err() {
+        if flush_result.is_err() {
             engine.mark_paint_dirty();
         }
         state.next_frame =
@@ -2331,20 +2351,18 @@ fn apply_command(
         } => {
             let _ = response.send(engine.render_frame(width, height));
         }
-        EngineCommand::RenderStdout { response } => {
+        EngineCommand::FlushFrame { response } => {
             let result = {
                 let mut out = io::stdout().lock();
-                engine.render_to(
+                engine.flush_frame_to_at(
                     state.width,
                     state.height,
                     &mut out,
                     state.color_profile,
                     state.synchronized,
+                    Instant::now(),
                 )
             };
-            if result.is_ok() {
-                engine.paint_dirty = false;
-            }
             let _ = response.send(result);
         }
         EngineCommand::DrainTransitionEvents { response } => {
@@ -2488,7 +2506,7 @@ mod tests {
 
         let mut output = Vec::new();
         assert!(engine
-            .render_if_dirty_to(
+            .flush_if_dirty_to(
                 6,
                 1,
                 &mut output,
@@ -2501,7 +2519,7 @@ mod tests {
         output.clear();
 
         assert!(!engine
-            .render_if_dirty_to(
+            .flush_if_dirty_to(
                 6,
                 1,
                 &mut output,
@@ -2513,10 +2531,9 @@ mod tests {
         assert!(output.is_empty());
 
         engine.set_terminal_focused(false);
-        assert!(engine.paint_dirty);
-        assert!(!engine.layout_dirty);
+        assert_eq!(engine.dirtiness, Dirtiness::Paint);
         assert!(engine
-            .render_if_dirty_to(
+            .flush_if_dirty_to(
                 6,
                 1,
                 &mut output,
@@ -2555,8 +2572,7 @@ mod tests {
     fn render_size_changes_dirty_layout_without_rendering_immediately() {
         let mut engine = PaintEngine::new();
         let mut state = EngineLoopState::new(&test_loop_options());
-        engine.layout_dirty = false;
-        engine.paint_dirty = false;
+        engine.dirtiness = Dirtiness::Clean;
 
         assert!(apply_command(
             &mut engine,
@@ -2568,8 +2584,7 @@ mod tests {
         ));
 
         assert_eq!((state.width, state.height), (100, 40));
-        assert!(engine.layout_dirty);
-        assert!(engine.paint_dirty);
+        assert_eq!(engine.dirtiness, Dirtiness::Layout);
         assert!(engine.previous_frame.is_none());
     }
 
@@ -3373,7 +3388,7 @@ mod tests {
     }
 
     #[test]
-    fn render_to_diffs_against_previous_frame() {
+    fn frame_flush_diffs_against_previous_frame() {
         let mut engine = PaintEngine::new();
         let root = engine.create_element(block_style(
             CssDimension::Length(4.0),
@@ -3385,12 +3400,12 @@ mod tests {
 
         let mut first = Vec::new();
         engine
-            .render_to(4, 1, &mut first, TermProfile::NoColor, false)
+            .flush_frame_to(4, 1, &mut first, TermProfile::NoColor, false)
             .unwrap();
         engine.set_text(text, "ac");
         let mut second = Vec::new();
         engine
-            .render_to(4, 1, &mut second, TermProfile::NoColor, false)
+            .flush_frame_to(4, 1, &mut second, TermProfile::NoColor, false)
             .unwrap();
         let second = String::from_utf8(second).unwrap();
 
@@ -3399,7 +3414,7 @@ mod tests {
     }
 
     #[test]
-    fn render_to_flushes_output_after_writing_frame() {
+    fn frame_flush_writes_and_flushes_output() {
         struct FlushProbe {
             bytes: Vec<u8>,
             flushes: usize,
@@ -3431,7 +3446,7 @@ mod tests {
             flushes: 0,
         };
         engine
-            .render_to(2, 1, &mut out, TermProfile::NoColor, false)
+            .flush_frame_to(2, 1, &mut out, TermProfile::NoColor, false)
             .unwrap();
 
         assert!(String::from_utf8(out.bytes).unwrap().contains("ok"));
@@ -3467,12 +3482,12 @@ mod tests {
 
         let mut first = Vec::new();
         engine
-            .render_to(4, 1, &mut first, TermProfile::NoColor, false)
+            .flush_frame_to(4, 1, &mut first, TermProfile::NoColor, false)
             .unwrap();
         engine.invalidate_frame();
         let mut second = Vec::new();
         engine
-            .render_to(4, 1, &mut second, TermProfile::NoColor, false)
+            .flush_frame_to(4, 1, &mut second, TermProfile::NoColor, false)
             .unwrap();
         let second = String::from_utf8(second).unwrap();
 
@@ -3584,10 +3599,10 @@ mod tests {
                 property: TransitionProperty::Opacity,
             }]
         );
-        engine.paint_dirty = false;
+        engine.dirtiness = Dirtiness::Clean;
         let mut output = Vec::new();
         assert!(engine
-            .render_if_dirty_to(
+            .flush_if_dirty_to(
                 2,
                 1,
                 &mut output,
