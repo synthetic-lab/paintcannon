@@ -1814,10 +1814,7 @@ impl LayoutArena {
     }
 
     fn should_store_layout(&self) -> bool {
-        !self
-            .layout_mode_stack
-            .iter()
-            .any(|mode| *mode == RunMode::ComputeSize)
+        !self.layout_mode_stack.contains(&RunMode::ComputeSize)
     }
 
     fn ensure_dirty_descendants_are_laid_out(&mut self, node: NodeId) {

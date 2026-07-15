@@ -205,6 +205,34 @@ fn inside_tmux() -> bool {
     env::var_os("TMUX").is_some()
 }
 
+pub(crate) fn try_query_tmux_pane_active() -> Option<bool> {
+    let pane = env::var_os("TMUX_PANE")?;
+    let mut command = Command::new("tmux");
+    command
+        .arg("display-message")
+        .arg("-p")
+        .arg("-t")
+        .arg(pane)
+        .arg("#{pane_active}");
+
+    let output = command_output_with_timeout(command, Duration::from_millis(250))
+        .ok()
+        .flatten()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_tmux_pane_active(&output.stdout)
+}
+
+fn parse_tmux_pane_active(output: &[u8]) -> Option<bool> {
+    match output {
+        b"1\n" | b"1\r\n" => Some(true),
+        b"0\n" | b"0\r\n" => Some(false),
+        _ => None,
+    }
+}
+
 pub(crate) fn base64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -277,8 +305,8 @@ fn query_terminal_size_from<T>(_stream: T) -> Option<TerminalSize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_tmux_passthrough, terminal_color_to_background, write_terminal_reset, Background,
-        Color,
+        encode_tmux_passthrough, parse_tmux_pane_active, terminal_color_to_background,
+        write_terminal_reset, Background, Color,
     };
 
     #[test]
@@ -295,6 +323,15 @@ mod tests {
         encode_tmux_passthrough(&mut bytes, b"\x1b]22;pointer\x07").unwrap();
 
         assert_eq!(bytes, b"\x1bPtmux;\x1b\x1b]22;pointer\x07\x1b\\");
+    }
+
+    #[test]
+    fn tmux_pane_active_parser_accepts_only_tmux_boolean_output() {
+        assert_eq!(parse_tmux_pane_active(b"1\n"), Some(true));
+        assert_eq!(parse_tmux_pane_active(b"0\n"), Some(false));
+        assert_eq!(parse_tmux_pane_active(b"1\r\n"), Some(true));
+        assert_eq!(parse_tmux_pane_active(b"active\n"), None);
+        assert_eq!(parse_tmux_pane_active(b""), None);
     }
 
     #[test]

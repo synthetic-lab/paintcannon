@@ -29,7 +29,9 @@ use crate::native_event::{
     TerminalResizeEvent,
 };
 use crate::selection::{SelectionAction, SelectionMouseEvent, SelectionMouseEventType};
-use crate::terminal::{reset_pointer_shape, reset_terminal, try_query_terminal_size};
+use crate::terminal::{
+    reset_pointer_shape, reset_terminal, try_query_terminal_size, try_query_tmux_pane_active,
+};
 
 const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
 const TERMINAL_SIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -130,6 +132,7 @@ impl TerminalInput {
             let mut awaiting_initial_focus_report = true;
             let mut observed_terminal_size = Some(initial_terminal_size);
             let mut next_terminal_size_poll = Instant::now() + TERMINAL_SIZE_POLL_INTERVAL;
+            let mut tmux_focus_check_pending = false;
 
             while !thread_stop.load(Ordering::Relaxed) {
                 match terminal_event::poll(Duration::from_millis(25)) {
@@ -188,6 +191,7 @@ impl TerminalInput {
                                         (u32::from(cols), u32::from(rows)),
                                         thread_renderer_tx.as_ref(),
                                     ) {
+                                        tmux_focus_check_pending = true;
                                         thread_event_notifier.notify();
                                     }
                                 }
@@ -230,14 +234,35 @@ impl TerminalInput {
 
                 let now = Instant::now();
                 if now >= next_terminal_size_poll {
-                    if try_query_terminal_size().is_some_and(|size| {
+                    let resized = try_query_terminal_size().is_some_and(|size| {
                         observe_terminal_size(
                             &mut observed_terminal_size,
                             &thread_event_queue,
                             terminal_cell_size(size),
                             thread_renderer_tx.as_ref(),
                         )
-                    }) {
+                    });
+                    tmux_focus_check_pending |= resized;
+
+                    let recovered_tmux_blur = if tmux_focus_check_pending {
+                        tmux_focus_check_pending = false;
+                        // tmux occasionally drops its focus report when selecting another pane
+                        // also unzooms and resizes this pane. Recheck only after that resize, once
+                        // tmux has settled, rather than polling focus during ordinary operation.
+                        recover_missing_tmux_blur(
+                            try_query_tmux_pane_active(),
+                            &thread_event_queue,
+                            &thread_focused,
+                            thread_renderer_tx.as_ref(),
+                        )
+                    } else {
+                        false
+                    };
+                    if recovered_tmux_blur {
+                        awaiting_initial_focus_report = false;
+                    }
+
+                    if resized || recovered_tmux_blur {
                         thread_event_notifier.notify();
                     }
                     next_terminal_size_poll = next_poll_deadline(
@@ -749,6 +774,19 @@ fn handle_terminal_focus_event(
     }
 }
 
+fn recover_missing_tmux_blur(
+    tmux_pane_active: Option<bool>,
+    events: &NativeEventQueue,
+    current_focus: &Arc<AtomicBool>,
+    renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
+) -> bool {
+    if tmux_pane_active != Some(false) || !current_focus.load(Ordering::Relaxed) {
+        return false;
+    }
+
+    handle_terminal_focus_event(false, events, current_focus, renderer_tx, false)
+}
+
 fn push_focus_event(events: &NativeEventQueue, event: TerminalFocusEvent) {
     events.push(NativeEvent::focus(event));
 }
@@ -1097,6 +1135,69 @@ mod tests {
         handle_terminal_focus_event(true, &events, &focused, None, true);
 
         assert!(focused.load(Ordering::Relaxed));
+        assert!(events.drain().is_empty());
+    }
+
+    #[test]
+    fn tmux_resize_recovery_queues_missing_blur_after_resize() {
+        let events = NativeEventQueue::default();
+        let focused = Arc::new(AtomicBool::new(true));
+        let (renderer_tx, renderer_rx) = crossbeam_channel::bounded(2);
+        let mut observed = Some((120, 40));
+
+        assert!(observe_terminal_size(
+            &mut observed,
+            &events,
+            (80, 20),
+            Some(&renderer_tx),
+        ));
+        assert!(recover_missing_tmux_blur(
+            Some(false),
+            &events,
+            &focused,
+            Some(&renderer_tx),
+        ));
+
+        assert!(!focused.load(Ordering::Relaxed));
+        assert!(matches!(
+            renderer_rx.recv().unwrap(),
+            EngineCommand::SetRenderSize {
+                width: 80,
+                height: 20,
+            }
+        ));
+        assert!(matches!(
+            renderer_rx.recv().unwrap(),
+            EngineCommand::SetTerminalFocused { focused: false }
+        ));
+        let events = events.drain();
+        assert!(events[0].resize.is_some());
+        assert_eq!(
+            events[1].focus.as_ref().map(|event| event.r#type.as_str()),
+            Some("blur")
+        );
+    }
+
+    #[test]
+    fn tmux_resize_recovery_does_not_duplicate_or_invent_blur() {
+        let events = NativeEventQueue::default();
+        let focused = Arc::new(AtomicBool::new(true));
+
+        assert!(!recover_missing_tmux_blur(
+            Some(true),
+            &events,
+            &focused,
+            None,
+        ));
+        assert!(focused.load(Ordering::Relaxed));
+
+        focused.store(false, Ordering::Relaxed);
+        assert!(!recover_missing_tmux_blur(
+            Some(false),
+            &events,
+            &focused,
+            None,
+        ));
         assert!(events.drain().is_empty());
     }
 }
