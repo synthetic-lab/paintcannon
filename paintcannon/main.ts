@@ -7,10 +7,10 @@ import type {
   BatchIdMapping as NativeBatchIdMapping,
   CursorVisualPosition as NativeCursorVisualPosition,
   KeyboardEvent as NativeKeyboardEvent,
+  NativeEvent as NativeQueuedEvent,
   PaintCannon as NativePaintCannon,
   ScrollbarHit as NativeScrollbarHit,
   ScrollMetrics as NativeScrollMetrics,
-  TerminalInputEvent as NativeTerminalInputEvent,
   TerminalFocusEvent,
   TerminalMouseEvent,
   TerminalResizeEvent,
@@ -26,10 +26,10 @@ export type {
   BatchIdMapping as NativeBatchIdMapping,
   ClickEvent as NativeClickEvent,
   KeyboardEvent as NativeKeyboardEvent,
+  NativeEvent,
   PaintCannon as NativePaintCannon,
   ScrollbarHit as NativeScrollbarHit,
   ScrollMetrics as NativeScrollMetrics,
-  TerminalInputEvent as NativeTerminalInputEvent,
   TerminalFocusEvent,
   TerminalMouseEvent,
   TerminalResizeEvent,
@@ -1439,48 +1439,64 @@ export class PaintCannon {
       return;
     }
 
-    const inputEvents: NativeTerminalInputEvent[] = this.binding.drainInputEvents();
-    const resizeEvents = this.binding.drainResizeEvents();
-    const focusEvents = this.binding.drainFocusEvents();
-    const transitionEvents = this.binding.drainTransitionEvents();
-    const mouseEvents = this.captureMouse ? this.binding.drainMouseEvents() : [];
-
-    for (const nativeInput of inputEvents) {
-      if (nativeInput.keyboard !== undefined && nativeInput.paste === undefined) {
-        const event = new PaintKeyboardEvent(nativeInput.keyboard, this.keyboardEventTarget());
-        if (this.handleDefaultControlEvent(event)) {
-          continue;
+    const events: NativeQueuedEvent[] = this.binding.drainEvents();
+    for (const nativeEvent of events) {
+      switch (nativeEvent.kind) {
+        case "keyboard": {
+          const input = nativeEvent.keyboard;
+          if (input === undefined) throw new Error("native keyboard event is missing its payload");
+          const event = new PaintKeyboardEvent(input, this.keyboardEventTarget());
+          if (!this.handleDefaultControlEvent(event)) {
+            this.dispatchKeyboardInputEvent(event);
+          }
+          break;
         }
-
-        this.dispatchKeyboardInputEvent(event);
-      } else if (nativeInput.paste !== undefined && nativeInput.keyboard === undefined) {
-        this.dispatchPasteInputEvent(
-          new PaintClipboardEvent(nativeInput.paste, this.keyboardEventTarget()),
-        );
-      } else {
-        throw new Error("native input event must contain exactly one input variant");
+        case "paste": {
+          if (nativeEvent.paste === undefined) {
+            throw new Error("native paste event is missing its payload");
+          }
+          this.dispatchPasteInputEvent(
+            new PaintClipboardEvent(nativeEvent.paste, this.keyboardEventTarget()),
+          );
+          break;
+        }
+        case "resize": {
+          if (nativeEvent.resize === undefined) {
+            throw new Error("native resize event is missing its payload");
+          }
+          this.dispatchResizeEvent(nativeEvent.resize);
+          break;
+        }
+        case "focus": {
+          if (nativeEvent.focus === undefined) {
+            throw new Error("native focus event is missing its payload");
+          }
+          const event = new PaintCannonFocusEvent(nativeEvent.focus, this);
+          const listeners = Array.from(this.focusEventListeners[event.type]);
+          for (const listener of listeners) {
+            listener(event);
+          }
+          break;
+        }
+        case "transition": {
+          if (nativeEvent.transition === undefined) {
+            throw new Error("native transition event is missing its payload");
+          }
+          this.dispatchTransitionEvent(nativeEvent.transition);
+          break;
+        }
+        case "mouse": {
+          if (nativeEvent.mouse === undefined) {
+            throw new Error("native mouse event is missing its payload");
+          }
+          if (this.captureMouse) {
+            this.handleTerminalMouseEvent(nativeEvent.mouse);
+          }
+          break;
+        }
+        default:
+          throw new Error(`unknown native event kind: ${nativeEvent.kind}`);
       }
-    }
-
-    if (resizeEvents.length > 0) {
-      const latestResize = resizeEvents[resizeEvents.length - 1];
-      this.dispatchResizeEvent(latestResize);
-    }
-
-    for (const nativeEvent of focusEvents) {
-      const event = new PaintCannonFocusEvent(nativeEvent, this);
-      const listeners = Array.from(this.focusEventListeners[event.type]);
-      for (const listener of listeners) {
-        listener(event);
-      }
-    }
-
-    for (const event of transitionEvents) {
-      this.dispatchTransitionEvent(event);
-    }
-
-    for (const event of mouseEvents) {
-      this.handleTerminalMouseEvent(event);
     }
   }
 

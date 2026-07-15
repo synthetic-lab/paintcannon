@@ -415,9 +415,6 @@ pub(crate) enum EngineCommand {
     FlushFrame {
         response: StdSender<io::Result<()>>,
     },
-    DrainTransitionEvents {
-        response: Sender<Vec<EngineTransitionEvent>>,
-    },
     SetRenderSize {
         width: usize,
         height: usize,
@@ -1272,16 +1269,9 @@ impl PaintEngine {
         let root = self.root.and_then(|root| self.node_for(root))?;
         let total_start = Instant::now();
         let layout_start = Instant::now();
-        let layout_passes_before = self.layout_passes();
         let ensure_layout_start = Instant::now();
-        self.ensure_layout(width, height, root);
+        let layout_changed = self.ensure_layout(width, height, root);
         profile_log("ensure_layout", ensure_layout_start.elapsed(), &[]);
-        let layout_changed = layout_passes_before != self.layout_passes();
-        if layout_changed {
-            let clamp_scroll_start = Instant::now();
-            self.arena.clamp_scroll_offsets();
-            profile_log("clamp_scroll_offsets", clamp_scroll_start.elapsed(), &[]);
-        }
         let textarea_scroll_start = Instant::now();
         self.arena.ensure_dirty_textareas_visible();
         self.arena.prepare_paint(root);
@@ -1624,19 +1614,15 @@ impl PaintEngine {
             .collect()
     }
 
-    fn has_pending_transition_events(&self) -> bool {
-        self.transitions.has_events()
-    }
-
     #[cfg(test)]
     pub(crate) fn has_active_transitions(&self) -> bool {
         self.transitions.has_active()
     }
 
-    fn ensure_layout(&mut self, width: usize, height: usize, root: NodeId) {
+    fn ensure_layout(&mut self, width: usize, height: usize, root: NodeId) -> bool {
         let size = (width, height);
         if self.dirtiness != Dirtiness::Layout && self.last_layout_size == Some(size) {
-            return;
+            return false;
         }
 
         let available = Size {
@@ -1669,8 +1655,12 @@ impl PaintEngine {
             style.overflow_y = overflow_y;
             self.arena.set_style(viewport, style);
         }
+        let clamp_scroll_start = Instant::now();
+        self.arena.clamp_scroll_offsets();
+        profile_log("clamp_scroll_offsets", clamp_scroll_start.elapsed(), &[]);
         self.dirtiness = Dirtiness::Paint;
         self.last_layout_size = Some(size);
+        true
     }
 
     fn ensure_layout_for_size(&mut self, width: usize, height: usize) {

@@ -3,14 +3,11 @@ import type {
   NativeBatchIdMapping,
   NativeBinding,
   NativeKeyboardEvent,
+  NativeEvent,
   NativePaintCannon,
   NativeScrollbarHit,
   NativeScrollMetrics,
-  NativeTerminalInputEvent,
-  NativeTransitionEvent,
-  TerminalFocusEvent,
   TerminalMouseEvent,
-  TerminalResizeEvent,
   TerminalSize,
 } from "../main.ts";
 
@@ -63,11 +60,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
   cursorAtPoint: number | null = null;
   cursorVisualPositions = new Map<number, { row: number; column: number }>();
   visualLineRanges = new Map<string, { start: number; end: number }>();
-  inputEvents: NativeTerminalInputEvent[] = [];
-  focusEvents: TerminalFocusEvent[] = [];
-  mouseEvents: TerminalMouseEvent[] = [];
-  resizeEvents: TerminalResizeEvent[] = [];
-  transitionEvents: NativeTransitionEvent[] = [];
+  events: NativeEvent[] = [];
   rootId: number | undefined;
   viewportId: number | undefined;
   appendedChildren: Array<{ parent: number; child: number }> = [];
@@ -243,42 +236,15 @@ export class MockNativePaintCannon implements NativePaintCannon {
     this.onEventsAvailable();
   }
 
-  drainInputEvents(): NativeTerminalInputEvent[] {
-    const events = this.inputEvents;
-    this.inputEvents = [];
-    return events;
-  }
-
-  drainMouseEvents(): TerminalMouseEvent[] {
-    const events = this.mouseEvents;
-    this.mouseEvents = [];
-    return events;
-  }
-
-  drainResizeEvents(): TerminalResizeEvent[] {
-    const events = this.resizeEvents;
-    this.resizeEvents = [];
-    return events;
-  }
-
-  drainFocusEvents(): TerminalFocusEvent[] {
-    const events = this.focusEvents;
-    this.focusEvents = [];
-    for (const event of events) {
-      this.focused = event.type === "focus";
-    }
+  drainEvents(): NativeEvent[] {
+    const events = this.events;
+    this.events = [];
     return events;
   }
 
   queueFocusEvent(type: "focus" | "blur"): void {
     this.focused = type === "focus";
-    this.focusEvents.push({ type });
-  }
-
-  drainTransitionEvents(): NativeTransitionEvent[] {
-    const events = this.transitionEvents;
-    this.transitionEvents = [];
-    return events;
+    this.events.push({ kind: "focus", focus: { type } });
   }
 
   clickEventForMouseClick(): null {
@@ -395,31 +361,38 @@ export function keyDown(
   };
 }
 
-export function keyboardInput(event: NativeKeyboardEvent): NativeTerminalInputEvent {
-  return { keyboard: event };
+export function keyboardInput(event: NativeKeyboardEvent): NativeEvent {
+  return { kind: "keyboard", keyboard: event };
 }
 
-export function pasteInput(data: string): NativeTerminalInputEvent {
-  return { paste: data };
+export function pasteInput(data: string): NativeEvent {
+  return { kind: "paste", paste: data };
 }
 
 export function mouseEvent(
   type: TerminalMouseEvent["type"],
   options: Partial<TerminalMouseEvent> = {},
-): TerminalMouseEvent {
+): NativeEvent {
   return {
-    type,
-    x: 1,
-    y: 1,
-    button: 0,
-    deltaX: 0,
-    deltaY: 0,
-    ctrlKey: false,
-    altKey: false,
-    metaKey: false,
-    shiftKey: false,
-    ...options,
+    kind: "mouse",
+    mouse: {
+      type,
+      x: 1,
+      y: 1,
+      button: 0,
+      deltaX: 0,
+      deltaY: 0,
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      shiftKey: false,
+      ...options,
+    },
   };
+}
+
+export function resizeEvent(cols: number, rows: number): NativeEvent {
+  return { kind: "resize", resize: { cols, rows } };
 }
 
 function emptyTextControlState(): NativeTextControlState {
