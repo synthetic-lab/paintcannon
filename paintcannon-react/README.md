@@ -192,6 +192,8 @@ both supported:
 - `min-height` / `minHeight`
 - `max-height` / `maxHeight`
 - `white-space` / `whiteSpace`
+- `overflow-wrap` / `overflowWrap` (`"normal"`, `"break-word"`, or `"anywhere"`)
+- `word-break` / `wordBreak` (`"normal"`, `"break-all"`, `"keep-all"`, or `"break-word"`)
 - `border`
 - `border-top` / `borderTop`
 - `border-right` / `borderRight`

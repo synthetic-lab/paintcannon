@@ -193,6 +193,8 @@ export type ImageRendering = "ascii" | "half-block";
 export type CSSVisibility = "visible" | "hidden";
 export type CSSPosition = "static" | "relative" | "absolute";
 export type CSSWhiteSpace = "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
+export type CSSOverflowWrap = "normal" | "break-word" | "anywhere";
+export type CSSWordBreak = "normal" | "break-all" | "keep-all" | "break-word";
 export type CSSFontWeight = "normal" | "bold";
 export type CSSFontStyle = "normal" | "italic";
 export type CSSTextDecoration = "none" | "underline" | "line-through";
@@ -3415,6 +3417,22 @@ export class CSSStyleDeclaration {
     this.setProperty("white-space", value);
   }
 
+  get overflowWrap(): CSSOverflowWrap | string {
+    return this.getPropertyValue("overflow-wrap");
+  }
+
+  set overflowWrap(value: CSSOverflowWrap | string) {
+    this.setProperty("overflow-wrap", value);
+  }
+
+  get wordBreak(): CSSWordBreak | string {
+    return this.getPropertyValue("word-break");
+  }
+
+  set wordBreak(value: CSSWordBreak | string) {
+    this.setProperty("word-break", value);
+  }
+
   get imageRendering(): ImageRendering | string {
     return this.getPropertyValue("image-rendering");
   }
@@ -3798,6 +3816,8 @@ export const SUPPORTED_STYLE_PROPERTY_NAMES = [
   "min-height",
   "max-height",
   "white-space",
+  "overflow-wrap",
+  "word-break",
   "border",
   "border-top",
   "border-right",

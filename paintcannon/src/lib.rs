@@ -5,6 +5,7 @@ mod frame;
 mod image;
 mod input;
 mod layout;
+mod line_break;
 mod native_event;
 mod paint;
 mod selection;

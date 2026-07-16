@@ -24,9 +24,10 @@ use crate::style::{
     parse_font_style, parse_font_weight, parse_gap, parse_grid_auto_flow, parse_grid_auto_tracks,
     parse_grid_line, parse_grid_placement, parse_grid_template_tracks, parse_image_rendering,
     parse_justify_content, parse_length_percentage, parse_length_percentage_auto,
-    parse_margin_lengths, parse_non_negative_number, parse_opacity, parse_overflow, parse_position,
-    parse_scrollbar_color, parse_scrollbar_gutter, parse_text_decoration_line, parse_transition,
-    parse_visibility, parse_white_space, parse_z_index, Background,
+    parse_margin_lengths, parse_non_negative_number, parse_opacity, parse_overflow,
+    parse_overflow_wrap, parse_position, parse_scrollbar_color, parse_scrollbar_gutter,
+    parse_text_decoration_line, parse_transition, parse_visibility, parse_white_space,
+    parse_word_break, parse_z_index, Background,
 };
 use crate::terminal::{query_terminal_colors, query_terminal_size, reset_terminal, TerminalSize};
 
@@ -1049,6 +1050,10 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
         "min-height" | "minHeight" => StyleMutation::MinHeight(parse_dimension(value)?),
         "max-height" | "maxHeight" => StyleMutation::MaxHeight(parse_dimension(value)?),
         "white-space" | "whiteSpace" => StyleMutation::WhiteSpace(parse_white_space(value)?),
+        "overflow-wrap" | "overflowWrap" => {
+            StyleMutation::OverflowWrap(parse_overflow_wrap(value)?)
+        }
+        "word-break" | "wordBreak" => StyleMutation::WordBreak(parse_word_break(value)?),
         "border" => StyleMutation::Border(parse_border_style(value)?),
         "border-top" | "borderTop" => StyleMutation::BorderTop(parse_border_style(value)?),
         "border-right" | "borderRight" => StyleMutation::BorderRight(parse_border_style(value)?),
@@ -1148,6 +1153,8 @@ fn style_reset(property: &str) -> Result<StyleReset> {
         "scrollbar-gutter" | "scrollbarGutter" => StyleReset::ScrollbarGutter,
         "image-rendering" | "imageRendering" => StyleReset::ImageRendering,
         "white-space" | "whiteSpace" => StyleReset::WhiteSpace,
+        "overflow-wrap" | "overflowWrap" => StyleReset::OverflowWrap,
+        "word-break" | "wordBreak" => StyleReset::WordBreak,
         "flex-direction" | "flexDirection" => StyleReset::FlexDirection,
         "flex-wrap" | "flexWrap" => StyleReset::FlexWrap,
         "flex-flow" | "flexFlow" => StyleReset::FlexFlow,
@@ -1446,6 +1453,34 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn text_wrapping_style_commands_accept_supported_css_values() {
+        for value in ["normal", "break-word", "anywhere"] {
+            assert!(
+                style_command(1, "overflow-wrap", value).is_ok(),
+                "overflow-wrap should accept {value}"
+            );
+        }
+        assert!(style_command(1, "overflowWrap", "anywhere").is_ok());
+
+        for value in ["normal", "break-all", "keep-all", "break-word"] {
+            assert!(
+                style_command(1, "word-break", value).is_ok(),
+                "word-break should accept {value}"
+            );
+        }
+        assert!(style_command(1, "wordBreak", "break-all").is_ok());
+
+        assert!(style_command(1, "overflow-wrap", "").is_ok());
+        assert!(style_command(1, "word-break", "").is_ok());
+    }
+
+    #[test]
+    fn unsupported_language_aware_word_break_values_are_rejected() {
+        assert!(style_command(1, "word-break", "manual").is_err());
+        assert!(style_command(1, "word-break", "auto-phrase").is_err());
     }
 
     #[test]

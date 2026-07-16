@@ -20,6 +20,8 @@ PaintCannon supports the following CSS layout and paint features:
 - Margins and padding, including auto margins
 - Width and height constraints with `min-width`, `max-width`, `min-height`, and `max-height`,
   including percentage values
+- Unicode-aware text wrapping with `overflow-wrap: normal | break-word | anywhere` and
+  `word-break: normal | break-all | keep-all | break-word`; both default to `normal`
 - Overflow hidden and scroll, with native mouse scrolling
 - `visibility: hidden`, which preserves layout space while suppressing paint and hit testing
 - CSS `opacity`, composited once for an element and its descendants as a stacking-context group
@@ -43,6 +45,11 @@ Positioned elements support `position: static | relative | absolute`, the `top`,
 `bottom`, and `left` inset properties, and integer or `auto` `z-index` values. Absolute elements
 use the nearest non-static ancestor as their containing block and do not contribute to normal flow.
 Positioned inline elements retain their inline flow position while their painted fragments move.
+
+`overflow-wrap` and `word-break` are inherited. PaintCannon follows CSS intrinsic sizing semantics:
+`overflow-wrap: anywhere` contributes emergency break opportunities to min-content sizing, while
+`overflow-wrap: break-word` does not. The language-aware `word-break` values `manual` and
+`auto-phrase` are not currently supported.
 
 Opacity accepts numbers or percentages and is clamped to the CSS range from `0` to `1`. PaintCannon
 queries supporting terminals for their default foreground and background colors so translucent

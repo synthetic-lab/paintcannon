@@ -19,10 +19,11 @@ use crate::selection::{
 use crate::style::{
     Background, BorderStyle, CssDimension, CssFontStyle, CssFontWeight, CssGridLine,
     CssGridPlacement, CssGridTemplateTrack, CssLengthPercentage, CssLengthPercentageAuto,
-    CssPosition, CssTextDecorationLine, CssTrackSizing, CssVisibility, CssWhiteSpace, CssZIndex,
-    CursorStyle, DivStyle, ImageRendering, LayoutAlignItems, LayoutDisplay, LayoutFlexDirection,
-    LayoutFlexWrap, LayoutGridAutoFlow, LayoutJustifyContent, LayoutOverflow, ScrollbarColor,
-    ScrollbarGutter, TransitionProperty, TransitionSpec,
+    CssOverflowWrap, CssPosition, CssTextDecorationLine, CssTrackSizing, CssVisibility,
+    CssWhiteSpace, CssWordBreak, CssZIndex, CursorStyle, DivStyle, ImageRendering,
+    LayoutAlignItems, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap, LayoutGridAutoFlow,
+    LayoutJustifyContent, LayoutOverflow, ScrollbarColor, ScrollbarGutter, TransitionProperty,
+    TransitionSpec,
 };
 use crate::terminal::{query_terminal_size, write_pointer_shape};
 use crate::transition::{TransitionEvent, TransitionEventType, TransitionState};
@@ -96,6 +97,8 @@ pub(crate) enum StyleMutation {
     ScrollbarGutter(ScrollbarGutter),
     ImageRendering(ImageRendering),
     WhiteSpace(CssWhiteSpace),
+    OverflowWrap(CssOverflowWrap),
+    WordBreak(CssWordBreak),
     FlexDirection(LayoutFlexDirection),
     FlexWrap(LayoutFlexWrap),
     FlexFlow {
@@ -192,6 +195,8 @@ pub(crate) enum StyleReset {
     ScrollbarGutter,
     ImageRendering,
     WhiteSpace,
+    OverflowWrap,
+    WordBreak,
     FlexDirection,
     FlexWrap,
     FlexFlow,
@@ -925,6 +930,8 @@ impl PaintEngine {
         }
         if previous.to_taffy() != style.to_taffy()
             || previous.white_space != style.white_space
+            || previous.overflow_wrap != style.overflow_wrap
+            || previous.word_break != style.word_break
             || previous.position != style.position
         {
             self.mark_layout_dirty();
@@ -1952,6 +1959,8 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
         }
         StyleMutation::ImageRendering(image_rendering) => style.image_rendering = image_rendering,
         StyleMutation::WhiteSpace(white_space) => style.white_space = white_space,
+        StyleMutation::OverflowWrap(overflow_wrap) => style.overflow_wrap = overflow_wrap,
+        StyleMutation::WordBreak(word_break) => style.word_break = word_break,
         StyleMutation::FlexDirection(direction) => style.flex_direction = direction,
         StyleMutation::FlexWrap(flex_wrap) => style.flex_wrap = flex_wrap,
         StyleMutation::FlexFlow {
@@ -2085,6 +2094,8 @@ fn reset_style_property(style: &mut DivStyle, reset: StyleReset) {
         StyleReset::ScrollbarGutter => style.scrollbar_gutter = default.scrollbar_gutter,
         StyleReset::ImageRendering => style.image_rendering = default.image_rendering,
         StyleReset::WhiteSpace => style.white_space = default.white_space,
+        StyleReset::OverflowWrap => style.overflow_wrap = default.overflow_wrap,
+        StyleReset::WordBreak => style.word_break = default.word_break,
         StyleReset::FlexDirection => style.flex_direction = default.flex_direction,
         StyleReset::FlexWrap => style.flex_wrap = default.flex_wrap,
         StyleReset::FlexFlow => {

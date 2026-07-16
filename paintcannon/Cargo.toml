@@ -17,6 +17,8 @@ png = "0.18"
 taffy = "0.10"
 terminal-colorsaurus = "1.0"
 termprofile = { version = "0.2", features = ["color-cache", "convert", "terminfo"] }
+unicode-linebreak = "0.1"
+unicode-segmentation = "1"
 unicode-width = "0.2"
 
 [build-dependencies]

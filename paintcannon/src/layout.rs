@@ -8,9 +8,10 @@ use taffy::{
     SizingMode, Style, TraversePartialTree, TraverseTree,
 };
 
+use crate::line_break::LineBreakPlan;
 use crate::style::{
-    BorderStyle, CssDimension, CssLengthPercentageAuto, CssPosition, CssWhiteSpace, CssZIndex,
-    DivStyle, LayoutDisplay, LayoutOverflow,
+    BorderStyle, CssDimension, CssLengthPercentageAuto, CssOverflowWrap, CssPosition,
+    CssWhiteSpace, CssWordBreak, CssZIndex, DivStyle, LayoutDisplay, LayoutOverflow,
 };
 use crate::text::{character_cell_width, parse_text_for_single_line, parse_text_for_white_space};
 use crate::text_wrap::WrappedText;
@@ -123,6 +124,41 @@ struct ContentWidths {
     max: f32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TextWrapConfig {
+    white_space: CssWhiteSpace,
+    overflow_wrap: CssOverflowWrap,
+    word_break: CssWordBreak,
+}
+
+impl TextWrapConfig {
+    fn descendant(self, style: &DivStyle) -> Self {
+        Self {
+            white_space: effective_white_space(self.white_space, style.white_space),
+            overflow_wrap: resolve_overflow_wrap(self.overflow_wrap, style.overflow_wrap),
+            word_break: resolve_word_break(self.word_break, style.word_break),
+        }
+    }
+
+    fn allows_wrapping(self) -> bool {
+        white_space_allows_wrapping(self.white_space)
+    }
+
+    fn emergency_wraps(self) -> bool {
+        self.allows_wrapping()
+            && (matches!(
+                self.overflow_wrap,
+                CssOverflowWrap::Anywhere | CssOverflowWrap::BreakWord
+            ) || self.word_break == CssWordBreak::BreakWord)
+    }
+
+    fn emergency_breaks_affect_min_content(self) -> bool {
+        self.allows_wrapping()
+            && (self.overflow_wrap == CssOverflowWrap::Anywhere
+                || self.word_break == CssWordBreak::BreakWord)
+    }
+}
+
 #[derive(Default)]
 struct InlineMeasureCache {
     width: Option<InlineWidthCacheEntry>,
@@ -133,23 +169,23 @@ struct InlineMeasureCache {
 
 #[derive(Clone, Copy)]
 struct InlineWidthCacheEntry {
-    white_space: CssWhiteSpace,
+    config: TextWrapConfig,
     widths: ContentWidths,
 }
 
 #[derive(Clone, Copy)]
 struct InlineHeightCacheEntry {
-    white_space: CssWhiteSpace,
+    config: TextWrapConfig,
     width: u32,
     height: f32,
 }
 
 impl InlineMeasureCache {
-    fn width(&self, white_space: CssWhiteSpace) -> Option<ContentWidths> {
+    fn width(&self, config: TextWrapConfig) -> Option<ContentWidths> {
         self.width
             .iter()
             .chain(&self.extra_widths)
-            .find(|entry| entry.white_space == white_space)
+            .find(|entry| entry.config == config)
             .map(|entry| entry.widths)
     }
 
@@ -161,11 +197,11 @@ impl InlineMeasureCache {
         }
     }
 
-    fn height(&self, white_space: CssWhiteSpace, width: u32) -> Option<f32> {
+    fn height(&self, config: TextWrapConfig, width: u32) -> Option<f32> {
         self.height
             .iter()
             .chain(&self.extra_heights)
-            .find(|entry| entry.white_space == white_space && entry.width == width)
+            .find(|entry| entry.config == config && entry.width == width)
             .map(|entry| entry.height)
     }
 
@@ -688,6 +724,8 @@ impl LayoutArena {
         let taffy_style = style.to_taffy();
         let layout_changed = item.taffy_style != taffy_style
             || item.style.white_space != style.white_space
+            || item.style.overflow_wrap != style.overflow_wrap
+            || item.style.word_break != style.word_break
             || item.style.position != style.position;
         if item.style.position != style.position
             || item.style.z_index != style.z_index
@@ -1633,7 +1671,7 @@ impl LayoutArena {
         }
 
         let layout = self.layout(node_id);
-        let white_space = self.nodes[index].style.white_space;
+        let text_wrap = self.text_wrap_config(node_id);
         let overflow_x = self.nodes[index].style.overflow_x;
         let overflow_y = self.nodes[index].style.overflow_y;
         let scroll_left = self.nodes[index].scroll_left;
@@ -1649,9 +1687,9 @@ impl LayoutArena {
         let mut scroll_height = client_height;
 
         if self.is_inline_context(node_id) {
-            let widths = self.inline_content_widths(node_id, white_space);
+            let widths = self.inline_content_widths(node_id, text_wrap);
             let content_width = float_to_cells(scroll_content_box_size(layout).width).max(1);
-            let height = self.inline_content_height(node_id, white_space, content_width);
+            let height = self.inline_content_height(node_id, text_wrap, content_width);
             scroll_width = scroll_width.max(float_to_cells(
                 layout.padding.left + widths.max + layout.padding.right,
             ));
@@ -1911,8 +1949,8 @@ impl LayoutArena {
             .width
             .max(1.0)
             .round() as u32;
-        let white_space = self.nodes[index].style.white_space;
-        self.compute_inline_fragments(node, white_space, width);
+        let text_wrap = self.text_wrap_config(node);
+        self.compute_inline_fragments(node, text_wrap, width);
         self.mark_inline_descendants_clean(node);
     }
 
@@ -1971,6 +2009,36 @@ impl LayoutArena {
         has_inline
     }
 
+    fn text_wrap_config(&self, node: NodeId) -> TextWrapConfig {
+        let mut white_space = None;
+        let mut overflow_wrap = None;
+        let mut word_break = None;
+        let mut current = Some(node);
+
+        while let Some(node_id) = current {
+            let item = &self.nodes[node_index(node_id)];
+            if white_space.is_none() && item.style.white_space != CssWhiteSpace::Normal {
+                white_space = Some(item.style.white_space);
+            }
+            if overflow_wrap.is_none() && item.style.overflow_wrap != CssOverflowWrap::Inherit {
+                overflow_wrap = Some(item.style.overflow_wrap);
+            }
+            if word_break.is_none() && item.style.word_break != CssWordBreak::Inherit {
+                word_break = Some(item.style.word_break);
+            }
+            if white_space.is_some() && overflow_wrap.is_some() && word_break.is_some() {
+                break;
+            }
+            current = item.parent;
+        }
+
+        TextWrapConfig {
+            white_space: white_space.unwrap_or(CssWhiteSpace::Normal),
+            overflow_wrap: overflow_wrap.unwrap_or(CssOverflowWrap::Normal),
+            word_break: word_break.unwrap_or(CssWordBreak::Normal),
+        }
+    }
+
     fn compute_inline_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
         let LayoutInput {
             known_dimensions,
@@ -1981,6 +2049,7 @@ impl LayoutArena {
             ..
         } = inputs;
 
+        let text_wrap = self.text_wrap_config(node_id);
         let (
             margin_style,
             padding_style,
@@ -1991,7 +2060,6 @@ impl LayoutArena {
             style_min_size,
             style_max_size,
             scrollbar_gutter,
-            white_space,
         ) = {
             let node = &self.nodes[node_index(node_id)];
             let style = &node.taffy_style;
@@ -2005,7 +2073,6 @@ impl LayoutArena {
                 style.min_size,
                 style.max_size,
                 scrollbar_gutter_for_style(style),
-                node.style.white_space,
             )
         };
 
@@ -2083,7 +2150,7 @@ impl LayoutArena {
         };
 
         let inline_width_start = Instant::now();
-        let content_widths = self.inline_content_widths(node_id, white_space);
+        let content_widths = self.inline_content_widths(node_id, text_wrap);
         self.profile.inline_width_calls += 1;
         self.profile.inline_width_ns += inline_width_start.elapsed().as_nanos();
         let content_width = known_dimensions
@@ -2107,14 +2174,14 @@ impl LayoutArena {
 
         let inline_height_start = Instant::now();
         let content_height =
-            self.inline_content_height(node_id, white_space, content_width.max(1.0).round() as u32);
+            self.inline_content_height(node_id, text_wrap, content_width.max(1.0).round() as u32);
         self.profile.inline_height_calls += 1;
         self.profile.inline_height_ns += inline_height_start.elapsed().as_nanos();
         if run_mode == RunMode::PerformLayout && self.should_store_layout() {
             let inline_fragment_start = Instant::now();
             self.compute_inline_fragments(
                 node_id,
-                white_space,
+                text_wrap,
                 content_width.max(1.0).round() as u32,
             );
             self.mark_inline_descendants_clean(node_id);
@@ -2143,13 +2210,9 @@ impl LayoutArena {
         LayoutOutput::from_sizes(outer_size, measured_size)
     }
 
-    fn inline_content_widths(
-        &mut self,
-        node_id: NodeId,
-        white_space: CssWhiteSpace,
-    ) -> ContentWidths {
+    fn inline_content_widths(&mut self, node_id: NodeId, config: TextWrapConfig) -> ContentWidths {
         let index = node_index(node_id);
-        if let Some(widths) = self.nodes[index].measure_cache.width(white_space) {
+        if let Some(widths) = self.nodes[index].measure_cache.width(config) {
             return widths;
         }
 
@@ -2157,7 +2220,7 @@ impl LayoutArena {
         let mut widths = ContentWidths { min: 1.0, max: 0.0 };
         for child_index in 0..child_count {
             let child = self.nodes[index].children[child_index];
-            let item = self.inline_node_widths(child, white_space);
+            let item = self.inline_node_widths(child, config);
             widths = ContentWidths {
                 min: widths.min.max(item.min),
                 max: widths.max + item.max,
@@ -2165,30 +2228,24 @@ impl LayoutArena {
         }
         self.nodes[index]
             .measure_cache
-            .insert_width(InlineWidthCacheEntry {
-                white_space,
-                widths,
-            });
+            .insert_width(InlineWidthCacheEntry { config, widths });
         widths
     }
 
     fn inline_node_widths(
         &mut self,
         node_id: NodeId,
-        inherited_white_space: CssWhiteSpace,
+        inherited_config: TextWrapConfig,
     ) -> ContentWidths {
         let index = node_index(node_id);
         if self.nodes[index].style.position == CssPosition::Absolute {
             return ContentWidths { min: 0.0, max: 0.0 };
         }
         match &self.nodes[index].kind {
-            LayoutNodeKind::Text(text) => text_content_widths(text, inherited_white_space),
+            LayoutNodeKind::Text(text) => text_content_widths(text, inherited_config),
             LayoutNodeKind::Element if self.nodes[index].style.display == LayoutDisplay::Inline => {
-                let white_space = effective_white_space(
-                    inherited_white_space,
-                    self.nodes[index].style.white_space,
-                );
-                self.inline_content_widths(node_id, white_space)
+                let config = inherited_config.descendant(&self.nodes[index].style);
+                self.inline_content_widths(node_id, config)
             }
             LayoutNodeKind::Image(_) | LayoutNodeKind::Input(_) | LayoutNodeKind::TextArea(_)
                 if self.nodes[index].style.display == LayoutDisplay::Inline =>
@@ -2206,15 +2263,10 @@ impl LayoutArena {
         }
     }
 
-    fn inline_content_height(
-        &mut self,
-        node: NodeId,
-        white_space: CssWhiteSpace,
-        width: u32,
-    ) -> f32 {
+    fn inline_content_height(&mut self, node: NodeId, config: TextWrapConfig, width: u32) -> f32 {
         let width = width.max(1);
         let index = node_index(node);
-        if let Some(height) = self.nodes[index].measure_cache.height(white_space, width) {
+        if let Some(height) = self.nodes[index].measure_cache.height(config, width) {
             return height;
         }
 
@@ -2227,13 +2279,13 @@ impl LayoutArena {
         let child_count = self.nodes[index].children.len();
         for child_index in 0..child_count {
             let child = self.nodes[index].children[child_index];
-            self.measure_inline_node(child, white_space, &mut cursor);
+            self.measure_inline_node(child, config, &mut cursor);
         }
         let height = (cursor.row + 1).max(1) as f32;
         self.nodes[index]
             .measure_cache
             .insert_height(InlineHeightCacheEntry {
-                white_space,
+                config,
                 width,
                 height,
             });
@@ -2243,7 +2295,7 @@ impl LayoutArena {
     fn measure_inline_node(
         &mut self,
         node: NodeId,
-        inherited_white_space: CssWhiteSpace,
+        inherited_config: TextWrapConfig,
         cursor: &mut InlineMeasureCursor,
     ) {
         let index = node_index(node);
@@ -2251,16 +2303,13 @@ impl LayoutArena {
             return;
         }
         match &self.nodes[index].kind {
-            LayoutNodeKind::Text(text) => measure_inline_text(text, inherited_white_space, cursor),
+            LayoutNodeKind::Text(text) => measure_inline_text(text, inherited_config, cursor),
             LayoutNodeKind::Element if self.nodes[index].style.display == LayoutDisplay::Inline => {
-                let white_space = effective_white_space(
-                    inherited_white_space,
-                    self.nodes[index].style.white_space,
-                );
+                let config = inherited_config.descendant(&self.nodes[index].style);
                 let child_count = self.nodes[index].children.len();
                 for child_index in 0..child_count {
                     let child = self.nodes[index].children[child_index];
-                    self.measure_inline_node(child, white_space, cursor);
+                    self.measure_inline_node(child, config, cursor);
                 }
             }
             LayoutNodeKind::Image(_) | LayoutNodeKind::Input(_) | LayoutNodeKind::TextArea(_)
@@ -2276,11 +2325,11 @@ impl LayoutArena {
         }
     }
 
-    fn compute_inline_fragments(&mut self, node: NodeId, white_space: CssWhiteSpace, width: u32) {
+    fn compute_inline_fragments(&mut self, node: NodeId, config: TextWrapConfig, width: u32) {
         let index = node_index(node);
         let fragment_capacity = self.nodes[index]
             .measure_cache
-            .width(white_space)
+            .width(config)
             .map(|widths| widths.max.ceil() as usize)
             .unwrap_or(0);
         let mut cursor = InlineLayoutCursor {
@@ -2296,7 +2345,7 @@ impl LayoutArena {
         let child_count = self.nodes[index].children.len();
         for child_index in 0..child_count {
             let child = self.nodes[index].children[child_index];
-            self.layout_inline_node(child, white_space, None, &mut cursor);
+            self.layout_inline_node(child, config, None, &mut cursor);
         }
         for (absolute, position) in cursor.absolute_positions {
             self.nodes[node_index(absolute)].inline_static_position = Some(position);
@@ -2324,7 +2373,7 @@ impl LayoutArena {
     fn layout_inline_node(
         &self,
         node: NodeId,
-        inherited_white_space: CssWhiteSpace,
+        inherited_config: TextWrapConfig,
         hit_target: Option<NodeId>,
         cursor: &mut InlineLayoutCursor,
     ) {
@@ -2344,13 +2393,12 @@ impl LayoutArena {
         }
         match &item.kind {
             LayoutNodeKind::Text(text) => {
-                layout_inline_text(node, hit_target, text, inherited_white_space, cursor)
+                layout_inline_text(node, hit_target, text, inherited_config, cursor)
             }
             LayoutNodeKind::Element if item.style.display == LayoutDisplay::Inline => {
-                let white_space =
-                    effective_white_space(inherited_white_space, item.style.white_space);
+                let config = inherited_config.descendant(&item.style);
                 for child in &item.children {
-                    self.layout_inline_node(*child, white_space, Some(node), cursor);
+                    self.layout_inline_node(*child, config, Some(node), cursor);
                 }
             }
             LayoutNodeKind::Image(_) | LayoutNodeKind::Input(_) | LayoutNodeKind::TextArea(_)
@@ -2756,7 +2804,15 @@ fn textarea_natural_size(textarea: &TextAreaLayoutData, wrap_width: Option<u32>)
         width: u32::MAX,
         max_col: 0,
     };
-    measure_inline_text(&textarea.value, CssWhiteSpace::PreWrap, &mut cursor);
+    measure_inline_text(
+        &textarea.value,
+        TextWrapConfig {
+            white_space: CssWhiteSpace::PreWrap,
+            overflow_wrap: CssOverflowWrap::BreakWord,
+            word_break: CssWordBreak::Normal,
+        },
+        &mut cursor,
+    );
     let width = cursor.max_col.max(cursor.col).max(1);
     // Taffy may reuse this result when its returned width later becomes known.
     let wrapped = WrappedText::new(&textarea.value, width as usize);
@@ -2781,7 +2837,15 @@ fn text_leaf_size(
         width: wrap_width.unwrap_or(u32::MAX).max(1),
         max_col: 0,
     };
-    measure_inline_text(text, CssWhiteSpace::Normal, &mut cursor);
+    measure_inline_text(
+        text,
+        TextWrapConfig {
+            white_space: CssWhiteSpace::Normal,
+            overflow_wrap: CssOverflowWrap::Normal,
+            word_break: CssWordBreak::Normal,
+        },
+        &mut cursor,
+    );
     Size {
         width: known_dimensions
             .width
@@ -3066,137 +3130,91 @@ fn axis_max_scroll(overflow: LayoutOverflow, max_scroll: u32) -> u32 {
     }
 }
 
-fn text_content_widths(text: &str, white_space: CssWhiteSpace) -> ContentWidths {
-    let chars = parse_text_for_white_space(text, white_space);
-    if !white_space_allows_wrapping(white_space) {
-        let width = max_line_width(&chars, white_space_preserves_newlines(white_space));
-        return ContentWidths {
-            min: width,
-            max: width,
-        };
+fn text_content_widths(text: &str, config: TextWrapConfig) -> ContentWidths {
+    let chars = parse_text_for_white_space(text, config.white_space);
+    let preserve_newlines = white_space_preserves_newlines(config.white_space);
+    let max = max_line_width(&chars, preserve_newlines);
+    if !config.allows_wrapping() {
+        return ContentWidths { min: max, max };
     }
 
+    let plan = LineBreakPlan::new(&chars, config.word_break);
     let mut min_width = 1;
-    let mut current_word = 0;
-    let mut max_width = 0;
-    for character in chars {
+    let mut segment_width = 0;
+    let mut trailing_space_width = 0;
+    for (index, character) in chars.iter().copied().enumerate() {
         if character == '\r' {
-            continue;
-        }
-        if character == '\n' && white_space_preserves_newlines(white_space) {
-            min_width = min_width.max(current_word);
-            current_word = 0;
-            continue;
-        }
-        let width = character_cell_width(character) as u32;
-        max_width += width;
-        if character.is_whitespace() {
-            min_width = min_width.max(current_word);
-            current_word = 0;
-        } else {
-            current_word += width;
-        }
-    }
-    min_width = min_width.max(current_word);
-
-    ContentWidths {
-        min: min_width.max(1) as f32,
-        max: max_width.max(1) as f32,
-    }
-}
-
-fn measure_inline_text(text: &str, white_space: CssWhiteSpace, cursor: &mut InlineMeasureCursor) {
-    let chars = parse_text_for_white_space(text, white_space);
-    let wrap = white_space_allows_wrapping(white_space);
-    let preserve_newlines = white_space_preserves_newlines(white_space);
-    let mut index = 0;
-    while index < chars.len() {
-        let character = chars[index];
-        if character == '\r' {
-            index += 1;
             continue;
         }
         if character == '\n' && preserve_newlines {
-            cursor.max_col = cursor.max_col.max(cursor.col);
-            cursor.row += 1;
-            cursor.col = 0;
-            index += 1;
+            min_width = min_width.max(segment_width - trailing_space_width);
+            segment_width = 0;
+            trailing_space_width = 0;
             continue;
         }
-        if wrap && is_word_start(&chars, index) {
-            let word_end = next_word_end(&chars, index);
-            let word_width = text_width(&chars[index..word_end]);
-            if word_width <= cursor.width
-                && cursor.col > 0
-                && cursor.col + word_width > cursor.width
-            {
-                cursor.max_col = cursor.max_col.max(cursor.col);
-                cursor.row += 1;
-                cursor.col = 0;
-            }
+
+        let can_break = if config.emergency_breaks_affect_min_content() {
+            plan.is_grapheme_break_before(index)
+        } else {
+            plan.is_soft_break_before(index)
+        };
+        if can_break {
+            min_width = min_width.max(segment_width - trailing_space_width);
+            segment_width = 0;
+            trailing_space_width = 0;
         }
+
         let width = character_cell_width(character) as u32;
-        if wrap && cursor.col > 0 && width > 0 && cursor.col + width > cursor.width {
-            cursor.max_col = cursor.max_col.max(cursor.col);
-            cursor.row += 1;
-            cursor.col = 0;
-            if character == ' ' {
-                index += 1;
-                continue;
-            }
+        if character.is_whitespace() {
+            trailing_space_width += width;
+        } else {
+            trailing_space_width = 0;
         }
-        cursor.col += width;
-        cursor.max_col = cursor.max_col.max(cursor.col);
-        index += 1;
+        segment_width += width;
     }
+    min_width = min_width.max(segment_width - trailing_space_width);
+
+    ContentWidths {
+        min: min_width.max(1) as f32,
+        max,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct InlineTextFlow {
+    col: u32,
+    row: u32,
+    width: u32,
+    max_col: u32,
+}
+
+fn measure_inline_text(text: &str, config: TextWrapConfig, cursor: &mut InlineMeasureCursor) {
+    let mut flow = InlineTextFlow {
+        col: cursor.col,
+        row: cursor.row,
+        width: cursor.width,
+        max_col: cursor.max_col,
+    };
+    flow_inline_text(text, config, &mut flow, |_, _, _, _| {});
+    cursor.col = flow.col;
+    cursor.row = flow.row;
+    cursor.max_col = flow.max_col;
 }
 
 fn layout_inline_text(
     node: NodeId,
     hit_target: Option<NodeId>,
     text: &str,
-    white_space: CssWhiteSpace,
+    config: TextWrapConfig,
     cursor: &mut InlineLayoutCursor,
 ) {
-    let chars = parse_text_for_white_space(text, white_space);
-    let wrap = white_space_allows_wrapping(white_space);
-    let preserve_newlines = white_space_preserves_newlines(white_space);
-    let mut index = 0;
-    while index < chars.len() {
-        let character = chars[index];
-        if character == '\r' {
-            index += 1;
-            continue;
-        }
-        if character == '\n' && preserve_newlines {
-            cursor.max_col = cursor.max_col.max(cursor.col);
-            cursor.row += 1;
-            cursor.col = 0;
-            index += 1;
-            continue;
-        }
-        if wrap && is_word_start(&chars, index) {
-            let word_end = next_word_end(&chars, index);
-            let word_width = text_width(&chars[index..word_end]);
-            if word_width <= cursor.width
-                && cursor.col > 0
-                && cursor.col + word_width > cursor.width
-            {
-                cursor.max_col = cursor.max_col.max(cursor.col);
-                cursor.row += 1;
-                cursor.col = 0;
-            }
-        }
-        let width = character_cell_width(character) as u32;
-        if wrap && cursor.col > 0 && width > 0 && cursor.col + width > cursor.width {
-            cursor.max_col = cursor.max_col.max(cursor.col);
-            cursor.row += 1;
-            cursor.col = 0;
-            if character == ' ' {
-                index += 1;
-                continue;
-            }
-        }
+    let mut flow = InlineTextFlow {
+        col: cursor.col,
+        row: cursor.row,
+        width: cursor.width,
+        max_col: cursor.max_col,
+    };
+    flow_inline_text(text, config, &mut flow, |character, x, y, width| {
         if width > 0 {
             let selection_order = cursor.selection_order;
             cursor.selection_order += 1;
@@ -3207,16 +3225,73 @@ fn layout_inline_text(
                     character,
                     selection_order,
                 },
-                x: cursor.col,
-                y: cursor.row,
+                x,
+                y,
                 width,
                 height: 1,
             });
         }
+    });
+    cursor.col = flow.col;
+    cursor.row = flow.row;
+    cursor.max_col = flow.max_col;
+}
+
+fn flow_inline_text(
+    text: &str,
+    config: TextWrapConfig,
+    cursor: &mut InlineTextFlow,
+    mut emit: impl FnMut(char, u32, u32, u32),
+) {
+    let chars = parse_text_for_white_space(text, config.white_space);
+    let plan = LineBreakPlan::new(&chars, config.word_break);
+    let preserve_newlines = white_space_preserves_newlines(config.white_space);
+
+    for (index, character) in chars.iter().copied().enumerate() {
+        if character == '\r' {
+            continue;
+        }
+        if character == '\n' && preserve_newlines {
+            inline_text_new_line(cursor);
+            continue;
+        }
+
+        let soft_break_before = plan.is_soft_break_before(index)
+            || (index == 0 && config.word_break == CssWordBreak::BreakAll);
+        if config.allows_wrapping() && cursor.col > 0 && soft_break_before {
+            let segment_end = plan.next_soft_break(&chars, index);
+            let segment_width = text_width(&chars[index..segment_end]);
+            if cursor.col + segment_width > cursor.width
+                && (segment_width <= cursor.width || !config.emergency_wraps())
+            {
+                inline_text_new_line(cursor);
+            }
+        }
+
+        let width = character_cell_width(character) as u32;
+        if config.allows_wrapping()
+            && cursor.col > 0
+            && cursor.col + width > cursor.width
+            && (character == ' '
+                || (config.emergency_wraps()
+                    && (index == 0 || plan.is_grapheme_break_before(index))))
+        {
+            inline_text_new_line(cursor);
+            if character == ' ' {
+                continue;
+            }
+        }
+
+        emit(character, cursor.col, cursor.row, width);
         cursor.col += width;
         cursor.max_col = cursor.max_col.max(cursor.col);
-        index += 1;
     }
+}
+
+fn inline_text_new_line(cursor: &mut InlineTextFlow) {
+    cursor.max_col = cursor.max_col.max(cursor.col);
+    cursor.row += 1;
+    cursor.col = 0;
 }
 
 fn white_space_allows_wrapping(white_space: CssWhiteSpace) -> bool {
@@ -3250,18 +3325,6 @@ fn max_line_width(chars: &[char], preserve_newlines: bool) -> f32 {
     max_width.max(width).max(1) as f32
 }
 
-fn next_word_end(chars: &[char], start: usize) -> usize {
-    let mut index = start;
-    while index < chars.len() && !chars[index].is_whitespace() {
-        index += 1;
-    }
-    index
-}
-
-fn is_word_start(chars: &[char], index: usize) -> bool {
-    !chars[index].is_whitespace() && (index == 0 || chars[index - 1].is_whitespace())
-}
-
 fn text_width(chars: &[char]) -> u32 {
     chars
         .iter()
@@ -3277,13 +3340,30 @@ fn effective_white_space(inherited: CssWhiteSpace, own: CssWhiteSpace) -> CssWhi
     }
 }
 
+fn resolve_overflow_wrap(inherited: CssOverflowWrap, own: CssOverflowWrap) -> CssOverflowWrap {
+    if own == CssOverflowWrap::Inherit {
+        inherited
+    } else {
+        own
+    }
+}
+
+fn resolve_word_break(inherited: CssWordBreak, own: CssWordBreak) -> CssWordBreak {
+    if own == CssWordBreak::Inherit {
+        inherited
+    } else {
+        own
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::style::{
         BorderStyle, CssDimension, CssGridTemplateTrack, CssLengthPercentage,
-        CssLengthPercentageAuto, CssPosition, CssTrackSizing, CssWhiteSpace, LayoutAlignItems,
-        LayoutFlexDirection, LayoutJustifyContent, LayoutOverflow, ScrollbarGutter,
+        CssLengthPercentageAuto, CssOverflowWrap, CssPosition, CssTrackSizing, CssWhiteSpace,
+        CssWordBreak, LayoutAlignItems, LayoutFlexDirection, LayoutJustifyContent, LayoutOverflow,
+        ScrollbarGutter,
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
@@ -4326,6 +4406,7 @@ mod tests {
         let mut arena = LayoutArena::new();
         let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Length(3.0));
         viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.overflow_wrap = CssOverflowWrap::Anywhere;
         let viewport = arena.create_element(viewport_style);
         let text = arena.create_text("abcde");
         arena.append_child(viewport, text);
@@ -5524,6 +5605,384 @@ mod tests {
     }
 
     #[test]
+    fn overflow_wrap_normal_leaves_an_unbreakable_word_on_one_line() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Length(4.0), CssDimension::Auto);
+        row_style.overflow_wrap = CssOverflowWrap::Normal;
+        let row = arena.create_element(row_style);
+        let text = arena.create_text("abcdefgh");
+        arena.append_child(row, text);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        let fragments = arena.inline_fragments(row);
+        assert!(fragments.iter().all(|fragment| fragment.y == 0));
+        assert_eq!(fragments.last().unwrap().x, 7);
+    }
+
+    #[test]
+    fn text_wrapping_defaults_match_css_initial_values() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(DivStyle::default());
+        let config = arena.text_wrap_config(root);
+
+        assert_eq!(config.overflow_wrap, CssOverflowWrap::Normal);
+        assert_eq!(config.word_break, CssWordBreak::Normal);
+    }
+
+    #[test]
+    fn overflow_wrap_anywhere_and_break_word_wrap_long_words() {
+        for overflow_wrap in [CssOverflowWrap::Anywhere, CssOverflowWrap::BreakWord] {
+            let mut arena = LayoutArena::new();
+            let mut row_style = block_style(CssDimension::Length(4.0), CssDimension::Auto);
+            row_style.overflow_wrap = overflow_wrap;
+            let row = arena.create_element(row_style);
+            let text = arena.create_text("abcdefgh");
+            arena.append_child(row, text);
+
+            arena.compute_layout(
+                row,
+                Size {
+                    width: AvailableSpace::Definite(4.0),
+                    height: AvailableSpace::MaxContent,
+                },
+            );
+
+            assert!(arena
+                .inline_fragments(row)
+                .iter()
+                .any(|fragment| fragment.y == 1));
+        }
+    }
+
+    #[test]
+    fn overflow_wrap_is_inherited_and_normal_can_override_it() {
+        let wraps = |span_overflow_wrap| {
+            let mut arena = LayoutArena::new();
+            let mut row_style = block_style(CssDimension::Length(3.0), CssDimension::Auto);
+            row_style.overflow_wrap = CssOverflowWrap::Anywhere;
+            let row = arena.create_element(row_style);
+            let span = arena.create_element(DivStyle {
+                display: LayoutDisplay::Inline,
+                overflow_wrap: span_overflow_wrap,
+                ..DivStyle::default()
+            });
+            let text = arena.create_text("abcdef");
+            arena.append_child(span, text);
+            arena.append_child(row, span);
+
+            arena.compute_layout(
+                row,
+                Size {
+                    width: AvailableSpace::Definite(3.0),
+                    height: AvailableSpace::MaxContent,
+                },
+            );
+
+            arena
+                .inline_fragments(row)
+                .iter()
+                .any(|fragment| fragment.y == 1)
+        };
+
+        assert!(wraps(CssOverflowWrap::Inherit));
+        assert!(!wraps(CssOverflowWrap::Normal));
+    }
+
+    #[test]
+    fn overflow_wrap_anywhere_but_not_break_word_reduces_min_content_width() {
+        let measure = |overflow_wrap| {
+            let mut arena = LayoutArena::new();
+            let mut row_style = block_style(CssDimension::Auto, CssDimension::Auto);
+            row_style.overflow_wrap = overflow_wrap;
+            let row = arena.create_element(row_style);
+            let text = arena.create_text("abcdefgh");
+            arena.append_child(row, text);
+
+            arena
+                .compute_inline_layout(
+                    row,
+                    LayoutInput {
+                        known_dimensions: Size::NONE,
+                        parent_size: Size::NONE,
+                        available_space: Size {
+                            width: AvailableSpace::MinContent,
+                            height: AvailableSpace::MaxContent,
+                        },
+                        sizing_mode: SizingMode::InherentSize,
+                        axis: taffy::RequestedAxis::Both,
+                        run_mode: RunMode::ComputeSize,
+                        vertical_margins_are_collapsible: taffy::Line::FALSE,
+                    },
+                )
+                .size
+                .width
+        };
+
+        assert_eq!(measure(CssOverflowWrap::Anywhere), 1.0);
+        assert_eq!(measure(CssOverflowWrap::BreakWord), 8.0);
+    }
+
+    #[test]
+    fn word_break_break_all_uses_the_remaining_space_on_a_line() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Length(5.0), CssDimension::Auto);
+        row_style.word_break = CssWordBreak::BreakAll;
+        let row = arena.create_element(row_style);
+        let text = arena.create_text("ab cdef");
+        arena.append_child(row, text);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        let c = arena
+            .inline_fragments(row)
+            .iter()
+            .find(|fragment| {
+                matches!(
+                    fragment.kind,
+                    InlineFragmentKind::Text { character: 'c', .. }
+                )
+            })
+            .unwrap();
+        assert_eq!((c.x, c.y), (3, 0));
+    }
+
+    #[test]
+    fn word_break_break_word_wraps_and_reduces_min_content_width() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Auto, CssDimension::Auto);
+        row_style.word_break = CssWordBreak::BreakWord;
+        let row = arena.create_element(row_style);
+        let text = arena.create_text("abcdefgh");
+        arena.append_child(row, text);
+
+        let min_content = arena
+            .compute_inline_layout(
+                row,
+                LayoutInput {
+                    known_dimensions: Size::NONE,
+                    parent_size: Size::NONE,
+                    available_space: Size {
+                        width: AvailableSpace::MinContent,
+                        height: AvailableSpace::MaxContent,
+                    },
+                    sizing_mode: SizingMode::InherentSize,
+                    axis: taffy::RequestedAxis::Both,
+                    run_mode: RunMode::ComputeSize,
+                    vertical_margins_are_collapsible: taffy::Line::FALSE,
+                },
+            )
+            .size
+            .width;
+        assert_eq!(min_content, 1.0);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        assert!(arena
+            .inline_fragments(row)
+            .iter()
+            .any(|fragment| fragment.y == 1));
+    }
+
+    #[test]
+    fn word_break_keep_all_does_not_break_cjk_words() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Length(4.0), CssDimension::Auto);
+        row_style.word_break = CssWordBreak::KeepAll;
+        let row = arena.create_element(row_style);
+        let text = arena.create_text("你好世界");
+        arena.append_child(row, text);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        assert!(arena
+            .inline_fragments(row)
+            .iter()
+            .all(|fragment| fragment.y == 0));
+    }
+
+    #[test]
+    fn word_break_normal_uses_unicode_line_break_opportunities() {
+        let mut arena = LayoutArena::new();
+        let row = arena.create_element(block_style(CssDimension::Length(5.0), CssDimension::Auto));
+        let text = arena.create_text("x ab-cd");
+        arena.append_child(row, text);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        let hyphen = arena
+            .inline_fragments(row)
+            .iter()
+            .find(|fragment| {
+                matches!(
+                    fragment.kind,
+                    InlineFragmentKind::Text { character: '-', .. }
+                )
+            })
+            .unwrap();
+        assert_eq!((hyphen.x, hyphen.y), (4, 0));
+    }
+
+    #[test]
+    fn word_break_is_inherited_by_inline_descendants() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Length(5.0), CssDimension::Auto);
+        row_style.word_break = CssWordBreak::BreakAll;
+        let row = arena.create_element(row_style);
+        let span = arena.create_element(DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        });
+        let text = arena.create_text("ab cdef");
+        arena.append_child(span, text);
+        arena.append_child(row, span);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        let c = arena
+            .inline_fragments(row)
+            .iter()
+            .find(|fragment| {
+                matches!(
+                    fragment.kind,
+                    InlineFragmentKind::Text { character: 'c', .. }
+                )
+            })
+            .unwrap();
+        assert_eq!((c.x, c.y), (3, 0));
+    }
+
+    #[test]
+    fn word_break_is_inherited_across_block_formatting_contexts() {
+        let mut arena = LayoutArena::new();
+        let mut parent_style = block_style(CssDimension::Length(5.0), CssDimension::Auto);
+        parent_style.display = LayoutDisplay::Flex;
+        parent_style.word_break = CssWordBreak::BreakAll;
+        let parent = arena.create_element(parent_style);
+        let child =
+            arena.create_element(block_style(CssDimension::Length(5.0), CssDimension::Auto));
+        let text = arena.create_text("ab cdef");
+        arena.append_child(child, text);
+        arena.append_child(parent, child);
+
+        arena.compute_layout(
+            parent,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        let c = arena
+            .inline_fragments(child)
+            .iter()
+            .find(|fragment| {
+                matches!(
+                    fragment.kind,
+                    InlineFragmentKind::Text { character: 'c', .. }
+                )
+            })
+            .unwrap();
+        assert_eq!((c.x, c.y), (3, 0));
+    }
+
+    #[test]
+    fn word_break_break_all_wraps_at_a_sibling_span_boundary() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Length(2.0), CssDimension::Auto);
+        row_style.word_break = CssWordBreak::BreakAll;
+        let row = arena.create_element(row_style);
+        for value in ["ab", "cd"] {
+            let span = arena.create_element(DivStyle {
+                display: LayoutDisplay::Inline,
+                ..DivStyle::default()
+            });
+            let text = arena.create_text(value);
+            arena.append_child(span, text);
+            arena.append_child(row, span);
+        }
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(2.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        let c = arena
+            .inline_fragments(row)
+            .iter()
+            .find(|fragment| {
+                matches!(
+                    fragment.kind,
+                    InlineFragmentKind::Text { character: 'c', .. }
+                )
+            })
+            .unwrap();
+        assert_eq!((c.x, c.y), (0, 1));
+    }
+
+    #[test]
+    fn nowrap_disables_overflow_wrap_anywhere() {
+        let mut arena = LayoutArena::new();
+        let mut row_style = block_style(CssDimension::Length(4.0), CssDimension::Auto);
+        row_style.white_space = CssWhiteSpace::NoWrap;
+        row_style.overflow_wrap = CssOverflowWrap::Anywhere;
+        let row = arena.create_element(row_style);
+        let text = arena.create_text("abcdefgh");
+        arena.append_child(row, text);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+
+        assert!(arena
+            .inline_fragments(row)
+            .iter()
+            .all(|fragment| fragment.y == 0));
+    }
+
+    #[test]
     fn inline_fragments_preserve_span_targets_across_wrapping() {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Length(4.0), CssDimension::Auto));
@@ -5555,7 +6014,9 @@ mod tests {
     #[test]
     fn inline_fragments_keep_selection_order_across_spans() {
         let mut arena = LayoutArena::new();
-        let row = arena.create_element(block_style(CssDimension::Length(3.0), CssDimension::Auto));
+        let mut row_style = block_style(CssDimension::Length(3.0), CssDimension::Auto);
+        row_style.overflow_wrap = CssOverflowWrap::Anywhere;
+        let row = arena.create_element(row_style);
         let span_style = DivStyle {
             display: LayoutDisplay::Inline,
             ..DivStyle::default()

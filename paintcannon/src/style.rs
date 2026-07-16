@@ -72,6 +72,8 @@ pub(crate) struct DivStyle {
     pub(crate) scrollbar_gutter: ScrollbarGutter,
     pub(crate) image_rendering: ImageRendering,
     pub(crate) white_space: CssWhiteSpace,
+    pub(crate) overflow_wrap: CssOverflowWrap,
+    pub(crate) word_break: CssWordBreak,
 }
 
 impl Default for DivStyle {
@@ -139,6 +141,8 @@ impl Default for DivStyle {
             scrollbar_gutter: ScrollbarGutter::Auto,
             image_rendering: ImageRendering::HalfBlock,
             white_space: CssWhiteSpace::Normal,
+            overflow_wrap: CssOverflowWrap::Inherit,
+            word_break: CssWordBreak::Inherit,
         }
     }
 }
@@ -224,6 +228,23 @@ pub(crate) enum CssWhiteSpace {
     Pre,
     PreWrap,
     PreLine,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CssOverflowWrap {
+    Inherit,
+    Normal,
+    BreakWord,
+    Anywhere,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CssWordBreak {
+    Inherit,
+    Normal,
+    BreakAll,
+    KeepAll,
+    BreakWord,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1346,6 +1367,29 @@ pub(crate) fn parse_white_space(value: &str) -> Result<CssWhiteSpace> {
         "pre-line" | "preLine" => Ok(CssWhiteSpace::PreLine),
         value => Err(Error::from_reason(format!(
             "unsupported white-space: {value}"
+        ))),
+    }
+}
+
+pub(crate) fn parse_overflow_wrap(value: &str) -> Result<CssOverflowWrap> {
+    match value.trim() {
+        "normal" => Ok(CssOverflowWrap::Normal),
+        "break-word" => Ok(CssOverflowWrap::BreakWord),
+        "anywhere" => Ok(CssOverflowWrap::Anywhere),
+        value => Err(Error::from_reason(format!(
+            "unsupported overflow-wrap: {value}"
+        ))),
+    }
+}
+
+pub(crate) fn parse_word_break(value: &str) -> Result<CssWordBreak> {
+    match value.trim() {
+        "normal" => Ok(CssWordBreak::Normal),
+        "break-all" => Ok(CssWordBreak::BreakAll),
+        "keep-all" => Ok(CssWordBreak::KeepAll),
+        "break-word" => Ok(CssWordBreak::BreakWord),
+        value => Err(Error::from_reason(format!(
+            "unsupported word-break: {value}"
         ))),
     }
 }
