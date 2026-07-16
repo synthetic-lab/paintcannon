@@ -107,6 +107,18 @@ pub(super) fn apply_command(
     state: &mut EngineLoopState,
     command: EngineCommand,
 ) -> bool {
+    engine.begin_transition_batch();
+    let keep_running = apply_command_inner(engine, state, command);
+    engine.finish_transition_batch(Instant::now());
+    publish_transition_events(engine, state);
+    keep_running
+}
+
+fn apply_command_inner(
+    engine: &mut PaintEngine,
+    state: &mut EngineLoopState,
+    command: EngineCommand,
+) -> bool {
     match command {
         EngineCommand::Batch { commands } => {
             let start = Instant::now();
@@ -121,7 +133,7 @@ pub(super) fn apply_command(
                 if !pending_destroys.is_empty() {
                     engine.destroy_nodes(pending_destroys.drain(..));
                 }
-                if !apply_command(engine, state, command) {
+                if !apply_command_inner(engine, state, command) {
                     profile_log(
                         "batch_apply",
                         start.elapsed(),
@@ -377,7 +389,6 @@ pub(super) fn apply_command(
         }
     }
 
-    publish_transition_events(engine, state);
     true
 }
 
@@ -419,7 +430,7 @@ mod tests {
     use crossbeam_channel::bounded;
 
     use super::*;
-    use crate::engine::{Dirtiness, DomId};
+    use crate::engine::{Dirtiness, DomId, StyleMutation};
     use crate::style::{
         CssDimension, DivStyle, LayoutOverflow, TransitionProperty, TransitionSpec,
     };
@@ -541,6 +552,278 @@ mod tests {
                 .as_ref()
                 .map(|event| event.r#type.as_str()),
             Some("transitionstart")
+        );
+    }
+
+    #[test]
+    fn later_batch_starts_opacity_transition_before_first_frame() {
+        let mut engine = PaintEngine::new();
+        let event_queue = Arc::new(NativeEventQueue::default());
+        let mut state = EngineLoopState::new(&EngineLoopOptions {
+            event_queue: Arc::clone(&event_queue),
+            ..test_loop_options()
+        });
+        let root = DomId(1);
+        let mut initial_style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
+        initial_style.opacity = 0.0;
+
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::Batch {
+                commands: vec![
+                    EngineCommand::CreateElementWithId {
+                        id: root,
+                        style: initial_style,
+                    },
+                    EngineCommand::SetTransition {
+                        node: root,
+                        transitions: vec![TransitionSpec {
+                            property: TransitionProperty::Opacity,
+                            duration_ms: 100,
+                        }],
+                    },
+                    EngineCommand::SetRoot { root },
+                ],
+            },
+        ));
+        assert!(!engine.has_active_transitions());
+        assert!(event_queue.drain().is_empty());
+        assert_eq!(engine.layout_passes(), 0);
+
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::Batch {
+                commands: vec![EngineCommand::MutateStyle {
+                    node: root,
+                    mutation: StyleMutation::Opacity(0.4),
+                }],
+            },
+        ));
+
+        assert!(engine.has_active_transitions());
+        assert_eq!(engine.layout_passes(), 0);
+        let events = event_queue.drain();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "transition");
+        assert_eq!(
+            events[0]
+                .transition
+                .as_ref()
+                .map(|event| event.r#type.as_str()),
+            Some("transitionstart")
+        );
+    }
+
+    #[test]
+    fn initial_connected_style_does_not_transition() {
+        let mut engine = PaintEngine::new();
+        let event_queue = Arc::new(NativeEventQueue::default());
+        let mut state = EngineLoopState::new(&EngineLoopOptions {
+            event_queue: Arc::clone(&event_queue),
+            ..test_loop_options()
+        });
+        let root = DomId(1);
+        let mut style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
+        style.opacity = 0.5;
+
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::Batch {
+                commands: vec![
+                    EngineCommand::CreateElementWithId { id: root, style },
+                    EngineCommand::SetTransition {
+                        node: root,
+                        transitions: vec![TransitionSpec {
+                            property: TransitionProperty::Opacity,
+                            duration_ms: 100,
+                        }],
+                    },
+                    EngineCommand::SetRoot { root },
+                ],
+            },
+        ));
+
+        assert!(!engine.has_active_transitions());
+        assert!(event_queue.drain().is_empty());
+        assert_eq!(engine.style_for(root).unwrap().opacity, 0.5);
+    }
+
+    #[test]
+    fn detached_initial_styles_establish_when_the_subtree_is_attached() {
+        let mut engine = PaintEngine::new();
+        let event_queue = Arc::new(NativeEventQueue::default());
+        let mut state = EngineLoopState::new(&EngineLoopOptions {
+            event_queue: Arc::clone(&event_queue),
+            ..test_loop_options()
+        });
+        let root = DomId(1);
+        let overlay = DomId(2);
+
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::Batch {
+                commands: vec![
+                    EngineCommand::CreateElementWithId {
+                        id: root,
+                        style: DivStyle::default(),
+                    },
+                    EngineCommand::SetRoot { root },
+                ],
+            },
+        ));
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::CreateElementWithId {
+                id: overlay,
+                style: DivStyle::default(),
+            },
+        ));
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::SetTransition {
+                node: overlay,
+                transitions: vec![TransitionSpec {
+                    property: TransitionProperty::Opacity,
+                    duration_ms: 100,
+                }],
+            },
+        ));
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::MutateStyle {
+                node: overlay,
+                mutation: StyleMutation::Opacity(0.0),
+            },
+        ));
+        assert!(!engine.has_active_transitions());
+
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::AppendChild {
+                parent: root,
+                child: overlay,
+            },
+        ));
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::MutateStyle {
+                node: overlay,
+                mutation: StyleMutation::Opacity(0.4),
+            },
+        ));
+
+        assert!(engine.has_active_transitions());
+        assert_eq!(event_queue.drain().len(), 1);
+        assert_eq!(engine.layout_passes(), 0);
+    }
+
+    #[test]
+    fn batch_uses_final_transition_declaration_regardless_of_command_order() {
+        let mut engine = PaintEngine::new();
+        let event_queue = Arc::new(NativeEventQueue::default());
+        let mut state = EngineLoopState::new(&EngineLoopOptions {
+            event_queue: Arc::clone(&event_queue),
+            ..test_loop_options()
+        });
+        let root = DomId(1);
+        let mut style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
+        style.opacity = 0.0;
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::Batch {
+                commands: vec![
+                    EngineCommand::CreateElementWithId { id: root, style },
+                    EngineCommand::SetRoot { root },
+                ],
+            },
+        ));
+
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::Batch {
+                commands: vec![
+                    EngineCommand::MutateStyle {
+                        node: root,
+                        mutation: StyleMutation::Opacity(0.5),
+                    },
+                    EngineCommand::SetTransition {
+                        node: root,
+                        transitions: vec![TransitionSpec {
+                            property: TransitionProperty::Opacity,
+                            duration_ms: 100,
+                        }],
+                    },
+                ],
+            },
+        ));
+
+        assert!(engine.has_active_transitions());
+        assert_eq!(event_queue.drain().len(), 1);
+    }
+
+    #[test]
+    fn batch_transitions_to_the_final_style_value() {
+        let mut engine = PaintEngine::new();
+        let mut state = EngineLoopState::new(&test_loop_options());
+        let root = DomId(1);
+        let mut style = block_style(CssDimension::Length(4.0), CssDimension::Length(1.0));
+        style.opacity = 0.0;
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::Batch {
+                commands: vec![
+                    EngineCommand::CreateElementWithId { id: root, style },
+                    EngineCommand::SetTransition {
+                        node: root,
+                        transitions: vec![TransitionSpec {
+                            property: TransitionProperty::Opacity,
+                            duration_ms: 100,
+                        }],
+                    },
+                    EngineCommand::SetRoot { root },
+                ],
+            },
+        ));
+
+        assert!(apply_command(
+            &mut engine,
+            &mut state,
+            EngineCommand::Batch {
+                commands: vec![
+                    EngineCommand::MutateStyle {
+                        node: root,
+                        mutation: StyleMutation::Opacity(0.2),
+                    },
+                    EngineCommand::MutateStyle {
+                        node: root,
+                        mutation: StyleMutation::Opacity(0.7),
+                    },
+                ],
+            },
+        ));
+
+        let node = engine.node_for(root).unwrap();
+        assert_eq!(engine.style_for(root).unwrap().opacity, 0.7);
+        assert_eq!(
+            engine.transitions.paint_opacity(
+                node,
+                0.7,
+                Instant::now() + Duration::from_millis(200),
+                true,
+            ),
+            0.7,
         );
     }
 

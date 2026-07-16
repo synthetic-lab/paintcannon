@@ -438,6 +438,13 @@ enum Dirtiness {
     Layout,
 }
 
+#[derive(Default)]
+struct TransitionBatch {
+    previous_styles: HashMap<NodeId, DivStyle>,
+    style_order: Vec<NodeId>,
+    newly_connected: HashSet<NodeId>,
+}
+
 pub(crate) struct PaintEngine {
     arena: LayoutArena,
     root: Option<DomId>,
@@ -454,6 +461,9 @@ pub(crate) struct PaintEngine {
     hit_regions: Vec<HitRegion>,
     selection: SelectionState,
     transitions: TransitionState,
+    transition_batch: Option<TransitionBatch>,
+    connected_nodes: HashSet<NodeId>,
+    established_nodes: HashSet<NodeId>,
     truecolor_enabled: bool,
     terminal_foreground: Background,
     terminal_background: Background,
@@ -482,6 +492,9 @@ impl PaintEngine {
             hit_regions: Vec::new(),
             selection: SelectionState::default(),
             transitions: TransitionState::default(),
+            transition_batch: None,
+            connected_nodes: HashSet::new(),
+            established_nodes: HashSet::new(),
             truecolor_enabled: true,
             terminal_foreground: Background::White,
             terminal_background: Background::Black,
@@ -501,6 +514,38 @@ impl PaintEngine {
         if self.dirtiness == Dirtiness::Clean {
             self.dirtiness = Dirtiness::Paint;
         }
+    }
+
+    fn begin_transition_batch(&mut self) {
+        debug_assert!(self.transition_batch.is_none());
+        self.transition_batch = Some(TransitionBatch::default());
+    }
+
+    fn finish_transition_batch(&mut self, now: Instant) {
+        let Some(batch) = self.transition_batch.take() else {
+            return;
+        };
+
+        for node in batch.style_order {
+            let Some(previous) = batch.previous_styles.get(&node) else {
+                continue;
+            };
+            if !self.node_to_dom.contains_key(&node) {
+                continue;
+            }
+            let style = self.arena.style(node).clone();
+            let transitions_enabled = self.truecolor_enabled
+                && self.established_nodes.contains(&node)
+                && self.connected_nodes.contains(&node);
+            self.apply_style_transitions(node, previous, &style, now, transitions_enabled);
+        }
+
+        self.established_nodes.extend(
+            batch
+                .newly_connected
+                .into_iter()
+                .filter(|node| self.connected_nodes.contains(node)),
+        );
     }
 
     #[cfg(test)]
@@ -623,6 +668,8 @@ impl PaintEngine {
         let Some(child_node) = self.node_for(child) else {
             return false;
         };
+        let parent_is_connected = self.connected_nodes.contains(&parent_node);
+        let child_was_connected = self.connected_nodes.contains(&child_node);
 
         if let Some(old_parent) = self.parents.insert(child, parent) {
             if let Some(old_parent_node) = self.node_for(old_parent) {
@@ -636,6 +683,11 @@ impl PaintEngine {
         self.children.entry(parent).or_default().push(child);
         self.mark_layout_dirty();
         self.arena.append_child(parent_node, child_node);
+        self.update_reparented_subtree_connectivity(
+            child,
+            child_was_connected,
+            parent_is_connected,
+        );
         true
     }
 
@@ -654,6 +706,8 @@ impl PaintEngine {
         let Some(before_node) = self.node_for(before) else {
             return false;
         };
+        let parent_is_connected = self.connected_nodes.contains(&parent_node);
+        let child_was_connected = self.connected_nodes.contains(&child_node);
 
         if let Some(old_parent) = self.parents.insert(child, parent) {
             if let Some(old_parent_node) = self.node_for(old_parent) {
@@ -674,6 +728,11 @@ impl PaintEngine {
         self.mark_layout_dirty();
         self.arena
             .insert_child_before(parent_node, child_node, before_node);
+        self.update_reparented_subtree_connectivity(
+            child,
+            child_was_connected,
+            parent_is_connected,
+        );
         true
     }
 
@@ -681,7 +740,15 @@ impl PaintEngine {
         if self.node_for(root).is_none() {
             return false;
         }
+        if self.root == Some(root) {
+            self.mark_layout_dirty();
+            return true;
+        }
+        if let Some(previous_root) = self.root {
+            self.disconnect_subtree(previous_root);
+        }
         self.root = Some(root);
+        self.connect_subtree(root);
         self.mark_layout_dirty();
         true
     }
@@ -747,6 +814,13 @@ impl PaintEngine {
             .iter()
             .filter_map(|node| self.node_for(*node))
             .collect::<HashSet<_>>();
+        for node in &removed_layout_nodes {
+            self.connected_nodes.remove(node);
+            self.established_nodes.remove(node);
+            if let Some(batch) = self.transition_batch.as_mut() {
+                batch.newly_connected.remove(node);
+            }
+        }
         if self
             .selection_scroll_node
             .is_some_and(|node| removed_layout_nodes.contains(&node))
@@ -786,6 +860,7 @@ impl PaintEngine {
         };
 
         if self.root == Some(node) {
+            self.disconnect_subtree(node);
             self.root = None;
             self.mark_layout_dirty();
             return true;
@@ -801,6 +876,7 @@ impl PaintEngine {
         if let Some(siblings) = self.children.get_mut(&parent) {
             siblings.retain(|id| *id != node);
         }
+        self.disconnect_subtree(node);
         self.mark_layout_dirty();
         true
     }
@@ -836,7 +912,36 @@ impl PaintEngine {
 
     fn set_node_style_at(&mut self, node: NodeId, style: DivStyle, now: Instant) {
         let previous = self.arena.style(node).clone();
-        let transitions_enabled = self.truecolor_enabled && self.arena.has_computed_layout(node);
+        if let Some(batch) = self.transition_batch.as_mut() {
+            if !batch.previous_styles.contains_key(&node) {
+                batch.style_order.push(node);
+                batch.previous_styles.insert(node, previous.clone());
+            }
+        } else {
+            let transitions_enabled = self.truecolor_enabled
+                && self.established_nodes.contains(&node)
+                && self.connected_nodes.contains(&node);
+            self.apply_style_transitions(node, &previous, &style, now, transitions_enabled);
+        }
+        if previous.to_taffy() != style.to_taffy()
+            || previous.white_space != style.white_space
+            || previous.position != style.position
+        {
+            self.mark_layout_dirty();
+        } else {
+            self.mark_paint_dirty();
+        }
+        self.arena.set_style(node, style);
+    }
+
+    fn apply_style_transitions(
+        &mut self,
+        node: NodeId,
+        previous: &DivStyle,
+        style: &DivStyle,
+        now: Instant,
+        transitions_enabled: bool,
+    ) {
         self.transitions.style_color_changed(
             node,
             TransitionProperty::Color,
@@ -868,15 +973,6 @@ impl PaintEngine {
             now,
             transitions_enabled,
         );
-        if previous.to_taffy() != style.to_taffy()
-            || previous.white_space != style.white_space
-            || previous.position != style.position
-        {
-            self.mark_layout_dirty();
-        } else {
-            self.mark_paint_dirty();
-        }
-        self.arena.set_style(node, style);
         self.arena
             .set_opacity_transition_active(node, self.transitions.has_active_opacity(node));
     }
@@ -1617,6 +1713,56 @@ impl PaintEngine {
     #[cfg(test)]
     pub(crate) fn has_active_transitions(&self) -> bool {
         self.transitions.has_active()
+    }
+
+    fn update_reparented_subtree_connectivity(
+        &mut self,
+        child: DomId,
+        was_connected: bool,
+        is_connected: bool,
+    ) {
+        match (was_connected, is_connected) {
+            (false, true) => self.connect_subtree(child),
+            (true, false) => self.disconnect_subtree(child),
+            _ => {}
+        }
+    }
+
+    fn connect_subtree(&mut self, root: DomId) {
+        for node in self.subtree_nodes(root) {
+            if self.connected_nodes.insert(node) {
+                if let Some(batch) = self.transition_batch.as_mut() {
+                    batch.newly_connected.insert(node);
+                } else {
+                    self.established_nodes.insert(node);
+                }
+            }
+        }
+    }
+
+    fn disconnect_subtree(&mut self, root: DomId) {
+        for node in self.subtree_nodes(root) {
+            self.connected_nodes.remove(&node);
+            self.established_nodes.remove(&node);
+            if let Some(batch) = self.transition_batch.as_mut() {
+                batch.newly_connected.remove(&node);
+            }
+        }
+    }
+
+    fn subtree_nodes(&self, root: DomId) -> Vec<NodeId> {
+        let mut nodes = Vec::new();
+        let mut pending = vec![root];
+        while let Some(dom_id) = pending.pop() {
+            let Some(node) = self.node_for(dom_id) else {
+                continue;
+            };
+            nodes.push(node);
+            if let Some(children) = self.children.get(&dom_id) {
+                pending.extend(children.iter().rev().copied());
+            }
+        }
+        nodes
     }
 
     fn ensure_layout(&mut self, width: usize, height: usize, root: NodeId) -> bool {

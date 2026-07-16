@@ -1127,7 +1127,8 @@ fn initial_opacity_does_not_transition_from_the_internal_default() {
     let root = engine.create_element(root_style);
     let mut overlay_style = block_style(CssDimension::Length(2.0), CssDimension::Length(1.0));
     overlay_style.background = Background::Black;
-    let overlay = engine.create_element(overlay_style.clone());
+    overlay_style.opacity = 0.5;
+    let overlay = engine.create_element(overlay_style);
     engine.append_child(root, overlay);
     engine.set_root(root);
     let start = std::time::Instant::now();
@@ -1139,8 +1140,6 @@ fn initial_opacity_does_not_transition_from_the_internal_default() {
             duration_ms: 200,
         }],
     );
-    overlay_style.opacity = 0.5;
-    engine.set_style_at(overlay, overlay_style, start);
 
     let frame = engine.render_frame_at(2, 1, start).unwrap();
     assert_eq!(
