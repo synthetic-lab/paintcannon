@@ -1956,8 +1956,17 @@ export class PaintCannon {
     deltaY: number,
   ): PaintElement | undefined {
     for (const element of this.elementPath(target)) {
-      const canScrollX = deltaX !== 0 && this.isElementAxisScrollable(element, "x");
-      const canScrollY = deltaY !== 0 && this.isElementAxisScrollable(element, "y");
+      const scrollsX = deltaX !== 0 && this.isElementAxisScrollable(element, "x");
+      const scrollsY = deltaY !== 0 && this.isElementAxisScrollable(element, "y");
+      if (!scrollsX && !scrollsY) {
+        continue;
+      }
+      const metrics = this.getScrollMetrics(element);
+      if (metrics === undefined) {
+        continue;
+      }
+      const canScrollX = scrollsX && canScrollAxisInDirection("x", deltaX, metrics);
+      const canScrollY = scrollsY && canScrollAxisInDirection("y", deltaY, metrics);
       if (canScrollX || canScrollY) {
         return element;
       }
@@ -3728,6 +3737,18 @@ function isElementAxisScrollable(element: PaintElement, axis: ScrollbarAxis): bo
   }
 
   return element instanceof TextAreaElement && axis === "y" && overflow !== "hidden";
+}
+
+function canScrollAxisInDirection(
+  axis: ScrollbarAxis,
+  delta: number,
+  metrics: NativeScrollMetrics,
+): boolean {
+  const offset = axis === "x" ? metrics.scrollLeft : metrics.scrollTop;
+  const scrollLength = axis === "x" ? metrics.scrollWidth : metrics.scrollHeight;
+  const clientLength = axis === "x" ? metrics.clientWidth : metrics.clientHeight;
+  const maxOffset = Math.max(0, scrollLength - clientLength);
+  return delta < 0 ? offset > 0 : offset < maxOffset;
 }
 
 function scrollbarCoordinate(input: TerminalMouseEvent, axis: ScrollbarAxis): number {

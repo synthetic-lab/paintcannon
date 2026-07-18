@@ -466,6 +466,74 @@ describe("core native scrollbar events", () => {
     expect(mockNative.scrollMetrics(viewportId).scrollTop).toBe(3);
   });
 
+  it("chains upward wheel events to a scrollable parent at the child's top edge", () => {
+    const { paintCannon, mockNative, root, child } = createPaintTree({ captureMouse: true });
+    const events: string[] = [];
+    root.style.overflowY = "scroll";
+    child.style.overflowY = "scroll";
+    mockNative.targetIdAtPoint = child.id;
+    mockNative.scrollMetricsById.set(root.id, {
+      scrollLeft: 0,
+      scrollTop: 12,
+      scrollWidth: 10,
+      scrollHeight: 100,
+      clientWidth: 10,
+      clientHeight: 10,
+    });
+    mockNative.scrollMetricsById.set(child.id, {
+      scrollLeft: 0,
+      scrollTop: 0,
+      scrollWidth: 10,
+      scrollHeight: 100,
+      clientWidth: 10,
+      clientHeight: 10,
+    });
+    root.addEventListener("scroll", () => events.push("root"));
+    child.addEventListener("scroll", () => events.push("child"));
+
+    mockNative.events.push(mouseEvent("wheel", { deltaY: -1 }));
+    notifyNativeEvents(paintCannon);
+    paintCannon.stop();
+
+    expect(mockNative.scrollMetrics(child.id).scrollTop).toBe(0);
+    expect(mockNative.scrollMetrics(root.id).scrollTop).toBe(9);
+    expect(events).toEqual(["root"]);
+  });
+
+  it("chains leftward wheel events to a scrollable parent at the child's left edge", () => {
+    const { paintCannon, mockNative, root, child } = createPaintTree({ captureMouse: true });
+    const events: string[] = [];
+    root.style.overflowX = "scroll";
+    child.style.overflowX = "scroll";
+    mockNative.targetIdAtPoint = child.id;
+    mockNative.scrollMetricsById.set(root.id, {
+      scrollLeft: 12,
+      scrollTop: 0,
+      scrollWidth: 100,
+      scrollHeight: 10,
+      clientWidth: 10,
+      clientHeight: 10,
+    });
+    mockNative.scrollMetricsById.set(child.id, {
+      scrollLeft: 0,
+      scrollTop: 0,
+      scrollWidth: 100,
+      scrollHeight: 10,
+      clientWidth: 10,
+      clientHeight: 10,
+    });
+    root.addEventListener("scroll", () => events.push("root"));
+    child.addEventListener("scroll", () => events.push("child"));
+
+    mockNative.events.push(mouseEvent("wheel", { deltaX: -1 }));
+    notifyNativeEvents(paintCannon);
+    paintCannon.stop();
+
+    expect(mockNative.scrollMetrics(child.id).scrollLeft).toBe(0);
+    expect(mockNative.scrollMetrics(root.id).scrollLeft).toBe(8);
+    expect(events).toEqual(["root"]);
+  });
+
   it("drags vertical scrollbar thumbs by mapping rail position to scroll offset", () => {
     const { paintCannon, mockNative, child } = createPaintTree({ captureMouse: true });
     const scrollTops: number[] = [];
