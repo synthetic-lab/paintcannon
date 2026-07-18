@@ -402,15 +402,6 @@ function installProcessCleanupHandlers(): void {
 
   processCleanupInstalled = true;
   process.once("exit", cleanupLivePaintCannons);
-  process.prependListener("uncaughtExceptionMonitor", cleanupLivePaintCannons);
-  process.prependListener("unhandledRejection", reason => {
-    cleanupLivePaintCannons();
-    if (process.listenerCount("unhandledRejection") === 1) {
-      setImmediate(() => {
-        throw reason instanceof Error ? reason : new Error(String(reason));
-      });
-    }
-  });
 
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     const handler: NodeJS.SignalsListener = () => {
