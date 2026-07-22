@@ -108,7 +108,6 @@ impl TerminalInput {
                 PushKeyboardEnhancementFlags(
                     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
                 )
             );
             set_bool(&keyboard_enhancement_pushed, true);
@@ -385,7 +384,6 @@ impl TerminalInput {
                 PushKeyboardEnhancementFlags(
                     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
                 )
             );
             set_bool(&self.keyboard_enhancement_pushed, true);
@@ -519,12 +517,14 @@ fn handle_terminal_key_event(
     };
 
     let code = pressed_key.code.clone();
-    let has_real_release = event.kind == KeyEventKind::Release;
     match event.kind {
         KeyEventKind::Press | KeyEventKind::Repeat => {
             let repeat = event.kind == KeyEventKind::Repeat || pressed_keys.contains_key(&code);
             let mut pressed_key = pressed_key;
-            pressed_key.synthetic_keyup_at = if kitty_keyboard_enabled {
+            pressed_key.synthetic_keyup_at = if kitty_keyboard_enabled
+                && is_non_printable_key(&event.code)
+            // under kitty, non-printable keys (arrows, Tab, ...) report their own keyup
+            {
                 None
             } else {
                 synthetic_keyup_deadline(synthetic_keyup_delay_ms)
@@ -544,11 +544,6 @@ fn handle_terminal_key_event(
         }
     }
 
-    if has_real_release {
-        for pressed_key in pressed_keys.values_mut() {
-            pressed_key.synthetic_keyup_at = None;
-        }
-    }
     true
 }
 
@@ -882,6 +877,10 @@ fn pressed_key_from_terminal(event: TerminalKeyEvent) -> Option<PressedKey> {
     })
 }
 
+const fn is_non_printable_key(code: &KeyCode) -> bool {
+    !matches!(code, KeyCode::Char(_))
+}
+
 fn control_character_key(character: char, modifiers: KeyModifiers) -> Option<PressedKey> {
     let value = character as u32;
     if !(1..=26).contains(&value) {
@@ -1211,5 +1210,188 @@ mod tests {
             None,
         ));
         assert!(events.drain().is_empty());
+    }
+
+    #[test]
+    fn pressed_key_from_terminal_passes_through_shifted_byte() {
+        let event = TerminalKeyEvent::new_with_kind(
+            KeyCode::Char('A'),
+            KeyModifiers::SHIFT,
+            KeyEventKind::Press,
+        );
+        let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
+        assert_eq!(pressed_key.key, "A");
+        assert_eq!(pressed_key.code, "KeyA");
+        assert!(pressed_key.shift_key);
+        assert!(!pressed_key.ctrl_key);
+        assert!(!pressed_key.alt_key);
+        assert!(!pressed_key.meta_key);
+    }
+
+    #[test]
+    fn pressed_key_from_terminal_passes_through_shifted_symbol() {
+        let event = TerminalKeyEvent::new_with_kind(
+            KeyCode::Char('!'),
+            KeyModifiers::SHIFT,
+            KeyEventKind::Press,
+        );
+        let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
+        assert_eq!(pressed_key.key, "!");
+        assert_eq!(pressed_key.code, "Digit1");
+        assert!(pressed_key.shift_key);
+    }
+
+    #[test]
+    fn pressed_key_from_terminal_plain_letter_without_shift_stays_lowercase() {
+        let event = TerminalKeyEvent::new_with_kind(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+            KeyEventKind::Press,
+        );
+        let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
+        assert_eq!(pressed_key.key, "a");
+        assert!(!pressed_key.shift_key);
+    }
+
+    #[test]
+    fn pressed_key_from_terminal_shift_tab_keeps_named_key_and_shift_flag() {
+        let event = TerminalKeyEvent::new_with_kind(
+            KeyCode::BackTab,
+            KeyModifiers::SHIFT,
+            KeyEventKind::Press,
+        );
+        let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
+        assert_eq!(pressed_key.key, "Tab");
+        assert_eq!(pressed_key.code, "Tab");
+        assert!(pressed_key.shift_key);
+    }
+
+    fn synthetic_keyup_delay(delay_ms: u32) -> Arc<Mutex<u32>> {
+        Arc::new(Mutex::new(delay_ms))
+    }
+
+    #[test]
+    fn printable_char_schedules_synthetic_keyup_under_kitty_without_all_keys_flag() {
+        let events = NativeEventQueue::default();
+        let delay = synthetic_keyup_delay(DEFAULT_SYNTHETIC_KEYUP_MS);
+        let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
+
+        handle_terminal_key_event(
+            TerminalKeyEvent::new_with_kind(
+                KeyCode::Char('a'),
+                KeyModifiers::NONE,
+                KeyEventKind::Press,
+            ),
+            &mut pressed_keys,
+            &events,
+            &delay,
+            true,
+        );
+
+        let pressed_key = pressed_keys
+            .get("KeyA")
+            .expect("printable press should be tracked");
+        assert!(
+            pressed_key.synthetic_keyup_at.is_some(),
+            "printable chars need a synthetic keyup when REPORT_ALL_KEYS_AS_ESCAPE_CODES is off"
+        );
+    }
+
+    #[test]
+    fn disambiguated_key_does_not_schedule_synthetic_keyup_under_kitty() {
+        let events = NativeEventQueue::default();
+        let delay = synthetic_keyup_delay(DEFAULT_SYNTHETIC_KEYUP_MS);
+        let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
+
+        handle_terminal_key_event(
+            TerminalKeyEvent::new_with_kind(KeyCode::Tab, KeyModifiers::NONE, KeyEventKind::Press),
+            &mut pressed_keys,
+            &events,
+            &delay,
+            true,
+        );
+
+        let pressed_key = pressed_keys
+            .get("Tab")
+            .expect("tab press should be tracked");
+        assert!(
+            pressed_key.synthetic_keyup_at.is_none(),
+            "disambiguated keys report real release events under kitty and must not schedule a synthetic keyup"
+        );
+
+        events.drain();
+    }
+
+    #[test]
+    fn arrow_key_does_not_schedule_synthetic_keyup_under_kitty() {
+        let events = NativeEventQueue::default();
+        let delay = synthetic_keyup_delay(DEFAULT_SYNTHETIC_KEYUP_MS);
+        let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
+
+        handle_terminal_key_event(
+            TerminalKeyEvent::new_with_kind(KeyCode::Left, KeyModifiers::NONE, KeyEventKind::Press),
+            &mut pressed_keys,
+            &events,
+            &delay,
+            true,
+        );
+
+        let pressed_key = pressed_keys
+            .get("ArrowLeft")
+            .expect("arrow press should be tracked");
+        assert!(pressed_key.synthetic_keyup_at.is_none());
+        events.drain();
+    }
+
+    #[test]
+    fn every_key_schedules_synthetic_keyup_in_legacy_mode() {
+        let events = NativeEventQueue::default();
+        let delay = synthetic_keyup_delay(DEFAULT_SYNTHETIC_KEYUP_MS);
+        let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
+
+        handle_terminal_key_event(
+            TerminalKeyEvent::new_with_kind(KeyCode::Tab, KeyModifiers::NONE, KeyEventKind::Press),
+            &mut pressed_keys,
+            &events,
+            &delay,
+            false,
+        );
+
+        let pressed_key = pressed_keys
+            .get("Tab")
+            .expect("tab press should be tracked");
+        assert!(
+            pressed_key.synthetic_keyup_at.is_some(),
+            "legacy mode never reports real releases, so every key needs a synthetic keyup"
+        );
+        events.drain();
+    }
+
+    #[test]
+    fn zero_synthetic_keyup_delay_disables_synthetic_release() {
+        let events = NativeEventQueue::default();
+        let delay = synthetic_keyup_delay(0);
+        let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
+
+        handle_terminal_key_event(
+            TerminalKeyEvent::new_with_kind(
+                KeyCode::Char('a'),
+                KeyModifiers::NONE,
+                KeyEventKind::Press,
+            ),
+            &mut pressed_keys,
+            &events,
+            &delay,
+            true,
+        );
+
+        let pressed_key = pressed_keys
+            .get("KeyA")
+            .expect("printable press should be tracked");
+        assert!(
+            pressed_key.synthetic_keyup_at.is_none(),
+            "a zero synthetic keyup delay must disable synthetic releases"
+        );
+        events.drain();
     }
 }
