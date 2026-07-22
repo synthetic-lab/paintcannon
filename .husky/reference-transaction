@@ -4,6 +4,11 @@ if [ "$state" != "prepared" ]; then
   exit 0
 fi
 
+# Fetch and pull create local tag refs too, but they are not local release attempts.
+case "${GIT_REFLOG_ACTION:-}" in
+  fetch* | pull*) exit 0 ;;
+esac
+
 zero_oid="0000000000000000000000000000000000000000"
 head_oid="$(git rev-parse HEAD)"
 run_release_check=0
