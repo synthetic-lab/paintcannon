@@ -5,6 +5,9 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(any(target_os = "macos", test))]
+use std::ffi::OsStr;
+
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 
@@ -43,6 +46,11 @@ pub(crate) fn copy_text_to_clipboard(text: &str) {
         return;
     }
 
+    #[cfg(target_os = "macos")]
+    if should_use_pbcopy() && copy_text_with_pbcopy(text).is_ok() {
+        return;
+    }
+
     let payload = base64_encode(text.as_bytes());
     let mut out = io::stdout().lock();
     if inside_tmux() {
@@ -51,6 +59,45 @@ pub(crate) fn copy_text_to_clipboard(text: &str) {
         let _ = write!(out, "\x1b]52;c;{payload}\x07");
     }
     let _ = out.flush();
+}
+
+#[cfg(target_os = "macos")]
+fn should_use_pbcopy() -> bool {
+    is_local_apple_terminal(
+        env::var_os("TERM_PROGRAM").as_deref(),
+        ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
+            .iter()
+            .any(|name| env::var_os(name).is_some()),
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn is_local_apple_terminal(term_program: Option<&OsStr>, is_ssh: bool) -> bool {
+    term_program == Some(OsStr::new("Apple_Terminal")) && !is_ssh
+}
+
+#[cfg(target_os = "macos")]
+fn copy_text_with_pbcopy(text: &str) -> io::Result<()> {
+    let mut child = Command::new("/usr/bin/pbcopy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("pbcopy stdin is unavailable"))?;
+    stdin.write_all(text.as_bytes())?;
+    drop(stdin);
+
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "pbcopy exited with status {status}"
+        )))
+    }
 }
 
 pub(crate) fn stdout_is_terminal() -> bool {
@@ -303,9 +350,10 @@ fn query_terminal_size_from<T>(_stream: T) -> Option<TerminalSize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_tmux_passthrough, parse_tmux_pane_active, terminal_color_to_background,
-        write_terminal_reset, Background, Color,
+        encode_tmux_passthrough, is_local_apple_terminal, parse_tmux_pane_active,
+        terminal_color_to_background, write_terminal_reset, Background, Color,
     };
+    use std::ffi::OsStr;
 
     #[test]
     fn terminal_colors_are_scaled_to_eight_bit_rgb() {
@@ -313,6 +361,18 @@ mod tests {
             terminal_color_to_background(&Color::rgb(u16::MAX, 0x8080, 0)),
             Background::Rgb(255, 128, 0)
         );
+    }
+
+    #[test]
+    fn pbcopy_is_used_only_for_local_apple_terminal_sessions() {
+        let apple_terminal = Some(OsStr::new("Apple_Terminal"));
+
+        assert!(is_local_apple_terminal(apple_terminal, false));
+        assert!(!is_local_apple_terminal(
+            Some(OsStr::new("iTerm.app")),
+            false
+        ));
+        assert!(!is_local_apple_terminal(apple_terminal, true));
     }
 
     #[test]
