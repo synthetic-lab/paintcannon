@@ -522,7 +522,8 @@ fn handle_terminal_key_event(
             let repeat = event.kind == KeyEventKind::Repeat || pressed_keys.contains_key(&code);
             let mut pressed_key = pressed_key;
             pressed_key.synthetic_keyup_at = if kitty_keyboard_enabled
-                && is_non_printable_key(&event.code) // under kitty, non-printable keys (arrows, Tab, ...) report their own keyup
+                && is_non_printable_key(&event.code)
+            // under kitty, non-printable keys (arrows, Tab, ...) report their own keyup
             {
                 None
             } else {
@@ -1218,8 +1219,7 @@ mod tests {
             KeyModifiers::SHIFT,
             KeyEventKind::Press,
         );
-        let pressed_key =
-            pressed_key_from_terminal(event).expect("pressed key should be produced");
+        let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
         assert_eq!(pressed_key.key, "A");
         assert_eq!(pressed_key.code, "KeyA");
         assert!(pressed_key.shift_key);
@@ -1235,8 +1235,7 @@ mod tests {
             KeyModifiers::SHIFT,
             KeyEventKind::Press,
         );
-        let pressed_key =
-            pressed_key_from_terminal(event).expect("pressed key should be produced");
+        let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
         assert_eq!(pressed_key.key, "!");
         assert_eq!(pressed_key.code, "Digit1");
         assert!(pressed_key.shift_key);
@@ -1244,10 +1243,12 @@ mod tests {
 
     #[test]
     fn pressed_key_from_terminal_plain_letter_without_shift_stays_lowercase() {
-        let event =
-            TerminalKeyEvent::new_with_kind(KeyCode::Char('a'), KeyModifiers::NONE, KeyEventKind::Press);
-        let pressed_key =
-            pressed_key_from_terminal(event).expect("pressed key should be produced");
+        let event = TerminalKeyEvent::new_with_kind(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+            KeyEventKind::Press,
+        );
+        let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
         assert_eq!(pressed_key.key, "a");
         assert!(!pressed_key.shift_key);
     }
@@ -1259,8 +1260,7 @@ mod tests {
             KeyModifiers::SHIFT,
             KeyEventKind::Press,
         );
-        let pressed_key =
-            pressed_key_from_terminal(event).expect("pressed key should be produced");
+        let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
         assert_eq!(pressed_key.key, "Tab");
         assert_eq!(pressed_key.code, "Tab");
         assert!(pressed_key.shift_key);
@@ -1304,11 +1304,7 @@ mod tests {
         let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
 
         handle_terminal_key_event(
-            TerminalKeyEvent::new_with_kind(
-                KeyCode::Tab,
-                KeyModifiers::NONE,
-                KeyEventKind::Press,
-            ),
+            TerminalKeyEvent::new_with_kind(KeyCode::Tab, KeyModifiers::NONE, KeyEventKind::Press),
             &mut pressed_keys,
             &events,
             &delay,
@@ -1333,11 +1329,7 @@ mod tests {
         let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
 
         handle_terminal_key_event(
-            TerminalKeyEvent::new_with_kind(
-                KeyCode::Left,
-                KeyModifiers::NONE,
-                KeyEventKind::Press,
-            ),
+            TerminalKeyEvent::new_with_kind(KeyCode::Left, KeyModifiers::NONE, KeyEventKind::Press),
             &mut pressed_keys,
             &events,
             &delay,
@@ -1358,11 +1350,7 @@ mod tests {
         let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
 
         handle_terminal_key_event(
-            TerminalKeyEvent::new_with_kind(
-                KeyCode::Tab,
-                KeyModifiers::NONE,
-                KeyEventKind::Press,
-            ),
+            TerminalKeyEvent::new_with_kind(KeyCode::Tab, KeyModifiers::NONE, KeyEventKind::Press),
             &mut pressed_keys,
             &events,
             &delay,
