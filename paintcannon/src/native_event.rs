@@ -58,10 +58,18 @@ pub struct TransitionEvent {
 
 #[derive(Clone)]
 #[napi(object)]
+pub struct CopyEventPayload {
+    pub text: String,
+    pub success: bool,
+}
+
+#[derive(Clone)]
+#[napi(object)]
 pub struct NativeEvent {
     pub kind: String,
     pub keyboard: Option<KeyboardEvent>,
     pub paste: Option<String>,
+    pub copy: Option<CopyEventPayload>,
     pub mouse: Option<TerminalMouseEvent>,
     pub resize: Option<TerminalResizeEvent>,
     pub focus: Option<TerminalFocusEvent>,
@@ -75,6 +83,12 @@ impl NativeEvent {
 
     pub(crate) fn paste(data: String) -> Self {
         Self::with_kind("paste", |native| native.paste = Some(data))
+    }
+
+    pub(crate) fn copy(text: String, success: bool) -> Self {
+        Self::with_kind("copy", |native| {
+            native.copy = Some(CopyEventPayload { text, success })
+        })
     }
 
     pub(crate) fn mouse(event: TerminalMouseEvent) -> Self {
@@ -107,6 +121,7 @@ impl NativeEvent {
             kind: kind.to_string(),
             keyboard: None,
             paste: None,
+            copy: None,
             mouse: None,
             resize: None,
             focus: None,

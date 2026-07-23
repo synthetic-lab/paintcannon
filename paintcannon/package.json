@@ -44,6 +44,7 @@
     "demo:alt-restart": "npm run build:debug && node dist/examples/alt-screen-restart.js",
     "demo:borders": "npm run build:debug && node dist/examples/borders.js",
     "demo:counter": "npm run build:debug && node dist/examples/counter-button.js",
+    "demo:copy": "npm run build:debug && node dist/examples/copy-event.js",
     "demo:controlled": "npm run build:debug && node dist/examples/pseudo-controlled-input.js",
     "demo:chunky-rounded": "npm run build:debug && node dist/examples/chunky-rounded-hover.js",
     "demo:destroy": "npm run build:debug && node dist/examples/destroy-nodes.js",
