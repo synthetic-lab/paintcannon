@@ -332,7 +332,11 @@ fn apply_command_inner(
             }
             let action = engine.handle_selection_event(event);
             if let SelectionAction::CopyToClipboard(text) = &action {
-                copy_text_to_clipboard(text);
+                let success = copy_text_to_clipboard(text);
+                state
+                    .event_queue
+                    .push(NativeEvent::copy(text.clone(), success));
+                state.event_notifier.notify();
             }
             if matches!(
                 &action,

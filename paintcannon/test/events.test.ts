@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mock } from "antipattern";
-import { PaintCannon, paintCannonDeps, type PaintElement } from "../main.ts";
+import { PaintCannon, paintCannonDeps, type PaintCopyEvent, type PaintElement } from "../main.ts";
 import {
+  copyInput,
   createMockNativeBinding,
   keyboardInput,
   keyDown,
@@ -331,6 +332,45 @@ describe("core paste events", () => {
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }
+  });
+});
+
+describe("core copy events", () => {
+  it("dispatches copy payloads and success flag to document listeners", () => {
+    const paintCannon = new PaintCannon({ fps: 120 });
+    const mockNative = currentMockNative();
+    const copied: Array<{ type: string; text: string; success: boolean }> = [];
+
+    paintCannon.addEventListener("copy", event => {
+      copied.push({ type: event.type, text: event.text, success: event.success });
+    });
+    mockNative.events.push(copyInput("hello"), copyInput("oops", false));
+    notifyNativeEvents(paintCannon);
+    paintCannon.stop();
+
+    expect(copied).toEqual([
+      { type: "copy", text: "hello", success: true },
+      { type: "copy", text: "oops", success: false },
+    ]);
+    expect(mockNative.renderSyncCalls).toBe(0);
+  });
+
+  it("stops dispatching after the listener is removed", () => {
+    const paintCannon = new PaintCannon({ fps: 120 });
+    const mockNative = currentMockNative();
+    const copied: string[] = [];
+    const listener = (event: PaintCopyEvent) => copied.push(event.text);
+
+    paintCannon.addEventListener("copy", listener);
+    mockNative.events.push(copyInput("first"));
+    notifyNativeEvents(paintCannon);
+
+    paintCannon.removeEventListener("copy", listener);
+    mockNative.events.push(copyInput("second"));
+    notifyNativeEvents(paintCannon);
+    paintCannon.stop();
+
+    expect(copied).toEqual(["first"]);
   });
 });
 

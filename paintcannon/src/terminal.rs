@@ -41,24 +41,24 @@ fn write_terminal_reset(out: &mut impl Write, append_newline: bool) -> io::Resul
     Ok(())
 }
 
-pub(crate) fn copy_text_to_clipboard(text: &str) {
+pub(crate) fn copy_text_to_clipboard(text: &str) -> bool {
     if text.is_empty() || !stdout_is_terminal() {
-        return;
+        return false;
     }
 
     #[cfg(target_os = "macos")]
     if should_use_pbcopy() && copy_text_with_pbcopy(text).is_ok() {
-        return;
+        return true;
     }
 
     let payload = base64_encode(text.as_bytes());
     let mut out = io::stdout().lock();
-    if inside_tmux() {
-        let _ = write_tmux_passthrough(&mut out, format!("\x1b]52;c;{payload}\x07").as_bytes());
+    let written = if inside_tmux() {
+        write_tmux_passthrough(&mut out, format!("\x1b]52;c;{payload}\x07").as_bytes()).is_ok()
     } else {
-        let _ = write!(out, "\x1b]52;c;{payload}\x07");
-    }
-    let _ = out.flush();
+        write!(out, "\x1b]52;c;{payload}\x07").is_ok()
+    };
+    written && out.flush().is_ok()
 }
 
 #[cfg(target_os = "macos")]
@@ -350,8 +350,9 @@ fn query_terminal_size_from<T>(_stream: T) -> Option<TerminalSize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_tmux_passthrough, is_local_apple_terminal, parse_tmux_pane_active,
-        terminal_color_to_background, write_terminal_reset, Background, Color,
+        copy_text_to_clipboard, encode_tmux_passthrough, is_local_apple_terminal,
+        parse_tmux_pane_active, terminal_color_to_background, write_terminal_reset, Background,
+        Color,
     };
     use std::ffi::OsStr;
 
@@ -361,6 +362,11 @@ mod tests {
             terminal_color_to_background(&Color::rgb(u16::MAX, 0x8080, 0)),
             Background::Rgb(255, 128, 0)
         );
+    }
+
+    #[test]
+    fn empty_copy_text_is_skipped() {
+        assert!(!copy_text_to_clipboard(""));
     }
 
     #[test]
