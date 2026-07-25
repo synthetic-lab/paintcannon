@@ -987,6 +987,16 @@ fn code_value(code: KeyCode) -> String {
 fn character_code(character: char) -> &'static str {
     match character {
         '`' | '~' => "Backquote",
+        '1' | '!' => "Digit1",
+        '2' | '@' => "Digit2",
+        '3' | '#' => "Digit3",
+        '4' | '$' => "Digit4",
+        '5' | '%' => "Digit5",
+        '6' | '^' => "Digit6",
+        '7' | '&' => "Digit7",
+        '8' | '*' => "Digit8",
+        '9' | '(' => "Digit9",
+        '0' | ')' => "Digit0",
         '-' | '_' => "Minus",
         '=' | '+' => "Equal",
         '[' | '{' => "BracketLeft",
@@ -1230,15 +1240,29 @@ mod tests {
 
     #[test]
     fn pressed_key_from_terminal_passes_through_shifted_symbol() {
-        let event = TerminalKeyEvent::new_with_kind(
-            KeyCode::Char('!'),
-            KeyModifiers::SHIFT,
-            KeyEventKind::Press,
-        );
-        let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
-        assert_eq!(pressed_key.key, "!");
-        assert_eq!(pressed_key.code, "Digit1");
-        assert!(pressed_key.shift_key);
+        for (character, code) in [
+            ('!', "Digit1"),
+            ('@', "Digit2"),
+            ('#', "Digit3"),
+            ('$', "Digit4"),
+            ('%', "Digit5"),
+            ('^', "Digit6"),
+            ('&', "Digit7"),
+            ('*', "Digit8"),
+            ('(', "Digit9"),
+            (')', "Digit0"),
+        ] {
+            let event = TerminalKeyEvent::new_with_kind(
+                KeyCode::Char(character),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            );
+            let pressed_key =
+                pressed_key_from_terminal(event).expect("pressed key should be produced");
+            assert_eq!(pressed_key.key, character.to_string());
+            assert_eq!(pressed_key.code, code);
+            assert!(pressed_key.shift_key);
+        }
     }
 
     #[test]
