@@ -2275,6 +2275,7 @@ impl LayoutArena {
             row: 0,
             width,
             max_col: 0,
+            previous_character: None,
         };
         let child_count = self.nodes[index].children.len();
         for child_index in 0..child_count {
@@ -2337,6 +2338,7 @@ impl LayoutArena {
             row: 0,
             width: width.max(1),
             max_col: 0,
+            previous_character: None,
             selection_order: 0,
             has_relative_descendants: false,
             absolute_positions: Vec::new(),
@@ -2665,6 +2667,7 @@ struct InlineMeasureCursor {
     row: u32,
     width: u32,
     max_col: u32,
+    previous_character: Option<char>,
 }
 
 struct InlineLayoutCursor {
@@ -2672,6 +2675,7 @@ struct InlineLayoutCursor {
     row: u32,
     width: u32,
     max_col: u32,
+    previous_character: Option<char>,
     selection_order: usize,
     has_relative_descendants: bool,
     absolute_positions: Vec<(NodeId, Point<u32>)>,
@@ -2803,6 +2807,7 @@ fn textarea_natural_size(textarea: &TextAreaLayoutData, wrap_width: Option<u32>)
         row: 0,
         width: u32::MAX,
         max_col: 0,
+        previous_character: None,
     };
     measure_inline_text(
         &textarea.value,
@@ -2836,6 +2841,7 @@ fn text_leaf_size(
         row: 0,
         width: wrap_width.unwrap_or(u32::MAX).max(1),
         max_col: 0,
+        previous_character: None,
     };
     measure_inline_text(
         text,
@@ -3087,6 +3093,7 @@ fn measure_inline_replaced(size: Size<f32>, cursor: &mut InlineMeasureCursor) {
 
     cursor.col += width;
     cursor.max_col = cursor.max_col.max(cursor.col);
+    cursor.previous_character = None;
     if height > 1 {
         cursor.row += height - 1;
     }
@@ -3117,6 +3124,7 @@ fn layout_inline_replaced(
     });
     cursor.col += width;
     cursor.max_col = cursor.max_col.max(cursor.col);
+    cursor.previous_character = None;
     if height > 1 {
         cursor.row += height - 1;
     }
@@ -3186,6 +3194,7 @@ struct InlineTextFlow {
     row: u32,
     width: u32,
     max_col: u32,
+    previous_character: Option<char>,
 }
 
 fn measure_inline_text(text: &str, config: TextWrapConfig, cursor: &mut InlineMeasureCursor) {
@@ -3194,11 +3203,13 @@ fn measure_inline_text(text: &str, config: TextWrapConfig, cursor: &mut InlineMe
         row: cursor.row,
         width: cursor.width,
         max_col: cursor.max_col,
+        previous_character: cursor.previous_character,
     };
     flow_inline_text(text, config, &mut flow, |_, _, _, _| {});
     cursor.col = flow.col;
     cursor.row = flow.row;
     cursor.max_col = flow.max_col;
+    cursor.previous_character = flow.previous_character;
 }
 
 fn layout_inline_text(
@@ -3213,6 +3224,7 @@ fn layout_inline_text(
         row: cursor.row,
         width: cursor.width,
         max_col: cursor.max_col,
+        previous_character: cursor.previous_character,
     };
     flow_inline_text(text, config, &mut flow, |character, x, y, width| {
         if width > 0 {
@@ -3235,6 +3247,7 @@ fn layout_inline_text(
     cursor.col = flow.col;
     cursor.row = flow.row;
     cursor.max_col = flow.max_col;
+    cursor.previous_character = flow.previous_character;
 }
 
 fn flow_inline_text(
@@ -3246,6 +3259,12 @@ fn flow_inline_text(
     let chars = parse_text_for_white_space(text, config.white_space);
     let plan = LineBreakPlan::new(&chars, config.word_break);
     let preserve_newlines = white_space_preserves_newlines(config.white_space);
+    let soft_break_before_first = cursor
+        .previous_character
+        .zip(chars.first().copied())
+        .is_some_and(|(previous, first)| {
+            LineBreakPlan::new(&[previous, first], config.word_break).is_soft_break_before(1)
+        });
 
     for (index, character) in chars.iter().copied().enumerate() {
         if character == '\r' {
@@ -3253,10 +3272,12 @@ fn flow_inline_text(
         }
         if character == '\n' && preserve_newlines {
             inline_text_new_line(cursor);
+            cursor.previous_character = Some(character);
             continue;
         }
 
-        let soft_break_before = plan.is_soft_break_before(index)
+        let soft_break_before = (index == 0 && soft_break_before_first)
+            || plan.is_soft_break_before(index)
             || (index == 0 && config.word_break == CssWordBreak::BreakAll);
         if config.allows_wrapping() && cursor.col > 0 && soft_break_before {
             let segment_end = plan.next_soft_break(&chars, index);
@@ -3285,6 +3306,7 @@ fn flow_inline_text(
         emit(character, cursor.col, cursor.row, width);
         cursor.col += width;
         cursor.max_col = cursor.max_col.max(cursor.col);
+        cursor.previous_character = Some(character);
     }
 }
 

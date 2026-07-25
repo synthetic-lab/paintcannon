@@ -4,8 +4,8 @@ use super::*;
 
 use crate::selection::{SelectionMouseEvent, SelectionMouseEventType};
 use crate::style::{
-    Background, CssDimension, CssFontWeight, LayoutFlexDirection, LayoutOverflow,
-    TransitionProperty, TransitionSpec,
+    Background, CssDimension, CssFontWeight, CssLengthPercentage, LayoutDisplay,
+    LayoutFlexDirection, LayoutOverflow, TransitionProperty, TransitionSpec,
 };
 use crate::transition::TransitionEventType;
 
@@ -897,6 +897,59 @@ fn frame_flush_diffs_against_previous_frame() {
 
     assert!(second.contains("\x1b[1;2Hc"));
     assert!(!second.contains("\x1b[H"));
+}
+
+#[test]
+fn clearing_a_right_aligned_status_does_not_reflow_sibling_text_into_parent_padding() {
+    const WIDTH: usize = 21;
+    let mut engine = PaintEngine::new();
+
+    let mut root_style = block_style(
+        CssDimension::Length(WIDTH as f32),
+        CssDimension::Length(4.0),
+    );
+    root_style.padding_top = CssLengthPercentage::Length(1.0);
+    root_style.padding_right = CssLengthPercentage::Length(1.0);
+    root_style.padding_bottom = CssLengthPercentage::Length(1.0);
+    root_style.padding_left = CssLengthPercentage::Length(1.0);
+    let root = engine.create_element(root_style);
+
+    let mut panel_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+    panel_style.display = LayoutDisplay::Flex;
+    panel_style.background = Background::Rgb(15, 23, 42);
+    let panel = engine.create_element(panel_style);
+
+    let left_span = engine.create_element(DivStyle {
+        display: LayoutDisplay::Inline,
+        ..DivStyle::default()
+    });
+    let left_text = engine.create_text("Collaboration mode ");
+    let shortcut_span = engine.create_element(DivStyle {
+        display: LayoutDisplay::Inline,
+        ..DivStyle::default()
+    });
+    let shortcut_text = engine.create_text("(Shift+Tab to toggle)");
+    engine.append_child(shortcut_span, shortcut_text);
+    engine.append_child(left_span, left_text);
+    engine.append_child(left_span, shortcut_span);
+
+    let status_span = engine.create_element(DivStyle {
+        display: LayoutDisplay::Inline,
+        ..DivStyle::default()
+    });
+    let status = engine.create_text("Octo is up-to-date.");
+    engine.append_child(status_span, status);
+
+    engine.append_child(panel, left_span);
+    engine.append_child(panel, status_span);
+    engine.append_child(root, panel);
+    engine.set_root(root);
+
+    engine.render_frame(WIDTH, 4).unwrap();
+    engine.set_text(status, "");
+    let frame = engine.render_frame(WIDTH, 4).unwrap();
+
+    assert_eq!(frame.cell(WIDTH - 1, 1).unwrap().character, ' ');
 }
 
 #[test]
