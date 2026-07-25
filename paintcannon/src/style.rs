@@ -675,6 +675,18 @@ fn parse_hex_color(value: &str) -> Option<Background> {
 
 impl DivStyle {
     pub(crate) fn to_taffy(&self) -> Style {
+        self.to_taffy_with_auto_scrollbars(false, false)
+    }
+
+    pub(crate) fn to_taffy_with_auto_scrollbars(
+        &self,
+        horizontal_scrollbar: bool,
+        vertical_scrollbar: bool,
+    ) -> Style {
+        let reserve_horizontal =
+            self.reserves_scrollbar_for_axis(self.overflow_x, horizontal_scrollbar);
+        let reserve_vertical =
+            self.reserves_scrollbar_for_axis(self.overflow_y, vertical_scrollbar);
         Style {
             display: match self.display {
                 LayoutDisplay::Inline => Display::Block,
@@ -794,33 +806,36 @@ impl DivStyle {
             grid_column: self.grid_column.to_taffy(),
             grid_row: self.grid_row.to_taffy(),
             overflow: Point {
-                x: self.taffy_overflow_for_axis(self.overflow_x),
-                y: self.taffy_overflow_for_axis(self.overflow_y),
+                x: self.taffy_overflow_for_axis(self.overflow_x, reserve_horizontal),
+                y: self.taffy_overflow_for_axis(self.overflow_y, reserve_vertical),
             },
-            scrollbar_width: if self.reserves_scrollbar() { 1.0 } else { 0.0 },
+            scrollbar_width: if reserve_horizontal || reserve_vertical {
+                1.0
+            } else {
+                0.0
+            },
             ..Default::default()
         }
     }
 
-    fn reserves_scrollbar(&self) -> bool {
-        self.reserves_scrollbar_for_axis(self.overflow_x)
-            || self.reserves_scrollbar_for_axis(self.overflow_y)
+    fn reserves_scrollbar_for_axis(&self, overflow: LayoutOverflow, auto_scrollbar: bool) -> bool {
+        match self.scrollbar_gutter {
+            ScrollbarGutter::Stable => overflow != LayoutOverflow::Visible,
+            ScrollbarGutter::Auto => overflow == LayoutOverflow::Scroll && auto_scrollbar,
+        }
     }
 
-    fn reserves_scrollbar_for_axis(&self, overflow: LayoutOverflow) -> bool {
-        overflow == LayoutOverflow::Scroll
-            || (self.scrollbar_gutter == ScrollbarGutter::Stable
-                && overflow == LayoutOverflow::Hidden)
-    }
-
-    fn taffy_overflow_for_axis(&self, overflow: LayoutOverflow) -> Overflow {
+    fn taffy_overflow_for_axis(
+        &self,
+        overflow: LayoutOverflow,
+        reserves_scrollbar: bool,
+    ) -> Overflow {
         match overflow {
             LayoutOverflow::Visible => Overflow::Visible,
-            LayoutOverflow::Hidden if self.reserves_scrollbar_for_axis(overflow) => {
-                Overflow::Scroll
-            }
+            LayoutOverflow::Hidden if reserves_scrollbar => Overflow::Scroll,
             LayoutOverflow::Hidden => Overflow::Hidden,
-            LayoutOverflow::Scroll => Overflow::Scroll,
+            LayoutOverflow::Scroll if reserves_scrollbar => Overflow::Scroll,
+            LayoutOverflow::Scroll => Overflow::Hidden,
         }
     }
 }

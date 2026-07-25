@@ -12,6 +12,7 @@ use crate::line_break::LineBreakPlan;
 use crate::style::{
     BorderStyle, CssDimension, CssLengthPercentageAuto, CssOverflowWrap, CssPosition,
     CssWhiteSpace, CssWordBreak, CssZIndex, DivStyle, LayoutDisplay, LayoutOverflow,
+    ScrollbarGutter,
 };
 use crate::text::{character_cell_width, parse_text_for_single_line, parse_text_for_white_space};
 use crate::text_wrap::WrappedText;
@@ -111,6 +112,8 @@ struct LayoutNode {
     fragments_dirty: bool,
     post_layout_dirty: bool,
     visible_overflow_dirty: bool,
+    auto_horizontal_scrollbar: bool,
+    auto_vertical_scrollbar: bool,
     scroll_left: u32,
     scroll_top: u32,
     fragments: Vec<InlineFragment>,
@@ -702,6 +705,8 @@ impl LayoutArena {
         item.kind = LayoutNodeKind::Element;
         item.style = DivStyle::default();
         item.taffy_style = item.style.to_taffy();
+        item.auto_horizontal_scrollbar = false;
+        item.auto_vertical_scrollbar = false;
         item.children.clear();
         item.parent = None;
         item.stacking_children.clear();
@@ -721,7 +726,10 @@ impl LayoutArena {
     pub(crate) fn set_style(&mut self, node: NodeId, style: DivStyle) {
         let opacity_transition_active = self.opacity_transition_nodes.contains(&node);
         let item = &mut self.nodes[node_index(node)];
-        let taffy_style = style.to_taffy();
+        let taffy_style = style.to_taffy_with_auto_scrollbars(
+            item.auto_horizontal_scrollbar,
+            item.auto_vertical_scrollbar,
+        );
         let layout_changed = item.taffy_style != taffy_style
             || item.style.white_space != style.white_space
             || item.style.overflow_wrap != style.overflow_wrap
@@ -789,16 +797,23 @@ impl LayoutArena {
             self.mark_post_layout_subtree_dirty(root);
             self.last_root_layout = Some((root, available));
         }
-        let taffy_start = Instant::now();
-        compute_root_layout(self, root, available);
-        self.layout_absolute_nodes(root);
-        self.profile.taffy_ns = taffy_start.elapsed().as_nanos();
-        let dirty_descendants_start = Instant::now();
-        self.ensure_dirty_descendants_are_laid_out(root);
-        self.profile.dirty_descendants_ns = dirty_descendants_start.elapsed().as_nanos();
-        let visible_overflow_start = Instant::now();
-        self.compute_visible_overflow_sizes(root);
-        self.profile.visible_overflow_ns = visible_overflow_start.elapsed().as_nanos();
+        let max_reconciliations = self.scroll_nodes.len().saturating_mul(2);
+        for reconciliation in 0..=max_reconciliations {
+            let taffy_start = Instant::now();
+            compute_root_layout(self, root, available);
+            self.layout_absolute_nodes(root);
+            self.profile.taffy_ns += taffy_start.elapsed().as_nanos();
+            let dirty_descendants_start = Instant::now();
+            self.ensure_dirty_descendants_are_laid_out(root);
+            self.profile.dirty_descendants_ns += dirty_descendants_start.elapsed().as_nanos();
+            let visible_overflow_start = Instant::now();
+            self.compute_visible_overflow_sizes(root);
+            self.profile.visible_overflow_ns += visible_overflow_start.elapsed().as_nanos();
+
+            if reconciliation == max_reconciliations || !self.reconcile_auto_scrollbars() {
+                break;
+            }
+        }
     }
 
     pub(crate) fn layout(&self, node: NodeId) -> Layout {
@@ -888,6 +903,8 @@ impl LayoutArena {
             fragments_dirty: true,
             post_layout_dirty: true,
             visible_overflow_dirty: true,
+            auto_horizontal_scrollbar: false,
+            auto_vertical_scrollbar: false,
             scroll_left: 0,
             scroll_top: 0,
             fragments: Vec::new(),
@@ -1811,6 +1828,44 @@ impl LayoutArena {
             item.visible_overflow_dirty = true;
             current = item.parent;
         }
+    }
+
+    fn reconcile_auto_scrollbars(&mut self) -> bool {
+        let changes = self
+            .scroll_nodes
+            .iter()
+            .filter_map(|node| {
+                let index = node_index(*node);
+                let item = &self.nodes[index];
+                if !matches!(item.kind, LayoutNodeKind::Element) {
+                    return None;
+                }
+                let metrics = self.scroll_metrics_snapshot(*node)?;
+                let horizontal = item.style.scrollbar_gutter == ScrollbarGutter::Auto
+                    && item.style.overflow_x == LayoutOverflow::Scroll
+                    && metrics.scroll_width > metrics.client_width;
+                let vertical = item.style.scrollbar_gutter == ScrollbarGutter::Auto
+                    && item.style.overflow_y == LayoutOverflow::Scroll
+                    && metrics.scroll_height > metrics.client_height;
+                (horizontal != item.auto_horizontal_scrollbar
+                    || vertical != item.auto_vertical_scrollbar)
+                    .then_some((*node, horizontal, vertical))
+            })
+            .collect::<Vec<_>>();
+
+        for (node, horizontal, vertical) in &changes {
+            let item = &mut self.nodes[node_index(*node)];
+            item.auto_horizontal_scrollbar = *horizontal;
+            item.auto_vertical_scrollbar = *vertical;
+            item.taffy_style = item
+                .style
+                .to_taffy_with_auto_scrollbars(*horizontal, *vertical);
+        }
+        for (node, _, _) in &changes {
+            self.clear_cache_subtree_and_ancestors(*node);
+        }
+
+        !changes.is_empty()
     }
 
     fn clear_cache_subtree_and_ancestors(&mut self, node: NodeId) {
@@ -4393,6 +4448,77 @@ mod tests {
     }
 
     #[test]
+    fn nested_auto_gutter_does_not_inherit_stable_parent_gutter_when_content_fits() {
+        let mut arena = LayoutArena::new();
+        let mut outer_style = block_style(CssDimension::Length(8.0), CssDimension::Length(4.0));
+        outer_style.overflow_y = LayoutOverflow::Scroll;
+        outer_style.scrollbar_gutter = ScrollbarGutter::Stable;
+        let outer = arena.create_element(outer_style);
+
+        let outer_content = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(6.0),
+        ));
+        arena.append_child(outer, outer_content);
+
+        let mut inner_style = block_style(CssDimension::Percent(1.0), CssDimension::Length(2.0));
+        inner_style.overflow_y = LayoutOverflow::Scroll;
+        inner_style.scrollbar_gutter = ScrollbarGutter::Auto;
+        let inner = arena.create_element(inner_style);
+        arena.append_child(outer_content, inner);
+
+        let inner_content = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(1.0),
+        ));
+        arena.append_child(inner, inner_content);
+
+        arena.compute_layout(
+            outer,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(4.0),
+            },
+        );
+
+        assert_eq!(arena.layout(outer).scrollbar_size.width, 1.0);
+        assert_eq!(arena.layout(inner).scrollbar_size.width, 0.0);
+        assert_eq!(arena.layout(inner_content).size.width, 7.0);
+    }
+
+    #[test]
+    fn auto_gutter_is_removed_when_content_stops_overflowing() {
+        let mut arena = LayoutArena::new();
+        let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
+        viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.scrollbar_gutter = ScrollbarGutter::Auto;
+        let viewport = arena.create_element(viewport_style);
+
+        let child = arena.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(5.0),
+        ));
+        arena.append_child(viewport, child);
+        let available = Size {
+            width: AvailableSpace::Definite(6.0),
+            height: AvailableSpace::Definite(3.0),
+        };
+
+        arena.compute_layout(viewport, available);
+        assert_eq!(arena.layout(viewport).scrollbar_size.width, 1.0);
+        assert_eq!(arena.layout(child).size.width, 5.0);
+
+        arena.set_style(
+            child,
+            block_style(CssDimension::Percent(1.0), CssDimension::Length(2.0)),
+        );
+        arena.compute_layout(viewport, available);
+
+        assert_eq!(arena.layout(viewport).scrollbar_size.width, 0.0);
+        assert_eq!(arena.layout(child).size.width, 6.0);
+    }
+
+    #[test]
     fn stable_gutter_reserves_horizontal_space_for_hidden_overflow_without_scrolling() {
         let mut arena = LayoutArena::new();
         let mut viewport_style = block_style(CssDimension::Length(6.0), CssDimension::Length(3.0));
@@ -4428,6 +4554,7 @@ mod tests {
         let mut arena = LayoutArena::new();
         let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Length(3.0));
         viewport_style.overflow_y = LayoutOverflow::Scroll;
+        viewport_style.scrollbar_gutter = ScrollbarGutter::Stable;
         viewport_style.overflow_wrap = CssOverflowWrap::Anywhere;
         let viewport = arena.create_element(viewport_style);
         let text = arena.create_text("abcde");
