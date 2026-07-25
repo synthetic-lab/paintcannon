@@ -56,21 +56,21 @@ export type CursorVisualPosition = NativeCursorVisualPosition;
 export type VisualLineRange = NativeVisualLineRange;
 export const KEYBOARD_EVENT_TYPES = ["keydown", "keyup"] as const;
 export const CLIPBOARD_EVENT_TYPES = ["paste"] as const;
-export const COPY_EVENT_TYPES = ["copy"] as const;
+export const CLIPBOARD_WRITE_EVENT_TYPES = ["clipboardWrite"] as const;
 export const PAINT_CANNON_FOCUS_EVENT_TYPES = ["focus", "blur"] as const;
 export type KeyboardEventType = (typeof KEYBOARD_EVENT_TYPES)[number];
 export type ClipboardEventType = (typeof CLIPBOARD_EVENT_TYPES)[number];
-export type CopyEventType = (typeof COPY_EVENT_TYPES)[number];
+export type ClipboardWriteEventType = (typeof CLIPBOARD_WRITE_EVENT_TYPES)[number];
 export type PaintCannonFocusEventType = (typeof PAINT_CANNON_FOCUS_EVENT_TYPES)[number];
 export type PaintCannonEventType =
   | KeyboardEventType
   | ClipboardEventType
-  | CopyEventType
+  | ClipboardWriteEventType
   | PaintCannonFocusEventType
   | "resize";
 export type KeyboardEventListener = (event: PaintKeyboardEvent) => void;
 export type ClipboardEventListener = (event: PaintClipboardEvent) => void;
-export type CopyEventListener = (event: PaintCopyEvent) => void;
+export type ClipboardWriteEventListener = (event: PaintClipboardWriteEvent) => void;
 export type PaintCannonFocusEventListener = (event: PaintCannonFocusEvent) => void;
 export type ResizeEventListener = (event: PaintResizeEvent) => void;
 export const MOUSE_ELEMENT_EVENT_TYPES = [
@@ -330,8 +330,8 @@ export class PaintClipboardEvent {
 }
 
 export type ClipboardEvent = PaintClipboardEvent;
-export class PaintCopyEvent {
-  readonly type: "copy" = "copy";
+export class PaintClipboardWriteEvent {
+  readonly type: "clipboardWrite" = "clipboardWrite";
   readonly text: string;
   readonly success: boolean;
 
@@ -341,7 +341,7 @@ export class PaintCopyEvent {
   }
 }
 
-export type CopyEvent = PaintCopyEvent;
+export type ClipboardWriteEvent = PaintClipboardWriteEvent;
 export type DataTransfer = PaintDataTransfer;
 export type { PaintFile as File, PaintFileList as FileList } from "./terminal-files.ts";
 
@@ -461,7 +461,7 @@ export class PaintCannon {
     keyup: new Set(),
   };
   private readonly clipboardEventListeners = new Set<ClipboardEventListener>();
-  private readonly copyEventListeners = new Set<CopyEventListener>();
+  private readonly clipboardWriteEventListeners = new Set<ClipboardWriteEventListener>();
   private readonly focusEventListeners: Record<
     PaintCannonFocusEventType,
     Set<PaintCannonFocusEventListener>
@@ -760,7 +760,7 @@ export class PaintCannon {
 
   addEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   addEventListener(type: ClipboardEventType, listener: ClipboardEventListener): void;
-  addEventListener(type: CopyEventType, listener: CopyEventListener): void;
+  addEventListener(type: ClipboardWriteEventType, listener: ClipboardWriteEventListener): void;
   addEventListener(type: PaintCannonFocusEventType, listener: PaintCannonFocusEventListener): void;
   addEventListener(type: "resize", listener: ResizeEventListener): void;
   addEventListener(
@@ -768,7 +768,7 @@ export class PaintCannon {
     listener:
       | KeyboardEventListener
       | ClipboardEventListener
-      | CopyEventListener
+      | ClipboardWriteEventListener
       | PaintCannonFocusEventListener
       | ResizeEventListener,
   ): void {
@@ -776,7 +776,7 @@ export class PaintCannon {
       type !== "keydown" &&
       type !== "keyup" &&
       type !== "paste" &&
-      type !== "copy" &&
+      type !== "clipboardWrite" &&
       type !== "focus" &&
       type !== "blur" &&
       type !== "resize"
@@ -792,8 +792,8 @@ export class PaintCannon {
       this.resizeEventListeners.add(listener as ResizeEventListener);
     } else if (type === "paste") {
       this.clipboardEventListeners.add(listener as ClipboardEventListener);
-    } else if (type === "copy") {
-      this.copyEventListeners.add(listener as CopyEventListener);
+    } else if (type === "clipboardWrite") {
+      this.clipboardWriteEventListeners.add(listener as ClipboardWriteEventListener);
     } else if (type === "focus" || type === "blur") {
       this.focusEventListeners[type].add(listener as PaintCannonFocusEventListener);
     } else {
@@ -803,7 +803,7 @@ export class PaintCannon {
 
   removeEventListener(type: KeyboardEventType, listener: KeyboardEventListener): void;
   removeEventListener(type: ClipboardEventType, listener: ClipboardEventListener): void;
-  removeEventListener(type: CopyEventType, listener: CopyEventListener): void;
+  removeEventListener(type: ClipboardWriteEventType, listener: ClipboardWriteEventListener): void;
   removeEventListener(
     type: PaintCannonFocusEventType,
     listener: PaintCannonFocusEventListener,
@@ -814,7 +814,7 @@ export class PaintCannon {
     listener:
       | KeyboardEventListener
       | ClipboardEventListener
-      | CopyEventListener
+      | ClipboardWriteEventListener
       | PaintCannonFocusEventListener
       | ResizeEventListener,
   ): void {
@@ -822,7 +822,7 @@ export class PaintCannon {
       type !== "keydown" &&
       type !== "keyup" &&
       type !== "paste" &&
-      type !== "copy" &&
+      type !== "clipboardWrite" &&
       type !== "focus" &&
       type !== "blur" &&
       type !== "resize"
@@ -834,8 +834,8 @@ export class PaintCannon {
       this.resizeEventListeners.delete(listener as ResizeEventListener);
     } else if (type === "paste") {
       this.clipboardEventListeners.delete(listener as ClipboardEventListener);
-    } else if (type === "copy") {
-      this.copyEventListeners.delete(listener as CopyEventListener);
+    } else if (type === "clipboardWrite") {
+      this.clipboardWriteEventListeners.delete(listener as ClipboardWriteEventListener);
     } else if (type === "focus" || type === "blur") {
       this.focusEventListeners[type].delete(listener as PaintCannonFocusEventListener);
     } else {
@@ -914,7 +914,7 @@ export class PaintCannon {
     this.keyboardEventListeners.keydown.clear();
     this.keyboardEventListeners.keyup.clear();
     this.clipboardEventListeners.clear();
-    this.copyEventListeners.clear();
+    this.clipboardWriteEventListeners.clear();
     this.focusEventListeners.focus.clear();
     this.focusEventListeners.blur.clear();
     this.resizeEventListeners.clear();
@@ -1481,12 +1481,15 @@ export class PaintCannon {
           );
           break;
         }
-        case "copy": {
-          if (nativeEvent.copy === undefined) {
-            throw new Error("native copy event is missing its payload");
+        case "clipboardWrite": {
+          if (nativeEvent.clipboardWrite === undefined) {
+            throw new Error("native clipboardWrite event is missing its payload");
           }
-          const event = new PaintCopyEvent(nativeEvent.copy.text, nativeEvent.copy.success);
-          for (const listener of Array.from(this.copyEventListeners)) {
+          const event = new PaintClipboardWriteEvent(
+            nativeEvent.clipboardWrite.text,
+            nativeEvent.clipboardWrite.success,
+          );
+          for (const listener of Array.from(this.clipboardWriteEventListeners)) {
             listener(event);
           }
           break;

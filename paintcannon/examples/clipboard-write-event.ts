@@ -1,4 +1,4 @@
-import { PaintCannon, type CopyEvent } from "../main.ts";
+import { PaintCannon, type ClipboardWriteEvent } from "../main.ts";
 
 const pc = new PaintCannon({ captureCtrlC: true, captureMouse: true, fps: 30 });
 
@@ -83,7 +83,7 @@ function showToast(text: string, success: boolean) {
   }, 5000);
 }
 
-pc.addEventListener("copy", (event: CopyEvent) => {
+pc.addEventListener("clipboardWrite", (event: ClipboardWriteEvent) => {
   showToast(event.text, event.success);
 });
 

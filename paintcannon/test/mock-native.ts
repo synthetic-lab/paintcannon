@@ -369,8 +369,8 @@ export function pasteInput(data: string): NativeEvent {
   return { kind: "paste", paste: data };
 }
 
-export function copyInput(text: string, success = true): NativeEvent {
-  return { kind: "copy", copy: { text, success } };
+export function clipboardWriteInput(text: string, success = true): NativeEvent {
+  return { kind: "clipboardWrite", clipboardWrite: { text, success } };
 }
 
 export function mouseEvent(

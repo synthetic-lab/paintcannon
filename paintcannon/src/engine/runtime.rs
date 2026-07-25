@@ -335,7 +335,7 @@ fn apply_command_inner(
                 let success = copy_text_to_clipboard(text);
                 state
                     .event_queue
-                    .push(NativeEvent::copy(text.clone(), success));
+                    .push(NativeEvent::clipboard_write(text.clone(), success));
                 state.event_notifier.notify();
             }
             if matches!(

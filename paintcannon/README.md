@@ -91,7 +91,7 @@ PaintCannon supports bubbling events with `stopPropagation()` and `preventDefaul
 - Scroll events
 - Resize events
 - App-level terminal focus and blur events
-- App-level text selection copy events
+- App-level clipboard write notification events
 
 Pasting text, or pasting or dropping one or more image files, dispatches a bubbling `paste` event
 targeted at the focused element. Text pastes are available from
@@ -125,22 +125,23 @@ Run `npm run demo:paste-images` from the workspace root to paste or drag PNG fil
 PaintCannon image renderer.
 
 When `captureMouse` is enabled, releasing a dragged text selection requests a clipboard copy and
-dispatches an app-level `copy` event on the `PaintCannon` instance. The event does not bubble and
-cannot cancel the copy. Its `text` property contains the selected text, and `success` reports
-whether PaintCannon successfully handed the copy request to the local clipboard command or terminal
-output:
+dispatches an app-level `clipboardWrite` event on the `PaintCannon` instance. The event does not
+bubble and cannot cancel the copy. Its `text` property contains the selected text, and `success`
+reports whether PaintCannon successfully handed the copy request to the local clipboard command or
+terminal output:
 
 ```ts
-pc.addEventListener("copy", event => {
+pc.addEventListener("clipboardWrite", event => {
   if (event.success) {
     showToast("Text copied");
   }
 });
 ```
 
-For OSC 52 terminal copies, `success` confirms that the escape sequence was written and flushed; it
-cannot confirm that the terminal accepted the request or changed the system clipboard. Applications
-using `paintcannon-react` can subscribe through the `paintCannon` property returned by `render()`.
+For OSC 52 terminal copies, `success` confirms that the escape sequence was written and flushed;
+it cannot confirm that the terminal accepted the request or changed the system clipboard.
+Applications using `paintcannon-react` can subscribe through the `paintCannon` property returned by
+`render()`.
 
 The Rust renderer owns a fixed-cadence render loop, configured with the `fps`
 constructor option (60 by default). It only runs layout for layout-dirty
