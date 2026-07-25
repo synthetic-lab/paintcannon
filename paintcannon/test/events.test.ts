@@ -3,8 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mock } from "antipattern";
-import { PaintCannon, paintCannonDeps, type PaintElement } from "../main.ts";
 import {
+  PaintCannon,
+  paintCannonDeps,
+  type PaintClipboardWriteEvent,
+  type PaintElement,
+} from "../main.ts";
+import {
+  clipboardWriteInput,
   createMockNativeBinding,
   keyboardInput,
   keyDown,
@@ -331,6 +337,45 @@ describe("core paste events", () => {
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }
+  });
+});
+
+describe("core clipboard write events", () => {
+  it("dispatches clipboard write payloads and success flag to document listeners", () => {
+    const paintCannon = new PaintCannon({ fps: 120 });
+    const mockNative = currentMockNative();
+    const copied: Array<{ type: string; text: string; success: boolean }> = [];
+
+    paintCannon.addEventListener("clipboardWrite", event => {
+      copied.push({ type: event.type, text: event.text, success: event.success });
+    });
+    mockNative.events.push(clipboardWriteInput("hello"), clipboardWriteInput("oops", false));
+    notifyNativeEvents(paintCannon);
+    paintCannon.stop();
+
+    expect(copied).toEqual([
+      { type: "clipboardWrite", text: "hello", success: true },
+      { type: "clipboardWrite", text: "oops", success: false },
+    ]);
+    expect(mockNative.renderSyncCalls).toBe(0);
+  });
+
+  it("stops dispatching after the listener is removed", () => {
+    const paintCannon = new PaintCannon({ fps: 120 });
+    const mockNative = currentMockNative();
+    const copied: string[] = [];
+    const listener = (event: PaintClipboardWriteEvent) => copied.push(event.text);
+
+    paintCannon.addEventListener("clipboardWrite", listener);
+    mockNative.events.push(clipboardWriteInput("first"));
+    notifyNativeEvents(paintCannon);
+
+    paintCannon.removeEventListener("clipboardWrite", listener);
+    mockNative.events.push(clipboardWriteInput("second"));
+    notifyNativeEvents(paintCannon);
+    paintCannon.stop();
+
+    expect(copied).toEqual(["first"]);
   });
 });
 
