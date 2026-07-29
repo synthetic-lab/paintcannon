@@ -144,6 +144,7 @@ impl TerminalInput {
             let mut observed_terminal_size = Some(initial_terminal_size);
             let mut next_terminal_size_poll = Instant::now() + TERMINAL_SIZE_POLL_INTERVAL;
             let mut tmux_focus_check_pending = false;
+            let mut tmux_focus_return_pending = false;
 
             while !thread_stop.load(Ordering::Relaxed) {
                 match terminal_event::poll(Duration::from_millis(25)) {
@@ -207,6 +208,7 @@ impl TerminalInput {
                                     }
                                 }
                                 TerminalEvent::FocusGained => {
+                                    tmux_focus_return_pending = false;
                                     let initial_report = awaiting_initial_focus_report;
                                     awaiting_initial_focus_report = false;
                                     if handle_terminal_focus_event(
@@ -220,6 +222,7 @@ impl TerminalInput {
                                     }
                                 }
                                 TerminalEvent::FocusLost => {
+                                    tmux_focus_return_pending = false;
                                     let initial_report = awaiting_initial_focus_report;
                                     awaiting_initial_focus_report = false;
                                     if handle_terminal_focus_event(
@@ -255,25 +258,25 @@ impl TerminalInput {
                     });
                     tmux_focus_check_pending |= resized;
 
-                    let recovered_tmux_blur = if tmux_focus_check_pending {
-                        tmux_focus_check_pending = false;
-                        // tmux occasionally drops its focus report when selecting another pane
-                        // also unzooms and resizes this pane. Recheck only after that resize, once
-                        // tmux has settled, rather than polling focus during ordinary operation.
-                        recover_missing_tmux_blur(
-                            try_query_tmux_pane_active(),
-                            &thread_event_queue,
-                            &thread_focused,
-                            thread_renderer_tx.as_ref(),
-                        )
-                    } else {
-                        false
-                    };
-                    if recovered_tmux_blur {
+                    // tmux occasionally drops its focus report when selecting another pane also
+                    // unzooms and resizes this pane. Recheck after that resize, once tmux has
+                    // settled. If the check synthesizes blur, keep polling until the pane becomes
+                    // active again because tmux may have focus-events disabled and therefore never
+                    // send the matching focus report.
+                    let recovered_tmux_focus = poll_tmux_focus_recovery(
+                        tmux_focus_check_pending,
+                        &mut tmux_focus_return_pending,
+                        try_query_tmux_pane_active,
+                        &thread_event_queue,
+                        &thread_focused,
+                        thread_renderer_tx.as_ref(),
+                    );
+                    tmux_focus_check_pending = false;
+                    if recovered_tmux_focus.is_some() {
                         awaiting_initial_focus_report = false;
                     }
 
-                    if resized || recovered_tmux_blur {
+                    if resized || recovered_tmux_focus.is_some() {
                         thread_event_notifier.notify();
                     }
                     next_terminal_size_poll = next_poll_deadline(
@@ -781,17 +784,45 @@ fn handle_terminal_focus_event(
     }
 }
 
-fn recover_missing_tmux_blur(
+fn recover_missing_tmux_focus(
     tmux_pane_active: Option<bool>,
+    allow_focus_gain: bool,
     events: &NativeEventQueue,
     current_focus: &Arc<AtomicBool>,
     renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
-) -> bool {
-    if tmux_pane_active != Some(false) || !current_focus.load(Ordering::Relaxed) {
-        return false;
+) -> Option<bool> {
+    let focused = tmux_pane_active?;
+    if focused == current_focus.load(Ordering::Relaxed) || (focused && !allow_focus_gain) {
+        return None;
     }
 
-    handle_terminal_focus_event(false, events, current_focus, renderer_tx, false)
+    handle_terminal_focus_event(focused, events, current_focus, renderer_tx, false);
+    Some(focused)
+}
+
+fn poll_tmux_focus_recovery(
+    check_after_resize: bool,
+    awaiting_return: &mut bool,
+    query_pane_active: impl FnOnce() -> Option<bool>,
+    events: &NativeEventQueue,
+    current_focus: &Arc<AtomicBool>,
+    renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
+) -> Option<bool> {
+    if !check_after_resize && !*awaiting_return {
+        return None;
+    }
+
+    let recovered = recover_missing_tmux_focus(
+        query_pane_active(),
+        *awaiting_return,
+        events,
+        current_focus,
+        renderer_tx,
+    );
+    if let Some(focused) = recovered {
+        *awaiting_return = !focused;
+    }
+    recovered
 }
 
 fn push_focus_event(events: &NativeEventQueue, event: TerminalFocusEvent) {
@@ -1172,12 +1203,10 @@ mod tests {
             (80, 20),
             Some(&renderer_tx),
         ));
-        assert!(recover_missing_tmux_blur(
-            Some(false),
-            &events,
-            &focused,
-            Some(&renderer_tx),
-        ));
+        assert_eq!(
+            recover_missing_tmux_focus(Some(false), false, &events, &focused, Some(&renderer_tx)),
+            Some(false)
+        );
 
         assert!(!focused.load(Ordering::Relaxed));
         assert!(matches!(
@@ -1204,22 +1233,74 @@ mod tests {
         let events = NativeEventQueue::default();
         let focused = Arc::new(AtomicBool::new(true));
 
-        assert!(!recover_missing_tmux_blur(
-            Some(true),
-            &events,
-            &focused,
-            None,
-        ));
+        assert_eq!(
+            recover_missing_tmux_focus(Some(true), false, &events, &focused, None),
+            None
+        );
         assert!(focused.load(Ordering::Relaxed));
 
         focused.store(false, Ordering::Relaxed);
-        assert!(!recover_missing_tmux_blur(
-            Some(false),
-            &events,
-            &focused,
-            None,
-        ));
+        assert_eq!(
+            recover_missing_tmux_focus(Some(false), false, &events, &focused, None),
+            None
+        );
+        assert_eq!(
+            recover_missing_tmux_focus(Some(true), false, &events, &focused, None),
+            None
+        );
         assert!(events.drain().is_empty());
+    }
+
+    #[test]
+    fn tmux_synthetic_blur_polls_until_pane_returns_without_another_resize() {
+        let events = NativeEventQueue::default();
+        let focused = Arc::new(AtomicBool::new(true));
+        let (renderer_tx, renderer_rx) = crossbeam_channel::bounded(2);
+        let mut awaiting_return = false;
+
+        assert_eq!(
+            poll_tmux_focus_recovery(
+                true,
+                &mut awaiting_return,
+                || Some(false),
+                &events,
+                &focused,
+                Some(&renderer_tx),
+            ),
+            Some(false)
+        );
+        assert!(awaiting_return);
+        assert_eq!(
+            poll_tmux_focus_recovery(
+                false,
+                &mut awaiting_return,
+                || Some(true),
+                &events,
+                &focused,
+                Some(&renderer_tx),
+            ),
+            Some(true)
+        );
+        assert!(!awaiting_return);
+
+        assert!(focused.load(Ordering::Relaxed));
+        assert!(matches!(
+            renderer_rx.recv().unwrap(),
+            EngineCommand::SetTerminalFocused { focused: false }
+        ));
+        assert!(matches!(
+            renderer_rx.recv().unwrap(),
+            EngineCommand::SetTerminalFocused { focused: true }
+        ));
+        let events = events.drain();
+        assert_eq!(
+            events[0].focus.as_ref().map(|event| event.r#type.as_str()),
+            Some("blur")
+        );
+        assert_eq!(
+            events[1].focus.as_ref().map(|event| event.r#type.as_str()),
+            Some("focus")
+        );
     }
 
     #[test]
