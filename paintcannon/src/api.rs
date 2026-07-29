@@ -850,7 +850,15 @@ impl PaintCannon {
 
     #[napi]
     pub fn suspend_process_group(&self) -> Result<()> {
-        signal_process_group(libc::SIGTSTP)
+        #[cfg(unix)]
+        {
+            signal_process_group(libc::SIGTSTP)
+        }
+        #[cfg(windows)]
+        {
+            // SIGTSTP signal does not exist on Windows
+            Ok(())
+        }
     }
 
     #[napi]
