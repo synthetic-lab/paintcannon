@@ -14,7 +14,11 @@ use crate::style::{
     CssWhiteSpace, CssWordBreak, CssZIndex, DivStyle, LayoutDisplay, LayoutOverflow,
     ScrollbarGutter,
 };
-use crate::text::{character_cell_width, parse_text_for_single_line, parse_text_for_white_space};
+use crate::text::{
+    cell_offset_for_character, character_cell_offsets, character_offset_for_cell,
+    grapheme_boundary_at_or_after_cell, grapheme_parts, parse_text_for_single_line,
+    parse_text_for_white_space, text_cell_width, text_graphemes, GraphemeSuffix,
+};
 use crate::text_wrap::WrappedText;
 
 #[derive(Clone)]
@@ -291,6 +295,7 @@ pub(crate) struct InlineFragment {
 pub(crate) enum InlineFragmentKind {
     Text {
         character: char,
+        suffix: Option<Box<GraphemeSuffix>>,
         selection_order: usize,
     },
     Replaced,
@@ -549,12 +554,17 @@ impl LayoutArena {
                 let value_len = input.value.chars().count();
                 let width = rect.width.max(1);
                 let cursor = (input.cursor as usize).min(value_len);
-                let start = if input.focused && value_len > 0 && cursor >= width {
-                    cursor + 1 - width
+                let text = parse_text_for_single_line(&input.value)
+                    .into_iter()
+                    .collect::<String>();
+                let cursor_cell = cell_offset_for_character(&text, cursor);
+                let start = if input.focused && value_len > 0 && cursor_cell >= width {
+                    cursor_cell + 1 - width
                 } else {
                     0
                 };
-                let next = (start + local_x).min(value_len) as u32;
+                let start = grapheme_boundary_at_or_after_cell(&text, start);
+                let next = character_offset_for_cell(&text, start + local_x).min(value_len) as u32;
                 input.cursor = next;
                 Some(next)
             }
@@ -3105,8 +3115,11 @@ fn image_natural_size(image: &ImageLayoutData) -> Size<f32> {
 }
 
 fn input_natural_size(input: &InputLayoutData) -> Size<f32> {
+    let text = parse_text_for_single_line(&input.value)
+        .into_iter()
+        .collect::<String>();
     Size {
-        width: parse_text_for_single_line(&input.value).len().max(1) as f32,
+        width: text_cell_width(&text).max(1) as f32,
         height: 1.0,
     }
 }
@@ -3458,6 +3471,7 @@ fn axis_max_scroll(overflow: LayoutOverflow, max_scroll: u32) -> u32 {
 
 fn text_content_widths(text: &str, config: TextWrapConfig) -> ContentWidths {
     let chars = parse_text_for_white_space(text, config.white_space);
+    let normalized = chars.iter().collect::<String>();
     let preserve_newlines = white_space_preserves_newlines(config.white_space);
     let max = max_line_width(&chars, preserve_newlines);
     if !config.allows_wrapping() {
@@ -3468,10 +3482,13 @@ fn text_content_widths(text: &str, config: TextWrapConfig) -> ContentWidths {
     let mut min_width = 1;
     let mut segment_width = 0;
     let mut trailing_space_width = 0;
-    for (index, character) in chars.iter().copied().enumerate() {
-        if character == '\r' {
-            continue;
-        }
+    for grapheme in text_graphemes(&normalized) {
+        let index = grapheme.character_start;
+        let character = grapheme
+            .text
+            .chars()
+            .next()
+            .expect("graphemes are non-empty");
         if character == '\n' && preserve_newlines {
             min_width = min_width.max(segment_width - trailing_space_width);
             segment_width = 0;
@@ -3490,8 +3507,8 @@ fn text_content_widths(text: &str, config: TextWrapConfig) -> ContentWidths {
             trailing_space_width = 0;
         }
 
-        let width = character_cell_width(character) as u32;
-        if character.is_whitespace() {
+        let width = grapheme.width as u32;
+        if grapheme.text.chars().all(char::is_whitespace) {
             trailing_space_width += width;
         } else {
             trailing_space_width = 0;
@@ -3544,8 +3561,9 @@ fn layout_inline_text(
         max_col: cursor.max_col,
         previous_character: cursor.previous_character,
     };
-    flow_inline_text(text, config, &mut flow, |character, x, y, width| {
+    flow_inline_text(text, config, &mut flow, |grapheme, x, y, width| {
         if width > 0 {
+            let (character, suffix) = grapheme_parts(grapheme);
             let selection_order = cursor.selection_order;
             cursor.selection_order += 1;
             cursor.fragments.push(InlineFragment {
@@ -3553,6 +3571,7 @@ fn layout_inline_text(
                 hit_node: hit_target,
                 kind: InlineFragmentKind::Text {
                     character,
+                    suffix,
                     selection_order,
                 },
                 x,
@@ -3572,9 +3591,11 @@ fn flow_inline_text(
     text: &str,
     config: TextWrapConfig,
     cursor: &mut InlineTextFlow,
-    mut emit: impl FnMut(char, u32, u32, u32),
+    mut emit: impl FnMut(&str, u32, u32, u32),
 ) {
     let chars = parse_text_for_white_space(text, config.white_space);
+    let normalized = chars.iter().collect::<String>();
+    let cell_offsets = character_cell_offsets(&normalized);
     let plan = LineBreakPlan::new(&chars, config.word_break);
     let preserve_newlines = white_space_preserves_newlines(config.white_space);
     let soft_break_before_first = cursor
@@ -3584,10 +3605,13 @@ fn flow_inline_text(
             LineBreakPlan::new(&[previous, first], config.word_break).is_soft_break_before(1)
         });
 
-    for (index, character) in chars.iter().copied().enumerate() {
-        if character == '\r' {
-            continue;
-        }
+    for grapheme in text_graphemes(&normalized) {
+        let index = grapheme.character_start;
+        let character = grapheme
+            .text
+            .chars()
+            .next()
+            .expect("graphemes are non-empty");
         if character == '\n' && preserve_newlines {
             inline_text_new_line(cursor);
             cursor.previous_character = Some(character);
@@ -3599,7 +3623,7 @@ fn flow_inline_text(
             || (index == 0 && config.word_break == CssWordBreak::BreakAll);
         if config.allows_wrapping() && cursor.col > 0 && soft_break_before {
             let segment_end = plan.next_soft_break(&chars, index);
-            let segment_width = text_width(&chars[index..segment_end]);
+            let segment_width = (cell_offsets[segment_end] - cell_offsets[index]) as u32;
             if cursor.col + segment_width > cursor.width
                 && (segment_width <= cursor.width || !config.emergency_wraps())
             {
@@ -3607,7 +3631,7 @@ fn flow_inline_text(
             }
         }
 
-        let width = character_cell_width(character) as u32;
+        let width = grapheme.width as u32;
         if config.allows_wrapping()
             && cursor.col > 0
             && cursor.col + width > cursor.width
@@ -3621,10 +3645,10 @@ fn flow_inline_text(
             }
         }
 
-        emit(character, cursor.col, cursor.row, width);
+        emit(grapheme.text, cursor.col, cursor.row, width);
         cursor.col += width;
         cursor.max_col = cursor.max_col.max(cursor.col);
-        cursor.previous_character = Some(character);
+        cursor.previous_character = grapheme.text.chars().last();
     }
 }
 
@@ -3649,27 +3673,18 @@ fn white_space_preserves_newlines(white_space: CssWhiteSpace) -> bool {
 }
 
 fn max_line_width(chars: &[char], preserve_newlines: bool) -> f32 {
+    let text = chars.iter().collect::<String>();
     let mut max_width = 1;
     let mut width = 0;
-    for character in chars {
-        if *character == '\r' {
-            continue;
-        }
-        if *character == '\n' && preserve_newlines {
+    for grapheme in text_graphemes(&text) {
+        if grapheme.text == "\n" && preserve_newlines {
             max_width = max_width.max(width);
             width = 0;
             continue;
         }
-        width += character_cell_width(*character) as u32;
+        width += grapheme.width as u32;
     }
     max_width.max(width).max(1) as f32
-}
-
-fn text_width(chars: &[char]) -> u32 {
-    chars
-        .iter()
-        .map(|character| character_cell_width(*character) as u32)
-        .sum()
 }
 
 fn effective_white_space(inherited: CssWhiteSpace, own: CssWhiteSpace) -> CssWhiteSpace {
@@ -6011,6 +6026,7 @@ mod tests {
             fragments[0].kind,
             InlineFragmentKind::Text {
                 character: 'h',
+                suffix: None,
                 selection_order: 0
             }
         ));

@@ -3,17 +3,20 @@ use std::time::Instant;
 
 use taffy::{tree::Layout, NodeId};
 
-use crate::frame::{ClipBounds, ClipRect, Frame, GlyphStyle};
+use crate::frame::{ClipBounds, ClipRect, Frame, GlyphStyle, GraphemeGlyph};
 use crate::layout::{
     ArenaScrollMetrics, ImageLayoutData, InlineFragmentKind, InputLayoutData, LayoutArena,
     LayoutNodeKind, TextAreaLayoutData,
 };
 use crate::style::{
     Background, CssFontStyle, CssFontWeight, CssPosition, CssTextDecorationLine, CssVisibility,
-    DivStyle, ImageRendering, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap, LayoutOverflow,
-    TransitionProperty,
+    CssWhiteSpace, DivStyle, ImageRendering, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap,
+    LayoutOverflow, TransitionProperty,
 };
-use crate::text::parse_text_for_single_line;
+use crate::text::{
+    cell_offset_for_character, grapheme_boundary_at_or_after_cell, grapheme_parts,
+    parse_text_for_single_line, parse_text_for_white_space, text_graphemes,
+};
 use crate::text_wrap::WrappedText;
 use crate::transition::TransitionState;
 
@@ -748,10 +751,27 @@ impl<'a, 'out> Painter<'a, 'out> {
             underline: state.underline,
             strikethrough: state.strikethrough,
         };
-        for (offset, character) in text.chars().enumerate() {
-            self.output
-                .frame
-                .write_glyph(x + offset as i32, y, character, 1, style, state.clip);
+        let normalized = parse_text_for_white_space(text, CssWhiteSpace::Normal)
+            .into_iter()
+            .collect::<String>();
+        let mut col = 0;
+        for grapheme in text_graphemes(&normalized) {
+            if grapheme.width == 0 {
+                continue;
+            }
+            let (character, suffix) = grapheme_parts(grapheme.text);
+            self.output.frame.write_grapheme(
+                x + col,
+                y,
+                GraphemeGlyph {
+                    character,
+                    suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
+                    width: grapheme.width,
+                },
+                style,
+                state.clip,
+            );
+            col += grapheme.width as i32;
         }
     }
 
@@ -780,8 +800,10 @@ impl<'a, 'out> Painter<'a, 'out> {
                 fragment.width as i32,
                 fragment.height as i32,
             );
-            match fragment.kind {
-                InlineFragmentKind::Text { character, .. } => {
+            match &fragment.kind {
+                InlineFragmentKind::Text {
+                    character, suffix, ..
+                } => {
                     let fragment_state = self.inline_fragment_state(id, fragment.node, state);
                     if !fragment_state.visible {
                         continue;
@@ -803,11 +825,14 @@ impl<'a, 'out> Painter<'a, 'out> {
                         underline: fragment_state.underline,
                         strikethrough: fragment_state.strikethrough,
                     };
-                    self.output.frame.write_glyph(
+                    self.output.frame.write_grapheme(
                         rect.left,
                         rect.top,
-                        character,
-                        fragment.width as usize,
+                        GraphemeGlyph {
+                            character: *character,
+                            suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
+                            width: fragment.width as usize,
+                        },
                         glyph_style,
                         fragment_state.clip,
                     );
@@ -1207,18 +1232,26 @@ fn paint_input(
     } else {
         input.value.as_str()
     };
-    let chars = parse_text_for_single_line(visible_text);
-    let cursor = (input.cursor as usize).min(chars.len());
-    let start = if input.focused && !input.value.is_empty() && cursor >= width {
-        cursor + 1 - width
+    let normalized = parse_text_for_single_line(visible_text)
+        .into_iter()
+        .collect::<String>();
+    let mut visual_col = 0;
+    let glyphs = text_graphemes(&normalized)
+        .map(|grapheme| {
+            let col = visual_col;
+            visual_col += grapheme.width;
+            (grapheme, col)
+        })
+        .collect::<Vec<_>>();
+    let cursor = (input.cursor as usize).min(input.value.chars().count());
+    let cursor_cell = cell_offset_for_character(&normalized, cursor);
+    let start = if input.focused && !input.value.is_empty() && cursor_cell >= width {
+        cursor_cell + 1 - width
     } else {
         0
     };
-    let cursor_col = (input.focused && show_cursor).then_some(
-        (input.cursor as usize)
-            .min(input.value.chars().count())
-            .saturating_sub(start),
-    );
+    let start = grapheme_boundary_at_or_after_cell(&normalized, start);
+    let cursor_col = (input.focused && show_cursor).then_some(cursor_cell.saturating_sub(start));
     let glyph_style = GlyphStyle {
         background,
         foreground: if is_placeholder {
@@ -1233,26 +1266,26 @@ fn paint_input(
         strikethrough: text_attributes.strikethrough,
     };
 
-    for col in 0..width {
-        let Some(character) = chars.get(start + col).copied() else {
+    for (grapheme, col) in &glyphs {
+        if *col < start || *col >= start + width {
             continue;
-        };
-        frame.write_glyph(
-            rect.left + col as i32,
+        }
+        let (character, suffix) = grapheme_parts(grapheme.text);
+        frame.write_grapheme(
+            rect.left + (*col - start) as i32,
             rect.top,
-            character,
-            1,
+            GraphemeGlyph {
+                character,
+                suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
+                width: grapheme.width,
+            },
             glyph_style,
             clip,
         );
     }
     if let Some(cursor_col) = cursor_col {
-        frame.write_glyph(
-            rect.left + cursor_col as i32,
-            rect.top,
-            chars.get(start + cursor_col).copied().unwrap_or(' '),
-            1,
-            GlyphStyle {
+        if cursor_col < width {
+            let cursor_style = GlyphStyle {
                 background,
                 foreground,
                 selection_background,
@@ -1260,10 +1293,32 @@ fn paint_input(
                 italic: text_attributes.italic,
                 underline: text_attributes.underline,
                 strikethrough: text_attributes.strikethrough,
-            },
-            clip,
-        );
-        frame.set_reversed(rect.left + cursor_col as i32, rect.top, true, clip);
+            };
+            if let Some((grapheme, _)) = glyphs.iter().find(|(_, col)| *col == cursor_cell) {
+                let (character, suffix) = grapheme_parts(grapheme.text);
+                frame.write_grapheme(
+                    rect.left + cursor_col as i32,
+                    rect.top,
+                    GraphemeGlyph {
+                        character,
+                        suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
+                        width: grapheme.width,
+                    },
+                    cursor_style,
+                    clip,
+                );
+            } else {
+                frame.write_glyph(
+                    rect.left + cursor_col as i32,
+                    rect.top,
+                    ' ',
+                    1,
+                    cursor_style,
+                    clip,
+                );
+            }
+            frame.set_reversed(rect.left + cursor_col as i32, rect.top, true, clip);
+        }
     }
 }
 
@@ -1327,11 +1382,14 @@ fn paint_textarea(
         if row as i32 >= rect.height() {
             continue;
         }
-        frame.write_glyph(
+        frame.write_grapheme(
             rect.left + glyph.col as i32,
             rect.top + row as i32,
-            glyph.character,
-            glyph.width,
+            GraphemeGlyph {
+                character: glyph.character,
+                suffix: glyph.suffix.as_deref().map(|suffix| suffix.as_str()),
+                width: glyph.width,
+            },
             glyph_style,
             clip,
         );
@@ -1343,28 +1401,48 @@ fn paint_textarea(
             && col as i32 >= 0
             && (col as i32) < rect.width()
         {
-            let cursor_character = layout
+            let cursor_glyph = layout
                 .glyphs
                 .iter()
                 .find(|glyph| glyph.row == row && glyph.col == col)
-                .map(|glyph| glyph.character)
-                .unwrap_or(' ');
-            frame.write_glyph(
-                rect.left + col as i32,
-                rect.top + visible_row as i32,
-                cursor_character,
-                1,
-                GlyphStyle {
-                    background,
-                    foreground,
-                    selection_background,
-                    bold: text_attributes.bold,
-                    italic: text_attributes.italic,
-                    underline: text_attributes.underline,
-                    strikethrough: text_attributes.strikethrough,
-                },
-                clip,
-            );
+                .map(|glyph| {
+                    (
+                        glyph.character,
+                        glyph.suffix.as_deref().map(|suffix| suffix.as_str()),
+                        glyph.width,
+                    )
+                });
+            let cursor_style = GlyphStyle {
+                background,
+                foreground,
+                selection_background,
+                bold: text_attributes.bold,
+                italic: text_attributes.italic,
+                underline: text_attributes.underline,
+                strikethrough: text_attributes.strikethrough,
+            };
+            if let Some((character, suffix, width)) = cursor_glyph {
+                frame.write_grapheme(
+                    rect.left + col as i32,
+                    rect.top + visible_row as i32,
+                    GraphemeGlyph {
+                        character,
+                        suffix,
+                        width,
+                    },
+                    cursor_style,
+                    clip,
+                );
+            } else {
+                frame.write_glyph(
+                    rect.left + col as i32,
+                    rect.top + visible_row as i32,
+                    ' ',
+                    1,
+                    cursor_style,
+                    clip,
+                );
+            }
             frame.set_reversed(
                 rect.left + col as i32,
                 rect.top + visible_row as i32,
@@ -3299,6 +3377,91 @@ mod tests {
     }
 
     #[test]
+    fn inline_span_preserves_emoji_variation_selector_in_terminal_output() {
+        let mut arena = LayoutArena::new();
+        let row = arena.create_element(block_style(CssDimension::Length(4.0), CssDimension::Auto));
+        let span = arena.create_element(DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        });
+        let emoji = "\u{26a0}\u{fe0f}";
+        let text = arena.create_text(emoji);
+        arena.append_child(span, text);
+        arena.append_child(row, span);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        let output = paint_arena(&arena, row, 4, 1, false);
+        let mut bytes = Vec::new();
+        output
+            .frame
+            .write_full_to(&mut bytes, termprofile::TermProfile::NoColor)
+            .unwrap();
+        let rendered = String::from_utf8(bytes).unwrap();
+
+        assert!(
+            rendered.contains(emoji),
+            "terminal output dropped the emoji variation selector: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn block_text_preserves_joined_emoji_in_terminal_output() {
+        let mut arena = LayoutArena::new();
+        let row = arena.create_element(block_style(CssDimension::Length(5.0), CssDimension::Auto));
+        let emoji = "\u{1f469}\u{200d}\u{1f4bb}";
+        let text = arena.create_text(format!("{emoji}x"));
+        arena.append_child(row, text);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        let output = paint_arena(&arena, row, 5, 1, false);
+        let mut bytes = Vec::new();
+        output
+            .frame
+            .write_full_to(&mut bytes, termprofile::TermProfile::NoColor)
+            .unwrap();
+        let rendered = String::from_utf8(bytes).unwrap();
+
+        assert!(
+            rendered.contains(emoji),
+            "terminal output dropped the emoji joiner: {rendered:?}"
+        );
+        assert_eq!(output.frame.cell(2, 0).unwrap().character, 'x');
+    }
+
+    #[test]
+    fn flex_text_places_content_after_joined_emoji_at_its_visual_cell() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(5.0), CssDimension::Length(1.0));
+        root_style.display = LayoutDisplay::Flex;
+        let root = arena.create_element(root_style);
+        let text = arena.create_text("\u{1f469}\u{200d}\u{1f4bb}x");
+        arena.append_child(root, text);
+
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, root, 5, 1, false);
+
+        assert_eq!(output.frame.cell(2, 0).unwrap().character, 'x');
+    }
+
+    #[test]
     fn inline_div_text_paints_with_inline_div_colors() {
         let mut arena = LayoutArena::new();
         let mut row_style = block_style(CssDimension::Length(6.0), CssDimension::Auto);
@@ -4012,6 +4175,80 @@ mod tests {
     }
 
     #[test]
+    fn input_places_text_after_zwj_grapheme_at_its_visual_cell() {
+        let mut arena = LayoutArena::new();
+        let value = "\u{1f469}\u{200d}\u{1f4bb}x";
+        let input = arena.create_input(
+            block_style(CssDimension::Length(5.0), CssDimension::Length(1.0)),
+            value,
+        );
+
+        arena.compute_layout(
+            input,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, input, 5, 1, false);
+
+        assert_eq!(output.frame.cell(2, 0).unwrap().character, 'x');
+    }
+
+    #[test]
+    fn input_cursor_after_zwj_grapheme_uses_its_visual_cell() {
+        let mut arena = LayoutArena::new();
+        let value = "\u{1f469}\u{200d}\u{1f4bb}x";
+        let input = arena.create_input(
+            block_style(CssDimension::Length(5.0), CssDimension::Length(1.0)),
+            value,
+        );
+        arena.set_input_value(input, value, 3);
+        arena.set_input_focused(input, true);
+
+        arena.compute_layout(
+            input,
+            Size {
+                width: AvailableSpace::Definite(5.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, input, 5, 1, false);
+        let cursor = output.frame.cell(2, 0).unwrap();
+
+        assert!(
+            cursor.reversed,
+            "cursor after the ZWJ grapheme should occupy visual column 2"
+        );
+        assert_eq!(cursor.character, 'x');
+    }
+
+    #[test]
+    fn input_horizontal_scroll_starts_after_a_partially_clipped_grapheme() {
+        let mut arena = LayoutArena::new();
+        let value = "a\u{1f469}\u{200d}\u{1f4bb}b";
+        let input = arena.create_input(
+            block_style(CssDimension::Length(2.0), CssDimension::Length(1.0)),
+            value,
+        );
+        arena.set_input_value(input, value, 4);
+        arena.set_input_focused(input, true);
+
+        arena.compute_layout(
+            input,
+            Size {
+                width: AvailableSpace::Definite(2.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, input, 2, 1, false);
+        let cursor = output.frame.cell(0, 0).unwrap();
+
+        assert_eq!(cursor.character, 'b');
+        assert!(cursor.reversed);
+    }
+
+    #[test]
     fn terminal_blur_hides_focused_input_cursor() {
         let mut arena = LayoutArena::new();
         let input = arena.create_input(
@@ -4172,6 +4409,36 @@ mod tests {
         assert_eq!(output.frame.cell(4, 0).unwrap().character, 'o');
         assert_eq!(output.frame.cell(0, 1).unwrap().character, 'w');
         assert!(output.frame.cell(0, 1).unwrap().reversed);
+    }
+
+    #[test]
+    fn textarea_preserves_emoji_variation_selector_in_terminal_output() {
+        let mut arena = LayoutArena::new();
+        let emoji = "\u{26a0}\u{fe0f}";
+        let textarea = arena.create_textarea(
+            block_style(CssDimension::Length(4.0), CssDimension::Length(1.0)),
+            emoji,
+        );
+
+        arena.compute_layout(
+            textarea,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::Definite(1.0),
+            },
+        );
+        let output = paint_arena(&arena, textarea, 4, 1, false);
+        let mut bytes = Vec::new();
+        output
+            .frame
+            .write_full_to(&mut bytes, termprofile::TermProfile::NoColor)
+            .unwrap();
+        let rendered = String::from_utf8(bytes).unwrap();
+
+        assert!(
+            rendered.contains(emoji),
+            "textarea output dropped the emoji variation selector: {rendered:?}"
+        );
     }
 
     #[test]

@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::io::{self, Write};
 
 use termprofile::TermProfile;
 
 use crate::style::{Background, BorderStyle, DivStyle};
 use crate::terminal::{write_synchronized_output_begin, write_synchronized_output_end};
+use crate::text::GraphemeSuffix;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ClipRect {
@@ -41,6 +43,7 @@ pub(crate) struct Frame {
     foreground_painted: Vec<bool>,
     background_painted: Vec<bool>,
     selection_units: Vec<SelectionUnit>,
+    grapheme_suffixes: HashMap<usize, String>,
     next_selection_order: usize,
     capture_hidden_selection_units: bool,
 }
@@ -60,11 +63,19 @@ pub(crate) struct Cell {
     pub(crate) wide_continuation: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct SelectionUnit {
     order: usize,
     row: i32,
     character: char,
+    suffix: Option<Box<GraphemeSuffix>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GraphemeGlyph<'a> {
+    pub(crate) character: char,
+    pub(crate) suffix: Option<&'a str>,
+    pub(crate) width: usize,
 }
 
 impl ClipRect {
@@ -149,6 +160,7 @@ impl Frame {
             foreground_painted: vec![false; width.saturating_mul(height)],
             background_painted: vec![false; width.saturating_mul(height)],
             selection_units: Vec::new(),
+            grapheme_suffixes: HashMap::new(),
             next_selection_order: 0,
             capture_hidden_selection_units,
         }
@@ -184,6 +196,9 @@ impl Frame {
             if !layer.painted[index] {
                 continue;
             }
+            let source_replaces_glyph = layer.foreground_painted[index]
+                && (!layer.cells[index].character.is_whitespace()
+                    || layer.cells[index].wide_continuation);
             let (cell, foreground_painted, background_painted) = composite_cell(
                 self.cells[index],
                 layer.cells[index],
@@ -194,6 +209,13 @@ impl Frame {
                 default_background,
             );
             self.cells[index] = cell;
+            if source_replaces_glyph {
+                if let Some(suffix) = layer.grapheme_suffixes.get(&index) {
+                    self.grapheme_suffixes.insert(index, suffix.clone());
+                } else {
+                    self.grapheme_suffixes.remove(&index);
+                }
+            }
             self.foreground_painted[index] |= foreground_painted;
             self.background_painted[index] |= background_painted;
             self.painted[index] |= foreground_painted || background_painted;
@@ -257,7 +279,9 @@ impl Frame {
                 }) {
                     continue;
                 }
-                self.cells[start + col] = Cell {
+                let index = start + col;
+                self.grapheme_suffixes.remove(&index);
+                self.cells[index] = Cell {
                     background,
                     character: ' ',
                     foreground: Background::Default,
@@ -298,7 +322,28 @@ impl Frame {
         style: GlyphStyle,
         clip: ClipBounds,
     ) {
-        if width == 0 {
+        self.write_grapheme(
+            x,
+            y,
+            GraphemeGlyph {
+                character,
+                suffix: None,
+                width,
+            },
+            style,
+            clip,
+        );
+    }
+
+    pub(crate) fn write_grapheme(
+        &mut self,
+        x: i32,
+        y: i32,
+        glyph: GraphemeGlyph<'_>,
+        style: GlyphStyle,
+        clip: ClipBounds,
+    ) {
+        if glyph.width == 0 {
             return;
         }
 
@@ -307,13 +352,18 @@ impl Frame {
             return;
         }
 
-        let selection_order = self.push_selection_unit(y, character);
+        let selection_order = self.push_selection_unit(y, glyph.character, glyph.suffix);
         if !visible {
             return;
         }
 
         let index = self.cell_index(x, y).expect("cell visibility checked");
-        self.cells[index].character = character;
+        if let Some(suffix) = glyph.suffix.filter(|suffix| !suffix.is_empty()) {
+            self.grapheme_suffixes.insert(index, suffix.to_owned());
+        } else {
+            self.grapheme_suffixes.remove(&index);
+        }
+        self.cells[index].character = glyph.character;
         self.cells[index].foreground = style.foreground;
         self.cells[index].selection_order = Some(selection_order);
         self.cells[index].bold = style.bold;
@@ -331,7 +381,7 @@ impl Frame {
             self.cells[index].selection_background = style.selection_background;
         }
 
-        for offset in 1..width {
+        for offset in 1..glyph.width {
             let continuation_x = x + offset as i32;
             let Some(continuation_index) = self.cell_index(continuation_x, y) else {
                 continue;
@@ -340,6 +390,7 @@ impl Frame {
                 continue;
             }
 
+            self.grapheme_suffixes.remove(&continuation_index);
             self.cells[continuation_index].character = ' ';
             self.cells[continuation_index].foreground = style.foreground;
             self.cells[continuation_index].selection_order = None;
@@ -375,6 +426,7 @@ impl Frame {
             return;
         }
 
+        self.grapheme_suffixes.remove(&index);
         self.cells[index].character = character;
         self.cells[index].foreground = style.foreground;
         self.cells[index].selection_order = None;
@@ -527,6 +579,9 @@ impl Frame {
             }
 
             current_line.push(unit.character);
+            if let Some(suffix) = &unit.suffix {
+                current_line.push_str(suffix.as_str());
+            }
         }
 
         if current_row.is_some() {
@@ -606,7 +661,7 @@ impl Frame {
                 let mut col = 0;
                 while col < self.width {
                     let index = row * self.width + col;
-                    if previous.cells[index] == self.cells[index] {
+                    if self.cell_matches(previous, index) {
                         col += 1;
                         continue;
                     }
@@ -614,7 +669,7 @@ impl Frame {
                     let start = col;
                     while col < self.width {
                         let index = row * self.width + col;
-                        if previous.cells[index] == self.cells[index] {
+                        if self.cell_matches(previous, index) {
                             break;
                         }
                         col += 1;
@@ -731,6 +786,9 @@ impl Frame {
                 current_foreground = cell.foreground;
             }
             write!(out, "{}", cell.character)?;
+            if let Some(suffix) = self.grapheme_suffixes.get(&(row * self.width + col)) {
+                write!(out, "{suffix}")?;
+            }
         }
 
         write!(
@@ -767,6 +825,7 @@ impl Frame {
             return;
         }
 
+        self.grapheme_suffixes.remove(&index);
         self.cells[index].character = character;
         self.cells[index].foreground = foreground;
         self.cells[index].selection_order = None;
@@ -800,13 +859,19 @@ impl Frame {
         Some(y as usize * self.width + x as usize)
     }
 
-    fn push_selection_unit(&mut self, row: i32, character: char) -> usize {
+    fn cell_matches(&self, other: &Self, index: usize) -> bool {
+        self.cells[index] == other.cells[index]
+            && self.grapheme_suffixes.get(&index) == other.grapheme_suffixes.get(&index)
+    }
+
+    fn push_selection_unit(&mut self, row: i32, character: char, suffix: Option<&str>) -> usize {
         let order = self.next_selection_order;
         self.next_selection_order += 1;
         self.selection_units.push(SelectionUnit {
             order,
             row,
             character,
+            suffix: suffix.map(|suffix| Box::new(GraphemeSuffix::new(suffix))),
         });
         order
     }
@@ -1534,6 +1599,31 @@ mod tests {
     }
 
     #[test]
+    fn selection_text_preserves_grapheme_suffixes() {
+        let mut frame = Frame::new(2, 1, false);
+        frame.write_grapheme(
+            0,
+            0,
+            GraphemeGlyph {
+                character: '\u{26a0}',
+                suffix: Some("\u{fe0f}"),
+                width: 2,
+            },
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+        );
+        let selection = Selection {
+            anchor: SelectionPoint { order: 0 },
+            focus: SelectionPoint { order: 0 },
+        };
+
+        assert_eq!(
+            frame.selected_text(&selection).as_deref(),
+            Some("\u{26a0}\u{fe0f}")
+        );
+    }
+
+    #[test]
     fn selection_point_uses_nearest_selectable_cell_on_row() {
         let mut frame = Frame::new(8, 1, false);
         frame.write_glyph(2, 0, 'a', 1, GlyphStyle::default(), ClipBounds::unbounded());
@@ -1587,6 +1677,42 @@ mod tests {
         assert!(output.contains("\x1b[2;3Hx"));
         assert!(!output.contains("\x1b[H"));
         assert!(!output.contains("\x1b[2J"));
+    }
+
+    #[test]
+    fn diff_writes_when_only_grapheme_suffix_changes() {
+        let mut previous = Frame::new(1, 1, false);
+        previous.write_grapheme(
+            0,
+            0,
+            GraphemeGlyph {
+                character: '\u{26a0}',
+                suffix: Some("\u{fe0e}"),
+                width: 1,
+            },
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+        );
+        let mut next = Frame::new(1, 1, false);
+        next.write_grapheme(
+            0,
+            0,
+            GraphemeGlyph {
+                character: '\u{26a0}',
+                suffix: Some("\u{fe0f}"),
+                width: 1,
+            },
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+        );
+
+        let mut bytes = Vec::new();
+        next.write_diff_to(&mut bytes, Some(&previous), TermProfile::NoColor, false)
+            .unwrap();
+        let output = String::from_utf8(bytes).unwrap();
+
+        assert!(output.contains("\u{26a0}\u{fe0f}"));
+        assert!(!output.contains("\u{26a0}\u{fe0e}"));
     }
 
     #[test]

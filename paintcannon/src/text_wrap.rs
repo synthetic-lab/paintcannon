@@ -1,6 +1,9 @@
 use std::ops::Range;
 
-use crate::text::{character_cell_width, parse_text_for_pre_wrap_with_source_map};
+use crate::text::{
+    character_cell_offsets, grapheme_parts, parse_text_for_pre_wrap_with_source_map,
+    text_graphemes, GraphemeSuffix,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WrappedText {
@@ -13,6 +16,7 @@ pub(crate) struct WrappedText {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TextGlyph {
     pub(crate) character: char,
+    pub(crate) suffix: Option<Box<GraphemeSuffix>>,
     pub(crate) row: usize,
     pub(crate) col: usize,
     pub(crate) width: usize,
@@ -23,58 +27,73 @@ impl WrappedText {
         let wrap_width = wrap_width.max(1);
         let parsed = parse_text_for_pre_wrap_with_source_map(text);
         let chars = &parsed.characters;
+        let normalized = chars.iter().collect::<String>();
+        let cell_offsets = character_cell_offsets(&normalized);
         let mut glyphs = Vec::new();
-        let mut parsed_cursor_positions = Vec::with_capacity(chars.len() + 1);
+        let mut parsed_cursor_positions = vec![(0, 0); chars.len() + 1];
         let mut row = 0;
         let mut col = 0;
-        let mut index = 0;
 
-        while index < chars.len() {
-            let character = chars[index];
-            if character == '\r' {
-                parsed_cursor_positions.push(normalize_cursor_position(row, col, wrap_width));
-                index += 1;
-                continue;
-            }
+        for grapheme in text_graphemes(&normalized) {
+            let index = grapheme.character_start;
+            let character = grapheme
+                .text
+                .chars()
+                .next()
+                .expect("graphemes are non-empty");
             if character == '\n' {
-                parsed_cursor_positions.push(normalize_cursor_position(row, col, wrap_width));
+                set_cursor_positions(
+                    &mut parsed_cursor_positions,
+                    grapheme.character_start,
+                    grapheme.character_end,
+                    normalize_cursor_position(row, col, wrap_width),
+                );
                 row += 1;
                 col = 0;
-                index += 1;
                 continue;
             }
             if is_word_start(chars, index) {
                 let word_end = next_word_end(chars, index);
-                let word_width = text_width(&chars[index..word_end]);
+                let word_width = cell_offsets[word_end] - cell_offsets[index];
                 if word_width <= wrap_width && col > 0 && col + word_width > wrap_width {
                     row += 1;
                     col = 0;
                 }
             }
-            let width = character_cell_width(character);
+            let width = grapheme.width;
             if col > 0 && width > 0 && col + width > wrap_width {
                 row += 1;
                 col = 0;
                 if character == ' ' || character == '\t' {
-                    parsed_cursor_positions.push((row, col));
-                    index += 1;
+                    set_cursor_positions(
+                        &mut parsed_cursor_positions,
+                        grapheme.character_start,
+                        grapheme.character_end,
+                        (row, col),
+                    );
                     continue;
                 }
             }
-            parsed_cursor_positions.push(normalize_cursor_position(row, col, wrap_width));
+            set_cursor_positions(
+                &mut parsed_cursor_positions,
+                grapheme.character_start,
+                grapheme.character_end,
+                normalize_cursor_position(row, col, wrap_width),
+            );
             if width > 0 {
+                let (character, suffix) = grapheme_parts(grapheme.text);
                 glyphs.push(TextGlyph {
                     character,
+                    suffix,
                     row,
                     col,
                     width,
                 });
             }
             col += width;
-            index += 1;
         }
         let end_position = normalize_cursor_position(row, col, wrap_width);
-        parsed_cursor_positions.push(end_position);
+        parsed_cursor_positions[chars.len()] = end_position;
         let cursor_positions = parsed
             .source_to_parsed_cursor
             .iter()
@@ -148,6 +167,15 @@ impl WrappedText {
     }
 }
 
+fn set_cursor_positions(
+    positions: &mut [(usize, usize)],
+    start: usize,
+    end: usize,
+    position: (usize, usize),
+) {
+    positions[start..end].fill(position);
+}
+
 fn visual_line_ranges(
     characters: &[char],
     source_to_parsed_cursor: &[usize],
@@ -208,13 +236,6 @@ fn next_word_end(chars: &[char], start: usize) -> usize {
 
 fn is_word_start(chars: &[char], index: usize) -> bool {
     !chars[index].is_whitespace() && (index == 0 || chars[index - 1].is_whitespace())
-}
-
-fn text_width(chars: &[char]) -> usize {
-    chars
-        .iter()
-        .map(|character| character_cell_width(*character))
-        .sum()
 }
 
 #[cfg(test)]
