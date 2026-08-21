@@ -96,7 +96,7 @@ pub(crate) fn engine_loop(rx: Receiver<EngineCommand>, options: EngineLoopOption
         if flush_result.is_err() {
             engine.mark_paint_dirty();
         }
-        publish_transition_events(&mut engine, &state);
+        publish_engine_events(&mut engine, &state);
         state.next_frame =
             next_frame_deadline(state.next_frame, state.frame_interval, Instant::now());
     }
@@ -110,7 +110,7 @@ pub(super) fn apply_command(
     engine.begin_transition_batch();
     let keep_running = apply_command_inner(engine, state, command);
     engine.finish_transition_batch(Instant::now());
-    publish_transition_events(engine, state);
+    publish_engine_events(engine, state);
     keep_running
 }
 
@@ -384,6 +384,20 @@ fn apply_command_inner(
         EngineCommand::SetTerminalFocused { focused } => {
             engine.set_terminal_focused(focused);
         }
+        EngineCommand::ObserveIntersection {
+            observer_id,
+            target,
+            root,
+            root_margin,
+            thresholds,
+        } => engine.observe_intersection(observer_id, target, root, root_margin, thresholds),
+        EngineCommand::UnobserveIntersection {
+            observer_id,
+            target,
+        } => engine.unobserve_intersection(observer_id, target),
+        EngineCommand::DisconnectIntersectionObserver { observer_id } => {
+            engine.disconnect_intersection_observer(observer_id)
+        }
         EngineCommand::InvalidateFrame => engine.invalidate_frame(),
         EngineCommand::Shutdown { response } => {
             if let Some(response) = response {
@@ -396,13 +410,17 @@ fn apply_command_inner(
     true
 }
 
-fn publish_transition_events(engine: &mut PaintEngine, state: &EngineLoopState) {
-    let events = engine.drain_transition_events();
-    if events.is_empty() {
+fn publish_engine_events(engine: &mut PaintEngine, state: &EngineLoopState) {
+    let transitions = engine.drain_transition_events();
+    let intersections = engine.drain_intersection_events();
+    if transitions.is_empty() && intersections.is_empty() {
         return;
     }
-    for event in events {
+    for event in transitions {
         state.event_queue.push(NativeEvent::transition(event));
+    }
+    for event in intersections {
+        state.event_queue.push(NativeEvent::intersection(event));
     }
     state.event_notifier.notify();
 }
@@ -544,7 +562,7 @@ mod tests {
             ..test_loop_options()
         });
 
-        publish_transition_events(&mut engine, &state);
+        publish_engine_events(&mut engine, &state);
 
         assert_eq!(notifier.notifications.load(Ordering::Relaxed), 1);
         let events = event_queue.drain();

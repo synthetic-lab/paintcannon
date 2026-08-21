@@ -28,6 +28,7 @@ PaintCannon supports the following CSS:
 - Mouse pointer styling (in supported terminals using the kitty protocol)
 - Terminal focus detection via `PaintCannon.hasFocus` and app-level
   `focus`/`blur` events
+- `IntersectionObserver` notifications based on viewport and scroll-container geometry
 
 It also exposes a non-standard set of border styles, since typical
 pixel-based borders can't be rendered in terminals:

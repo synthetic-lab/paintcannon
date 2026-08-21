@@ -4,8 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mock } from "antipattern";
 import {
+  IntersectionObserver,
   PaintCannon,
   paintCannonDeps,
+  type NativeEvent,
   type PaintClipboardWriteEvent,
   type PaintElement,
 } from "../main.ts";
@@ -715,6 +717,130 @@ describe("core resize events", () => {
   });
 });
 
+describe("IntersectionObserver", () => {
+  it("normalizes options and registers observations with native layout", () => {
+    const { paintCannon, mockNative, root, child } = createPaintTree();
+    const observer = new IntersectionObserver(() => {}, {
+      root,
+      rootMargin: "1px 25%",
+      threshold: [1, 0.5, 0.5, 0],
+    });
+
+    observer.observe(child);
+
+    expect(observer.root).toBe(root);
+    expect(observer.rootMargin).toBe("1px 25% 1px 25%");
+    expect(observer.thresholds).toEqual([0, 0.5, 1]);
+    expect(mockNative.intersectionObservations).toEqual([
+      {
+        observerId: 1,
+        targetId: child.id,
+        rootId: root.id,
+        rootMargin: ["1px", "25%", "1px", "25%"],
+        thresholds: [0, 0.5, 1],
+      },
+    ]);
+    paintCannon.stop();
+  });
+
+  it("batches native entries into an asynchronous callback with PaintCannon targets", async () => {
+    const { paintCannon, mockNative, child } = createPaintTree();
+    const callbacks: Array<{ count: number; target: PaintElement; ratio: number }> = [];
+    const observer = new IntersectionObserver(entries => {
+      callbacks.push({
+        count: entries.length,
+        target: entries[0]!.target,
+        ratio: entries[0]!.intersectionRatio,
+      });
+    });
+    observer.observe(child);
+    mockNative.events.push(intersectionEvent(1, child.id, 0.5));
+
+    notifyNativeEvents(paintCannon);
+    expect(callbacks).toEqual([]);
+    await Promise.resolve();
+
+    expect(callbacks).toEqual([{ count: 1, target: child, ratio: 0.5 }]);
+    paintCannon.stop();
+  });
+
+  it("lets takeRecords drain queued entries before the callback", async () => {
+    const { paintCannon, mockNative, child } = createPaintTree();
+    const callback = vi.fn();
+    const observer = new IntersectionObserver(callback);
+    observer.observe(child);
+    mockNative.events.push(intersectionEvent(1, child.id, 1));
+
+    notifyNativeEvents(paintCannon);
+    const records = observer.takeRecords();
+    await Promise.resolve();
+
+    expect(records).toHaveLength(1);
+    expect(records[0]!.boundingClientRect.toJSON()).toEqual({
+      x: 0,
+      y: 0,
+      width: 4,
+      height: 2,
+      top: 0,
+      right: 4,
+      bottom: 2,
+      left: 0,
+    });
+    expect(callback).not.toHaveBeenCalled();
+    paintCannon.stop();
+  });
+
+  it("unobserves, disconnects, and cleans up destroyed targets", () => {
+    const { paintCannon, mockNative, child } = createPaintTree();
+    const observer = new IntersectionObserver(() => {});
+    observer.observe(child);
+    observer.unobserve(child);
+    observer.observe(child);
+    child.destroy();
+    observer.disconnect();
+
+    expect(mockNative.unobservedIntersections).toEqual([
+      { observerId: 1, targetId: child.id },
+      { observerId: 1, targetId: child.id },
+    ]);
+    expect(mockNative.disconnectedIntersectionObservers).toEqual([1]);
+    paintCannon.stop();
+  });
+
+  it("observes elements created inside a transaction after native ids are assigned", () => {
+    const paintCannon = new PaintCannon();
+    const observer = new IntersectionObserver(() => {});
+    let child: PaintElement | undefined;
+    paintCannon.transaction(() => {
+      const root = paintCannon.createElement("div");
+      child = paintCannon.createElement("div");
+      root.appendChild(child);
+      paintCannon.setRoot(root);
+      observer.observe(child);
+    });
+
+    expect(child).toBeDefined();
+    expect(currentMockNative().intersectionObservations).toEqual([
+      expect.objectContaining({ targetId: child!.id }),
+    ]);
+    expect(child!.id).toBeGreaterThan(0);
+    paintCannon.stop();
+  });
+
+  it("rejects invalid margins, thresholds, and targets from another PaintCannon", () => {
+    expect(() => new IntersectionObserver(() => {}, { rootMargin: "1em" })).toThrow(SyntaxError);
+    expect(() => new IntersectionObserver(() => {}, { threshold: 1.01 })).toThrow(RangeError);
+
+    const first = new PaintCannon();
+    const second = new PaintCannon();
+    const observer = new IntersectionObserver(() => {});
+    observer.observe(first.createElement("div"));
+    expect(() => observer.observe(second.createElement("div"))).toThrow(/different PaintCannons/);
+    first.stop();
+    second.stop();
+  });
+});
+
 describe("unified native event ordering", () => {
   it("dispatches mixed native events in queue order", () => {
     const { paintCannon, mockNative, child } = createPaintTree({ captureMouse: true });
@@ -1068,4 +1194,37 @@ function currentMockNative(): MockNativePaintCannon {
 
 function notifyNativeEvents(_paintCannon: PaintCannon): void {
   currentMockNative().notifyEvents();
+}
+
+function intersectionEvent(observerId: number, targetId: number, ratio: number): NativeEvent {
+  return {
+    kind: "intersection",
+    intersection: {
+      observerId,
+      entries: [
+        {
+          targetId,
+          boundingClientRect: nativeRect(0, 0, 4, 2),
+          intersectionRect: nativeRect(0, 0, 4 * ratio, 2),
+          rootBounds: nativeRect(0, 0, 10, 5),
+          isIntersecting: ratio > 0,
+          intersectionRatio: ratio,
+          time: 12.5,
+        },
+      ],
+    },
+  };
+}
+
+function nativeRect(x: number, y: number, width: number, height: number) {
+  return {
+    x,
+    y,
+    width,
+    height,
+    top: y,
+    right: x + width,
+    bottom: y + height,
+    left: x,
+  };
 }

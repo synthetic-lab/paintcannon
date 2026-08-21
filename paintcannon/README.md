@@ -30,6 +30,7 @@ PaintCannon supports the following CSS layout and paint features:
 - CSS transitions for color and opacity properties
 - Mouse pointer styling in supported terminals
 - Terminal focus detection via `PaintCannon.hasFocus` and app-level `focus`/`blur` events
+- `IntersectionObserver` notifications based on terminal viewport and scroll-container geometry
 
 PaintCannon also exposes terminal-specific border styles:
 
@@ -142,6 +143,33 @@ For OSC 52 terminal copies, `success` confirms that the escape sequence was writ
 it cannot confirm that the terminal accepted the request or changed the system clipboard.
 Applications using `paintcannon-react` can subscribe through the `paintCannon` property returned by
 `render()`.
+
+## Intersection Observer
+
+PaintCannon exports the standard core `IntersectionObserver` API. Rectangles use terminal cells as
+their coordinate unit, and observations are calculated from the committed Rust layout, including
+scroll offsets, ancestor overflow clipping, borders, explicit roots, root margins, and threshold
+crossings. In `rootMargin`, one `px` corresponds to one terminal cell; percentages resolve against
+the root width, as they do in CSS:
+
+```ts
+import { IntersectionObserver } from "paintcannon";
+
+const observer = new IntersectionObserver(
+  entries => {
+    for (const entry of entries) {
+      entry.target.style.opacity = entry.isIntersecting ? "1" : "0.4";
+    }
+  },
+  { root: viewport, rootMargin: "1px 0px", threshold: [0, 0.5, 1] },
+);
+
+observer.observe(row);
+```
+
+The implementation supports `observe()`, `unobserve()`, `disconnect()`, and `takeRecords()`, plus
+the standard `root`, `rootMargin`, and `thresholds` properties. As on the web, callbacks are queued
+asynchronously and an initial entry is delivered for every observed target.
 
 The Rust renderer owns a fixed-cadence render loop, configured with the `fps`
 constructor option (60 by default). It only runs layout for layout-dirty

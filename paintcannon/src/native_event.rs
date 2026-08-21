@@ -3,7 +3,8 @@ use std::sync::Mutex;
 
 use napi_derive::napi;
 
-use crate::engine::EngineTransitionEvent;
+use crate::engine::{EngineIntersectionEvent, EngineTransitionEvent};
+use crate::layout::AbsoluteRect;
 use crate::style::TransitionProperty;
 use crate::transition::TransitionEventType;
 
@@ -56,6 +57,38 @@ pub struct TransitionEvent {
     pub property_name: String,
 }
 
+#[derive(Clone, Debug)]
+#[napi(object)]
+pub struct IntersectionRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+}
+
+#[derive(Clone, Debug)]
+#[napi(object)]
+pub struct IntersectionEntry {
+    pub target_id: u32,
+    pub bounding_client_rect: IntersectionRect,
+    pub intersection_rect: IntersectionRect,
+    pub root_bounds: IntersectionRect,
+    pub is_intersecting: bool,
+    pub intersection_ratio: f64,
+    pub time: f64,
+}
+
+#[derive(Clone, Debug)]
+#[napi(object)]
+pub struct IntersectionEvent {
+    pub observer_id: u32,
+    pub entries: Vec<IntersectionEntry>,
+}
+
 #[derive(Clone)]
 #[napi(object)]
 pub struct ClipboardWritePayload {
@@ -74,6 +107,7 @@ pub struct NativeEvent {
     pub resize: Option<TerminalResizeEvent>,
     pub focus: Option<TerminalFocusEvent>,
     pub transition: Option<TransitionEvent>,
+    pub intersection: Option<IntersectionEvent>,
 }
 
 impl NativeEvent {
@@ -116,6 +150,26 @@ impl NativeEvent {
         Self::with_kind("transition", |native| native.transition = Some(event))
     }
 
+    pub(crate) fn intersection(event: EngineIntersectionEvent) -> Self {
+        let event = IntersectionEvent {
+            observer_id: event.observer_id,
+            entries: event
+                .entries
+                .into_iter()
+                .map(|entry| IntersectionEntry {
+                    target_id: entry.target.0,
+                    bounding_client_rect: intersection_rect(entry.bounding_client_rect),
+                    intersection_rect: intersection_rect(entry.intersection_rect),
+                    root_bounds: intersection_rect(entry.root_bounds),
+                    is_intersecting: entry.is_intersecting,
+                    intersection_ratio: entry.intersection_ratio,
+                    time: entry.time,
+                })
+                .collect(),
+        };
+        Self::with_kind("intersection", |native| native.intersection = Some(event))
+    }
+
     fn with_kind(kind: &str, set_payload: impl FnOnce(&mut Self)) -> Self {
         let mut event = Self {
             kind: kind.to_string(),
@@ -126,9 +180,23 @@ impl NativeEvent {
             resize: None,
             focus: None,
             transition: None,
+            intersection: None,
         };
         set_payload(&mut event);
         event
+    }
+}
+
+fn intersection_rect(rect: AbsoluteRect) -> IntersectionRect {
+    IntersectionRect {
+        x: rect.left as f64,
+        y: rect.top as f64,
+        width: rect.width() as f64,
+        height: rect.height() as f64,
+        top: rect.top as f64,
+        right: rect.right as f64,
+        bottom: rect.bottom as f64,
+        left: rect.left as f64,
     }
 }
 
