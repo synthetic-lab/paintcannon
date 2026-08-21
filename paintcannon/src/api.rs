@@ -16,7 +16,9 @@ use crate::engine::{
 };
 use crate::event_notification::{EventNotification, EventNotifier};
 use crate::input::{TerminalInput, TerminalInputOptions};
-use crate::layout::{ArenaScrollMetrics, ScrollbarAxis};
+use crate::layout::{
+    ArenaScrollMetrics, IntersectionMarginValue, IntersectionRootMargin, ScrollbarAxis,
+};
 use crate::native_event::{NativeEvent, NativeEventQueue};
 use crate::style::{
     parse_align_items, parse_border_style, parse_box_lengths, parse_cursor, parse_dimension,
@@ -715,6 +717,47 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn observe_intersection(
+        &self,
+        observer_id: u32,
+        target_id: u32,
+        root_id: Option<u32>,
+        root_margin: Vec<String>,
+        thresholds: Vec<f64>,
+    ) -> Result<()> {
+        let root_margin = parse_intersection_root_margin(&root_margin)?;
+        if thresholds.is_empty()
+            || thresholds
+                .iter()
+                .any(|threshold| !threshold.is_finite() || !(0.0..=1.0).contains(threshold))
+        {
+            return Err(Error::from_reason(
+                "intersection thresholds must contain finite numbers between 0 and 1",
+            ));
+        }
+        self.send(EngineCommand::ObserveIntersection {
+            observer_id,
+            target: DomId(target_id),
+            root: root_id.map(DomId),
+            root_margin,
+            thresholds,
+        })
+    }
+
+    #[napi]
+    pub fn unobserve_intersection(&self, observer_id: u32, target_id: u32) -> Result<()> {
+        self.send(EngineCommand::UnobserveIntersection {
+            observer_id,
+            target: DomId(target_id),
+        })
+    }
+
+    #[napi]
+    pub fn disconnect_intersection_observer(&self, observer_id: u32) -> Result<()> {
+        self.send(EngineCommand::DisconnectIntersectionObserver { observer_id })
+    }
+
+    #[napi]
     pub fn set_frame_rate(&self, fps: f64) -> Result<()> {
         if !fps.is_finite() || fps <= 0.0 {
             return Err(Error::from_reason(format!(
@@ -858,6 +901,45 @@ impl PaintCannon {
         self.shutdown();
         Ok(())
     }
+}
+
+fn parse_intersection_root_margin(values: &[String]) -> Result<IntersectionRootMargin> {
+    if values.len() != 4 {
+        return Err(Error::from_reason(
+            "intersection root margin must contain exactly four values",
+        ));
+    }
+    let mut parsed = Vec::with_capacity(4);
+    for value in values {
+        let (number, percent) = if let Some(number) = value.strip_suffix("px") {
+            (number, false)
+        } else if let Some(number) = value.strip_suffix('%') {
+            (number, true)
+        } else {
+            return Err(Error::from_reason(format!(
+                "invalid intersection root margin: {value}"
+            )));
+        };
+        let number = number.parse::<f32>().map_err(|_| {
+            Error::from_reason(format!("invalid intersection root margin: {value}"))
+        })?;
+        if !number.is_finite() {
+            return Err(Error::from_reason(format!(
+                "invalid intersection root margin: {value}"
+            )));
+        }
+        parsed.push(if percent {
+            IntersectionMarginValue::Percent(number)
+        } else {
+            IntersectionMarginValue::Cells(number)
+        });
+    }
+    Ok(IntersectionRootMargin {
+        top: parsed[0],
+        right: parsed[1],
+        bottom: parsed[2],
+        left: parsed[3],
+    })
 }
 
 #[cfg(unix)]
@@ -1493,5 +1575,21 @@ mod tests {
             } => {}
             _ => panic!("expected background reset style mutation"),
         }
+    }
+
+    #[test]
+    fn intersection_root_margin_parser_accepts_cells_and_percentages() {
+        let margin = parse_intersection_root_margin(&[
+            "1px".to_string(),
+            "25%".to_string(),
+            "-2px".to_string(),
+            "0%".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(margin.top, IntersectionMarginValue::Cells(1.0));
+        assert_eq!(margin.right, IntersectionMarginValue::Percent(25.0));
+        assert_eq!(margin.bottom, IntersectionMarginValue::Cells(-2.0));
+        assert_eq!(margin.left, IntersectionMarginValue::Percent(0.0));
+        assert!(parse_intersection_root_margin(&vec!["1em".to_string(); 4]).is_err());
     }
 }

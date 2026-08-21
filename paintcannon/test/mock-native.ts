@@ -24,6 +24,14 @@ export interface NativeStyleMutation {
   value: string;
 }
 
+export type NativeIntersectionObservation = {
+  observerId: number;
+  targetId: number;
+  rootId: number | undefined | null;
+  rootMargin: string[];
+  thresholds: number[];
+};
+
 export function createMockNativeBinding(instances: MockNativePaintCannon[] = []): NativeBinding {
   return {
     PaintCannon: class extends MockNativePaintCannon {
@@ -67,6 +75,9 @@ export class MockNativePaintCannon implements NativePaintCannon {
   destroyedNodes: number[] = [];
   textControls = new Map<number, NativeTextControlState>();
   styleMutations: NativeStyleMutation[] = [];
+  intersectionObservations: NativeIntersectionObservation[] = [];
+  unobservedIntersections: Array<{ observerId: number; targetId: number }> = [];
+  disconnectedIntersectionObservers: number[] = [];
   scrollMetricsById = new Map<number, NativeScrollMetrics>();
   private nextId = 1;
 
@@ -240,6 +251,30 @@ export class MockNativePaintCannon implements NativePaintCannon {
     const events = this.events;
     this.events = [];
     return events;
+  }
+
+  observeIntersection(
+    observerId: number,
+    targetId: number,
+    rootId: number | undefined | null,
+    rootMargin: string[],
+    thresholds: number[],
+  ): void {
+    this.intersectionObservations.push({
+      observerId,
+      targetId,
+      rootId,
+      rootMargin,
+      thresholds,
+    });
+  }
+
+  unobserveIntersection(observerId: number, targetId: number): void {
+    this.unobservedIntersections.push({ observerId, targetId });
+  }
+
+  disconnectIntersectionObserver(observerId: number): void {
+    this.disconnectedIntersectionObservers.push(observerId);
   }
 
   queueFocusEvent(type: "focus" | "blur"): void {

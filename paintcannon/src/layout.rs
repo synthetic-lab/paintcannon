@@ -234,6 +234,28 @@ pub(crate) struct ArenaScrollMetrics {
     pub(crate) client_height: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum IntersectionMarginValue {
+    Cells(f32),
+    Percent(f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct IntersectionRootMargin {
+    pub(crate) top: IntersectionMarginValue,
+    pub(crate) right: IntersectionMarginValue,
+    pub(crate) bottom: IntersectionMarginValue,
+    pub(crate) left: IntersectionMarginValue,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ArenaIntersectionGeometry {
+    pub(crate) bounding_client_rect: AbsoluteRect,
+    pub(crate) intersection_rect: AbsoluteRect,
+    pub(crate) root_bounds: AbsoluteRect,
+    pub(crate) is_intersecting: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScrollbarAxis {
     Horizontal,
@@ -1522,6 +1544,78 @@ impl LayoutArena {
         self.absolute_paint_layout_origin(node)
     }
 
+    pub(crate) fn intersection_geometry(
+        &self,
+        target: NodeId,
+        root: Option<NodeId>,
+        viewport_width: usize,
+        viewport_height: usize,
+        root_margin: IntersectionRootMargin,
+    ) -> Option<ArenaIntersectionGeometry> {
+        let inside_root = if let Some(root) = root {
+            let mut current = Some(target);
+            let mut inside_root = false;
+            while let Some(node) = current {
+                if node == root {
+                    inside_root = true;
+                    break;
+                }
+                current = self.parent(node);
+            }
+            inside_root
+        } else {
+            true
+        };
+
+        let bounding_client_rect = self.intersection_border_rect(target);
+        let base_root_bounds = match root {
+            Some(root) => self.intersection_root_rect(root),
+            None => AbsoluteRect::from_edges(
+                0,
+                0,
+                viewport_width.min(i32::MAX as usize) as i32,
+                viewport_height.min(i32::MAX as usize) as i32,
+            ),
+        };
+        let root_bounds = base_root_bounds.expand(root_margin);
+        if !inside_root {
+            return Some(ArenaIntersectionGeometry {
+                bounding_client_rect,
+                intersection_rect: AbsoluteRect::from_edges(0, 0, 0, 0),
+                root_bounds,
+                is_intersecting: false,
+            });
+        }
+        let mut is_intersecting = bounding_client_rect.intersects_or_touches(root_bounds);
+        let mut intersection_rect = bounding_client_rect.intersect(root_bounds);
+
+        let mut ancestor = self.parent(target);
+        while let Some(node) = ancestor {
+            if Some(node) == root {
+                break;
+            }
+            let style = self.style(node);
+            if style.overflow_x != LayoutOverflow::Visible
+                || style.overflow_y != LayoutOverflow::Visible
+            {
+                let clip = self.absolute_scrollport_rect(node);
+                let clips_x = style.overflow_x != LayoutOverflow::Visible;
+                let clips_y = style.overflow_y != LayoutOverflow::Visible;
+                is_intersecting &=
+                    intersection_rect.intersects_or_touches_axes(clip, clips_x, clips_y);
+                intersection_rect = intersection_rect.intersect_axes(clip, clips_x, clips_y);
+            }
+            ancestor = self.parent(node);
+        }
+
+        Some(ArenaIntersectionGeometry {
+            bounding_client_rect,
+            intersection_rect,
+            root_bounds,
+            is_intersecting,
+        })
+    }
+
     fn absolute_border_rect(&self, node: NodeId) -> AbsoluteRect {
         let layout = self.layout(node);
         let origin = self.absolute_paint_layout_origin(node);
@@ -1531,6 +1625,100 @@ impl LayoutArena {
             (origin.x + layout.size.width).round() as i32,
             (origin.y + layout.size.height).round() as i32,
         )
+    }
+
+    fn intersection_border_rect(&self, node: NodeId) -> AbsoluteRect {
+        if self.style(node).display == LayoutDisplay::Inline {
+            if let Some(context) = self.inline_formatting_context(node) {
+                if let Some(rect) = self.inline_fragment_bounding_rect(context, node) {
+                    return rect;
+                }
+            }
+        }
+        self.absolute_border_rect(node)
+    }
+
+    fn inline_fragment_bounding_rect(
+        &self,
+        inline_context: NodeId,
+        target: NodeId,
+    ) -> Option<AbsoluteRect> {
+        let context_bounds = self.absolute_border_rect(inline_context);
+        let context_layout = self.layout(inline_context);
+        let (scroll_left, scroll_top) = self.scroll_offset(inline_context);
+        let base_x = context_bounds.left
+            + (context_layout.border.left + context_layout.padding.left).round() as i32
+            - if self.style(inline_context).overflow_x == LayoutOverflow::Scroll {
+                scroll_left.min(i32::MAX as u32) as i32
+            } else {
+                0
+            };
+        let base_y = context_bounds.top
+            + (context_layout.border.top + context_layout.padding.top).round() as i32
+            - if self.style(inline_context).overflow_y == LayoutOverflow::Scroll {
+                scroll_top.min(i32::MAX as u32) as i32
+            } else {
+                0
+            };
+        let mut bounds = None;
+        for fragment in self.inline_fragments(inline_context) {
+            if !self.is_descendant_or_self(fragment.node, target) {
+                continue;
+            }
+            let relative_offset =
+                self.inline_fragment_relative_offset(inline_context, fragment.node);
+            let rect = AbsoluteRect::from_edges(
+                base_x + fragment.x as i32 + relative_offset.x,
+                base_y + fragment.y as i32 + relative_offset.y,
+                base_x + fragment.x as i32 + relative_offset.x + fragment.width as i32,
+                base_y + fragment.y as i32 + relative_offset.y + fragment.height as i32,
+            );
+            bounds = Some(bounds.map_or(rect, |bounds: AbsoluteRect| bounds.union(rect)));
+        }
+        bounds
+    }
+
+    fn is_descendant_or_self(&self, node: NodeId, ancestor: NodeId) -> bool {
+        let mut current = Some(node);
+        while let Some(node) = current {
+            if node == ancestor {
+                return true;
+            }
+            current = self.parent(node);
+        }
+        false
+    }
+
+    fn absolute_scrollport_rect(&self, node: NodeId) -> AbsoluteRect {
+        absolute_scrollport_rect(self.absolute_border_rect(node), self.layout(node))
+    }
+
+    fn intersection_root_rect(&self, node: NodeId) -> AbsoluteRect {
+        let style = self.style(node);
+        let border = self.intersection_border_rect(node);
+        let scrollport = absolute_scrollport_rect(border, self.layout(node));
+        AbsoluteRect {
+            left: if style.overflow_x == LayoutOverflow::Visible {
+                border.left
+            } else {
+                scrollport.left
+            },
+            right: if style.overflow_x == LayoutOverflow::Visible {
+                border.right
+            } else {
+                scrollport.right
+            },
+            top: if style.overflow_y == LayoutOverflow::Visible {
+                border.top
+            } else {
+                scrollport.top
+            },
+            bottom: if style.overflow_y == LayoutOverflow::Visible {
+                border.bottom
+            } else {
+                scrollport.bottom
+            },
+        }
     }
 
     fn content_box_absolute_rect(&self, node: NodeId) -> AbsoluteContentRect {
@@ -2786,12 +2974,87 @@ impl AbsoluteRect {
         x >= self.left && x < self.right && y >= self.top && y < self.bottom
     }
 
-    fn width(self) -> u32 {
+    pub(crate) fn width(self) -> u32 {
         (self.right - self.left).max(0) as u32
     }
 
-    fn height(self) -> u32 {
+    pub(crate) fn height(self) -> u32 {
         (self.bottom - self.top).max(0) as u32
+    }
+
+    pub(crate) fn area(self) -> u32 {
+        self.width().saturating_mul(self.height())
+    }
+
+    fn intersect(self, other: Self) -> Self {
+        let left = self.left.max(other.left);
+        let top = self.top.max(other.top);
+        Self {
+            left,
+            top,
+            right: self.right.min(other.right).max(left),
+            bottom: self.bottom.min(other.bottom).max(top),
+        }
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            left: self.left.min(other.left),
+            top: self.top.min(other.top),
+            right: self.right.max(other.right),
+            bottom: self.bottom.max(other.bottom),
+        }
+    }
+
+    fn intersects_or_touches(self, other: Self) -> bool {
+        self.left <= other.right
+            && self.right >= other.left
+            && self.top <= other.bottom
+            && self.bottom >= other.top
+    }
+
+    fn intersects_or_touches_axes(self, other: Self, x: bool, y: bool) -> bool {
+        (!x || (self.left <= other.right && self.right >= other.left))
+            && (!y || (self.top <= other.bottom && self.bottom >= other.top))
+    }
+
+    fn intersect_axes(self, other: Self, x: bool, y: bool) -> Self {
+        let left = if x {
+            self.left.max(other.left)
+        } else {
+            self.left
+        };
+        let top = if y { self.top.max(other.top) } else { self.top };
+        Self {
+            left,
+            top,
+            right: if x {
+                self.right.min(other.right).max(left)
+            } else {
+                self.right
+            },
+            bottom: if y {
+                self.bottom.min(other.bottom).max(top)
+            } else {
+                self.bottom
+            },
+        }
+    }
+
+    fn expand(self, margin: IntersectionRootMargin) -> Self {
+        let reference_width = self.width() as f32;
+        let resolve = |value: IntersectionMarginValue| match value {
+            IntersectionMarginValue::Cells(value) => value,
+            IntersectionMarginValue::Percent(value) => reference_width * value / 100.0,
+        };
+        let left = self.left - resolve(margin.left).round() as i32;
+        let top = self.top - resolve(margin.top).round() as i32;
+        Self {
+            left,
+            top,
+            right: (self.right + resolve(margin.right).round() as i32).max(left),
+            bottom: (self.bottom + resolve(margin.bottom).round() as i32).max(top),
+        }
     }
 }
 
@@ -6271,5 +6534,45 @@ mod tests {
                 height: 2,
             }]
         );
+    }
+
+    #[test]
+    fn intersection_geometry_uses_the_inline_element_border_box() {
+        let mut arena = LayoutArena::new();
+        let row = arena.create_element(block_style(CssDimension::Length(10.0), CssDimension::Auto));
+        let span = arena.create_element(DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        });
+        let text = arena.create_text("span");
+        arena.append_child(span, text);
+        arena.append_child(row, span);
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(10.0),
+                height: AvailableSpace::Definite(2.0),
+            },
+        );
+
+        let zero = IntersectionMarginValue::Cells(0.0);
+        let geometry = arena
+            .intersection_geometry(
+                span,
+                None,
+                10,
+                2,
+                IntersectionRootMargin {
+                    top: zero,
+                    right: zero,
+                    bottom: zero,
+                    left: zero,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(geometry.bounding_client_rect.width(), 4);
+        assert_eq!(geometry.bounding_client_rect.height(), 1);
+        assert_eq!(geometry.intersection_rect, geometry.bounding_client_rect);
     }
 }

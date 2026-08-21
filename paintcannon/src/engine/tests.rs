@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use super::*;
 
+use crate::layout::{IntersectionMarginValue, IntersectionRootMargin};
 use crate::selection::{SelectionMouseEvent, SelectionMouseEventType};
 use crate::style::{
     Background, CssDimension, CssFontWeight, CssLengthPercentage, LayoutDisplay,
@@ -15,6 +16,189 @@ fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
         height,
         ..DivStyle::default()
     }
+}
+
+fn intersection_margin(cells: f32) -> IntersectionRootMargin {
+    IntersectionRootMargin {
+        top: IntersectionMarginValue::Cells(cells),
+        right: IntersectionMarginValue::Cells(cells),
+        bottom: IntersectionMarginValue::Cells(cells),
+        left: IntersectionMarginValue::Cells(cells),
+    }
+}
+
+#[test]
+fn intersection_observer_reports_initial_geometry_and_threshold_crossing_after_scroll() {
+    let mut engine = PaintEngine::new();
+    let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Length(2.0));
+    viewport_style.overflow_y = LayoutOverflow::Scroll;
+    let viewport = engine.create_element(viewport_style);
+    let content = engine.create_element(block_style(CssDimension::Length(4.0), CssDimension::Auto));
+    let spacer = engine.create_element(block_style(
+        CssDimension::Length(4.0),
+        CssDimension::Length(1.0),
+    ));
+    let target = engine.create_element(block_style(
+        CssDimension::Length(4.0),
+        CssDimension::Length(2.0),
+    ));
+    engine.append_child(content, spacer);
+    engine.append_child(content, target);
+    engine.append_child(viewport, content);
+    engine.set_root(viewport);
+    engine.observe_intersection(
+        7,
+        target,
+        Some(viewport),
+        intersection_margin(0.0),
+        vec![0.75],
+    );
+
+    engine.render_frame(5, 2).unwrap();
+    let layout_passes = engine.layout_passes();
+    let initial = engine.drain_intersection_events();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].observer_id, 7);
+    assert_eq!(initial[0].entries.len(), 1);
+    assert_eq!(initial[0].entries[0].target, target);
+    assert_eq!(initial[0].entries[0].intersection_ratio, 0.5);
+    assert!(initial[0].entries[0].is_intersecting);
+
+    engine.set_scroll_offset(viewport, 0, 1);
+    engine.render_frame(5, 2).unwrap();
+    let scrolled = engine.drain_intersection_events();
+    assert_eq!(scrolled.len(), 1);
+    assert_eq!(scrolled[0].entries[0].intersection_ratio, 1.0);
+    assert_eq!(engine.layout_passes(), layout_passes);
+
+    engine.render_frame(5, 2).unwrap();
+    assert!(engine.drain_intersection_events().is_empty());
+}
+
+#[test]
+fn intersection_observer_root_margin_expands_the_explicit_root() {
+    let mut engine = PaintEngine::new();
+    let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Length(2.0));
+    viewport_style.overflow_y = LayoutOverflow::Hidden;
+    let viewport = engine.create_element(viewport_style);
+    let spacer = engine.create_element(block_style(
+        CssDimension::Length(5.0),
+        CssDimension::Length(1.0),
+    ));
+    let target = engine.create_element(block_style(
+        CssDimension::Length(5.0),
+        CssDimension::Length(2.0),
+    ));
+    engine.append_child(viewport, spacer);
+    engine.append_child(viewport, target);
+    engine.set_root(viewport);
+    let mut margin = intersection_margin(0.0);
+    margin.bottom = IntersectionMarginValue::Cells(1.0);
+    engine.observe_intersection(1, target, Some(viewport), margin, vec![0.0]);
+
+    engine.render_frame(5, 2).unwrap();
+    let events = engine.drain_intersection_events();
+    assert_eq!(events[0].entries[0].intersection_ratio, 1.0);
+    assert_eq!(events[0].entries[0].root_bounds.bottom, 3);
+}
+
+#[test]
+fn intersection_observer_distinguishes_edge_contact_from_a_disconnected_target() {
+    let mut engine = PaintEngine::new();
+    let mut root_style = block_style(CssDimension::Length(4.0), CssDimension::Length(2.0));
+    root_style.overflow_y = LayoutOverflow::Hidden;
+    let root = engine.create_element(root_style);
+    let spacer = engine.create_element(block_style(
+        CssDimension::Length(4.0),
+        CssDimension::Length(2.0),
+    ));
+    let target = engine.create_element(block_style(
+        CssDimension::Length(4.0),
+        CssDimension::Length(1.0),
+    ));
+    engine.append_child(root, spacer);
+    engine.append_child(root, target);
+    engine.set_root(root);
+    engine.observe_intersection(1, target, Some(root), intersection_margin(0.0), vec![0.0]);
+
+    engine.render_frame(4, 2).unwrap();
+    let touching = engine.drain_intersection_events();
+    assert!(touching[0].entries[0].is_intersecting);
+    assert_eq!(touching[0].entries[0].intersection_ratio, 0.0);
+
+    engine.detach_node(target);
+    engine.render_frame(4, 2).unwrap();
+    let detached = engine.drain_intersection_events();
+    assert!(!detached[0].entries[0].is_intersecting);
+    assert_eq!(detached[0].entries[0].intersection_ratio, 0.0);
+}
+
+#[test]
+fn intersection_observer_preserves_geometry_for_target_outside_explicit_root() {
+    let mut engine = PaintEngine::new();
+    let document = engine.create_element(block_style(
+        CssDimension::Length(8.0),
+        CssDimension::Length(2.0),
+    ));
+    let explicit_root = engine.create_element(block_style(
+        CssDimension::Length(4.0),
+        CssDimension::Length(2.0),
+    ));
+    let target = engine.create_element(block_style(
+        CssDimension::Length(4.0),
+        CssDimension::Length(2.0),
+    ));
+    engine.append_child(document, explicit_root);
+    engine.append_child(document, target);
+    engine.set_root(document);
+    engine.observe_intersection(
+        1,
+        target,
+        Some(explicit_root),
+        intersection_margin(0.0),
+        vec![0.0],
+    );
+
+    engine.render_frame(8, 2).unwrap();
+    let events = engine.drain_intersection_events();
+    let entry = &events[0].entries[0];
+    assert!(!entry.is_intersecting);
+    assert_eq!(entry.bounding_client_rect.width(), 4);
+    assert_eq!(entry.root_bounds.width(), 4);
+    assert_eq!(entry.intersection_rect.area(), 0);
+}
+
+#[test]
+fn intersection_observer_entries_preserve_observe_order() {
+    let mut engine = PaintEngine::new();
+    let root = engine.create_element(block_style(
+        CssDimension::Length(4.0),
+        CssDimension::Length(2.0),
+    ));
+    let first = engine.create_element(block_style(
+        CssDimension::Length(4.0),
+        CssDimension::Length(1.0),
+    ));
+    let second = engine.create_element(block_style(
+        CssDimension::Length(4.0),
+        CssDimension::Length(1.0),
+    ));
+    engine.append_child(root, first);
+    engine.append_child(root, second);
+    engine.set_root(root);
+    engine.observe_intersection(1, second, None, intersection_margin(0.0), vec![0.0]);
+    engine.observe_intersection(1, first, None, intersection_margin(0.0), vec![0.0]);
+
+    engine.render_frame(4, 2).unwrap();
+    let events = engine.drain_intersection_events();
+    assert_eq!(
+        events[0]
+            .entries
+            .iter()
+            .map(|entry| entry.target)
+            .collect::<Vec<_>>(),
+        vec![second, first]
+    );
 }
 
 #[test]

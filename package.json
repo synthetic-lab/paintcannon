@@ -32,6 +32,7 @@
     "demo:detach": "npm run demo:detach --workspace paintcannon",
     "demo:keyboard": "npm run demo:keyboard --workspace paintcannon",
     "demo:images": "npm run demo:images --workspace paintcannon",
+    "demo:intersection-observer": "npm run demo:intersection-observer --workspace paintcannon",
     "demo:input": "npm run demo:input --workspace paintcannon",
     "demo:image-scroll": "npm run demo:image-scroll --workspace paintcannon",
     "demo:less": "npm run demo:less --workspace paintcannon",

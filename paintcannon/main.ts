@@ -6,6 +6,8 @@ import type {
   BatchCommand as NativeBatchCommand,
   BatchIdMapping as NativeBatchIdMapping,
   CursorVisualPosition as NativeCursorVisualPosition,
+  IntersectionEvent as NativeIntersectionEvent,
+  IntersectionRect as NativeIntersectionRect,
   KeyboardEvent as NativeKeyboardEvent,
   NativeEvent as NativeQueuedEvent,
   PaintCannon as NativePaintCannon,
@@ -73,6 +75,26 @@ export type ClipboardEventListener = (event: PaintClipboardEvent) => void;
 export type ClipboardWriteEventListener = (event: PaintClipboardWriteEvent) => void;
 export type PaintCannonFocusEventListener = (event: PaintCannonFocusEvent) => void;
 export type ResizeEventListener = (event: PaintResizeEvent) => void;
+
+export type IntersectionObserverCallback = (
+  entries: IntersectionObserverEntry[],
+  observer: IntersectionObserver,
+) => void;
+
+export type IntersectionObserverInit = {
+  root?: PaintElement | null;
+  rootMargin?: string;
+  threshold?: number | number[];
+};
+
+const syncIntersectionTarget = Symbol("syncIntersectionTarget");
+const removeIntersectionTarget = Symbol("removeIntersectionTarget");
+const enqueueIntersectionEntries = Symbol("enqueueIntersectionEntries");
+const stopIntersectionObserver = Symbol("stopIntersectionObserver");
+const registerIntersectionObserver = Symbol("registerIntersectionObserver");
+const observeNativeIntersection = Symbol("observeNativeIntersection");
+const unobserveNativeIntersection = Symbol("unobserveNativeIntersection");
+const disconnectNativeIntersectionObserver = Symbol("disconnectNativeIntersectionObserver");
 export const MOUSE_ELEMENT_EVENT_TYPES = [
   "click",
   "mouseenter",
@@ -440,11 +462,198 @@ function installProcessCleanupHandlers(): void {
   }
 }
 
+export class DOMRectReadOnly {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+  readonly left: number;
+
+  constructor(x = 0, y = 0, width = 0, height = 0) {
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.top = y;
+    this.right = x + width;
+    this.bottom = y + height;
+    this.left = x;
+  }
+
+  toJSON(): Record<"x" | "y" | "width" | "height" | "top" | "right" | "bottom" | "left", number> {
+    return {
+      x: this.x,
+      y: this.y,
+      width: this.width,
+      height: this.height,
+      top: this.top,
+      right: this.right,
+      bottom: this.bottom,
+      left: this.left,
+    };
+  }
+}
+
+export class IntersectionObserverEntry {
+  readonly time: number;
+  readonly rootBounds: DOMRectReadOnly | null;
+  readonly boundingClientRect: DOMRectReadOnly;
+  readonly intersectionRect: DOMRectReadOnly;
+  readonly isIntersecting: boolean;
+  readonly intersectionRatio: number;
+  readonly target: PaintElement;
+
+  constructor(entry: IntersectionObserverEntryInit) {
+    this.time = entry.time;
+    this.rootBounds = entry.rootBounds;
+    this.boundingClientRect = entry.boundingClientRect;
+    this.intersectionRect = entry.intersectionRect;
+    this.isIntersecting = entry.isIntersecting;
+    this.intersectionRatio = entry.intersectionRatio;
+    this.target = entry.target;
+  }
+}
+
+export type IntersectionObserverEntryInit = {
+  time: number;
+  rootBounds: DOMRectReadOnly | null;
+  boundingClientRect: DOMRectReadOnly;
+  intersectionRect: DOMRectReadOnly;
+  isIntersecting: boolean;
+  intersectionRatio: number;
+  target: PaintElement;
+};
+
+export class IntersectionObserver {
+  readonly root: PaintElement | null;
+  readonly rootMargin: string;
+  readonly thresholds: readonly number[];
+  private readonly callback: IntersectionObserverCallback;
+  private readonly rootMarginValues: string[];
+  private readonly targets = new Set<PaintElement>();
+  private readonly records: IntersectionObserverEntry[] = [];
+  private ownerDocument: PaintCannon | undefined;
+  private observerId: number | undefined;
+  private callbackScheduled = false;
+
+  constructor(callback: IntersectionObserverCallback, options: IntersectionObserverInit = {}) {
+    if (typeof callback !== "function") {
+      throw new TypeError("IntersectionObserver callback must be a function");
+    }
+    this.callback = callback;
+    this.root = options.root ?? null;
+    if (this.root !== null) {
+      assertElement(this.root);
+    }
+    this.rootMarginValues = parseRootMargin(options.rootMargin ?? "0px");
+    this.rootMargin = this.rootMarginValues.join(" ");
+    this.thresholds = Object.freeze(normalizeThresholds(options.threshold));
+    if (this.root !== null) {
+      this.attach(this.root.ownerDocument);
+    }
+  }
+
+  observe(target: PaintElement): void {
+    assertElement(target);
+    this.attach(target.ownerDocument);
+    if (this.targets.has(target)) {
+      return;
+    }
+    this.targets.add(target);
+    this[syncIntersectionTarget](target);
+  }
+
+  unobserve(target: PaintElement): void {
+    assertElement(target);
+    if (!this.targets.delete(target)) {
+      return;
+    }
+    if (this.ownerDocument === target.ownerDocument && this.observerId !== undefined) {
+      this.ownerDocument[unobserveNativeIntersection](this.observerId, target);
+    }
+  }
+
+  disconnect(): void {
+    this.targets.clear();
+    this.records.length = 0;
+    if (this.ownerDocument !== undefined && this.observerId !== undefined) {
+      this.ownerDocument[disconnectNativeIntersectionObserver](this.observerId);
+    }
+  }
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return this.records.splice(0);
+  }
+
+  [syncIntersectionTarget](target: PaintElement): void {
+    if (
+      !this.targets.has(target) ||
+      this.ownerDocument === undefined ||
+      this.observerId === undefined
+    ) {
+      return;
+    }
+    this.ownerDocument[observeNativeIntersection](
+      this,
+      this.observerId,
+      target,
+      this.root,
+      this.rootMarginValues,
+      this.thresholds,
+    );
+  }
+
+  [removeIntersectionTarget](target: PaintElement): boolean {
+    return this.targets.delete(target);
+  }
+
+  [enqueueIntersectionEntries](entries: IntersectionObserverEntry[]): void {
+    this.records.push(...entries.filter(entry => this.targets.has(entry.target)));
+    if (this.records.length === 0) {
+      return;
+    }
+    if (this.callbackScheduled) {
+      return;
+    }
+    this.callbackScheduled = true;
+    queueMicrotask(() => {
+      this.callbackScheduled = false;
+      const records = this.takeRecords();
+      if (records.length > 0 && this.ownerDocument !== undefined) {
+        this.callback(records, this);
+      }
+    });
+  }
+
+  [stopIntersectionObserver](): void {
+    this.targets.clear();
+    this.records.length = 0;
+    this.ownerDocument = undefined;
+    this.observerId = undefined;
+  }
+
+  private attach(ownerDocument: PaintCannon): void {
+    if (this.ownerDocument !== undefined && this.ownerDocument !== ownerDocument) {
+      throw new Error(
+        "an IntersectionObserver cannot observe elements from different PaintCannons",
+      );
+    }
+    if (this.ownerDocument === undefined) {
+      this.ownerDocument = ownerDocument;
+      this.observerId = ownerDocument[registerIntersectionObserver](this);
+    }
+  }
+}
+
 export class PaintCannon {
   private readonly binding: NativePaintCannon;
   private animationFrameIntervalMs: number;
   private stopped = false;
   private nextAnimationFrameId = 1;
+  private nextIntersectionObserverId = 1;
   private animationFrameTimer: NodeJS.Timeout | undefined;
   private suspendedByPaintCannon = false;
   private transactionDepth = 0;
@@ -478,6 +687,8 @@ export class PaintCannon {
     Partial<Record<ElementEventType, Set<ElementEventListener>>>
   >();
   private readonly scrollMetrics = new Map<number, NativeScrollMetrics>();
+  private readonly intersectionObservers = new Map<number, IntersectionObserver>();
+  private readonly pendingIntersectionTargets = new Map<IntersectionObserver, Set<PaintElement>>();
   private scrollbarDrag: ActiveScrollbarDrag | undefined;
   private suppressNextScrollbarClick = false;
   private readonly elementFactories: {
@@ -716,6 +927,58 @@ export class PaintCannon {
     this.animationFrameCallbacks.delete(id);
   }
 
+  [registerIntersectionObserver](observer: IntersectionObserver): number {
+    if (this.stopped) {
+      throw new Error("paintcannon renderer has been stopped");
+    }
+    const id = this.nextIntersectionObserverId++;
+    this.intersectionObservers.set(id, observer);
+    return id;
+  }
+
+  [observeNativeIntersection](
+    observer: IntersectionObserver,
+    observerId: number,
+    target: PaintElement,
+    root: PaintElement | null,
+    rootMargin: string[],
+    thresholds: readonly number[],
+  ): void {
+    if (target.id < 0 || (root !== null && root.id < 0)) {
+      let targets = this.pendingIntersectionTargets.get(observer);
+      if (targets === undefined) {
+        targets = new Set();
+        this.pendingIntersectionTargets.set(observer, targets);
+      }
+      targets.add(target);
+      return;
+    }
+    this.binding.observeIntersection(
+      observerId,
+      target.id,
+      root?.id,
+      rootMargin,
+      Array.from(thresholds),
+    );
+  }
+
+  [unobserveNativeIntersection](observerId: number, target: PaintElement): void {
+    for (const targets of this.pendingIntersectionTargets.values()) {
+      targets.delete(target);
+    }
+    if (target.id >= 0) {
+      this.binding.unobserveIntersection(observerId, target.id);
+    }
+  }
+
+  [disconnectNativeIntersectionObserver](observerId: number): void {
+    const observer = this.intersectionObservers.get(observerId);
+    if (observer !== undefined) {
+      this.pendingIntersectionTargets.delete(observer);
+    }
+    this.binding.disconnectIntersectionObserver(observerId);
+  }
+
   transaction<T>(callback: () => T): T {
     const isOuterTransaction = this.transactionDepth === 0;
     this.beginTransaction();
@@ -919,6 +1182,11 @@ export class PaintCannon {
     this.focusEventListeners.blur.clear();
     this.resizeEventListeners.clear();
     this.elementEventListeners.clear();
+    for (const observer of this.intersectionObservers.values()) {
+      observer[stopIntersectionObserver]();
+    }
+    this.intersectionObservers.clear();
+    this.pendingIntersectionTargets.clear();
     this.elements.clear();
     this.parents.clear();
     this.children.clear();
@@ -1245,6 +1513,13 @@ export class PaintCannon {
       this.elementEventListeners.delete(id);
       this.scrollMetrics.delete(id);
       this.batchNodes.delete(id);
+      if (element !== undefined) {
+        for (const [observerId, observer] of this.intersectionObservers) {
+          if (observer[removeIntersectionTarget](element)) {
+            this.binding.unobserveIntersection(observerId, id);
+          }
+        }
+      }
     }
 
     if (this.focusedTextControl !== undefined && ids.has(this.focusedTextControl.id)) {
@@ -1310,14 +1585,27 @@ export class PaintCannon {
         const mappings = this.binding.applyBatch(commands);
         this.applyBatchIdMappings(mappings);
       }
+      this.flushPendingIntersectionTargets();
     } finally {
       this.batchNodes.clear();
+      this.pendingIntersectionTargets.clear();
     }
   }
 
   private rollbackTransaction(): void {
     this.batchCommands = [];
     this.batchNodes.clear();
+    this.pendingIntersectionTargets.clear();
+  }
+
+  private flushPendingIntersectionTargets(): void {
+    const pending = Array.from(this.pendingIntersectionTargets);
+    this.pendingIntersectionTargets.clear();
+    for (const [observer, targets] of pending) {
+      for (const target of targets) {
+        observer[syncIntersectionTarget](target);
+      }
+    }
   }
 
   private applyBatchIdMappings(mappings: NativeBatchIdMapping[]): void {
@@ -1519,6 +1807,13 @@ export class PaintCannon {
           this.dispatchTransitionEvent(nativeEvent.transition);
           break;
         }
+        case "intersection": {
+          if (nativeEvent.intersection === undefined) {
+            throw new Error("native intersection event is missing its payload");
+          }
+          this.dispatchIntersectionEvent(nativeEvent.intersection);
+          break;
+        }
         case "mouse": {
           if (nativeEvent.mouse === undefined) {
             throw new Error("native mouse event is missing its payload");
@@ -1531,6 +1826,32 @@ export class PaintCannon {
         default:
           throw new Error(`unknown native event kind: ${nativeEvent.kind}`);
       }
+    }
+  }
+
+  private dispatchIntersectionEvent(event: NativeIntersectionEvent): void {
+    const observer = this.intersectionObservers.get(event.observerId);
+    if (observer === undefined) {
+      return;
+    }
+    const entries = event.entries.flatMap(entry => {
+      const target = this.elements.get(entry.targetId);
+      return target === undefined
+        ? []
+        : [
+            new IntersectionObserverEntry({
+              time: entry.time,
+              rootBounds: domRect(entry.rootBounds),
+              boundingClientRect: domRect(entry.boundingClientRect),
+              intersectionRect: domRect(entry.intersectionRect),
+              isIntersecting: entry.isIntersecting,
+              intersectionRatio: entry.intersectionRatio,
+              target,
+            }),
+          ];
+    });
+    if (entries.length > 0) {
+      observer[enqueueIntersectionEntries](entries);
     }
   }
 
@@ -3909,6 +4230,39 @@ export type CSSStyleProperties = Partial<
   Record<CSSStylePropertyName, CSSStyleValue | null | undefined>
 >;
 const SUPPORTED_STYLE_PROPERTIES = new Set<string>(SUPPORTED_STYLE_PROPERTY_NAMES);
+
+function domRect(rect: NativeIntersectionRect): DOMRectReadOnly {
+  return new DOMRectReadOnly(rect.x, rect.y, rect.width, rect.height);
+}
+
+function parseRootMargin(value: string): string[] {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 1 || parts.length > 4) {
+    throw new SyntaxError(`invalid IntersectionObserver rootMargin: ${value}`);
+  }
+  const normalized = parts.map(part => {
+    const normalizedPart = part.toLowerCase();
+    if (normalizedPart === "0" || normalizedPart === "+0" || normalizedPart === "-0") {
+      return "0px";
+    }
+    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:px|%)$/.test(normalizedPart)) {
+      throw new SyntaxError(`invalid IntersectionObserver rootMargin: ${value}`);
+    }
+    return normalizedPart;
+  });
+  const [top, second = top, third = top, fourth = second] = normalized;
+  return [top, second, third, fourth];
+}
+
+function normalizeThresholds(value: number | number[] | undefined): readonly number[] {
+  const thresholds = value === undefined ? [0] : Array.isArray(value) ? value : [value];
+  if (thresholds.some(threshold => !Number.isFinite(threshold) || threshold < 0 || threshold > 1)) {
+    throw new RangeError("IntersectionObserver thresholds must be finite numbers between 0 and 1");
+  }
+  return Array.from(new Set(thresholds.length === 0 ? [0] : thresholds)).sort(
+    (left, right) => left - right,
+  );
+}
 
 function fpsToInterval(fps: number): number {
   if (!Number.isFinite(fps) || fps <= 0) {

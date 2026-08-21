@@ -10,7 +10,8 @@ use termprofile::TermProfile;
 use crate::frame::Frame;
 use crate::image::load_png_image;
 use crate::layout::{
-    ArenaScrollMetrics, ArenaScrollbarHit, LayoutArena, LayoutNodeKind, ScrollbarAxis,
+    AbsoluteRect, ArenaScrollMetrics, ArenaScrollbarHit, IntersectionRootMargin, LayoutArena,
+    LayoutNodeKind, ScrollbarAxis,
 };
 use crate::paint::{paint_arena_with_options, HitRegion, PaintOptions};
 use crate::selection::{
@@ -40,6 +41,36 @@ pub(crate) struct EngineTransitionEvent {
     pub(crate) event_type: TransitionEventType,
     pub(crate) target: DomId,
     pub(crate) property: TransitionProperty,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct EngineIntersectionEntry {
+    pub(crate) target: DomId,
+    pub(crate) bounding_client_rect: AbsoluteRect,
+    pub(crate) intersection_rect: AbsoluteRect,
+    pub(crate) root_bounds: AbsoluteRect,
+    pub(crate) is_intersecting: bool,
+    pub(crate) intersection_ratio: f64,
+    pub(crate) time: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct EngineIntersectionEvent {
+    pub(crate) observer_id: u32,
+    pub(crate) entries: Vec<EngineIntersectionEntry>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IntersectionObservationState {
+    threshold_index: usize,
+    is_intersecting: bool,
+}
+
+struct EngineIntersectionObserver {
+    root: Option<DomId>,
+    root_margin: IntersectionRootMargin,
+    thresholds: Vec<f64>,
+    targets: Vec<(DomId, Option<IntersectionObservationState>)>,
 }
 
 #[derive(Clone, Debug)]
@@ -430,6 +461,20 @@ pub(crate) enum EngineCommand {
     SetTerminalFocused {
         focused: bool,
     },
+    ObserveIntersection {
+        observer_id: u32,
+        target: DomId,
+        root: Option<DomId>,
+        root_margin: IntersectionRootMargin,
+        thresholds: Vec<f64>,
+    },
+    UnobserveIntersection {
+        observer_id: u32,
+        target: DomId,
+    },
+    DisconnectIntersectionObserver {
+        observer_id: u32,
+    },
     InvalidateFrame,
     Shutdown {
         response: Option<Sender<()>>,
@@ -477,6 +522,10 @@ pub(crate) struct PaintEngine {
     last_pointer_position: Option<(u32, u32)>,
     scrollbar_selection_suppressed: bool,
     selection_scroll_node: Option<NodeId>,
+    intersection_observers: HashMap<u32, EngineIntersectionObserver>,
+    pending_intersection_events: Vec<EngineIntersectionEvent>,
+    intersection_geometry_dirty: bool,
+    started_at: Instant,
 }
 
 impl PaintEngine {
@@ -508,11 +557,16 @@ impl PaintEngine {
             last_pointer_position: None,
             scrollbar_selection_suppressed: false,
             selection_scroll_node: None,
+            intersection_observers: HashMap::new(),
+            pending_intersection_events: Vec::new(),
+            intersection_geometry_dirty: false,
+            started_at: Instant::now(),
         }
     }
 
     fn mark_layout_dirty(&mut self) {
         self.dirtiness = Dirtiness::Layout;
+        self.intersection_geometry_dirty = true;
     }
 
     fn mark_paint_dirty(&mut self) {
@@ -800,6 +854,11 @@ impl PaintEngine {
                     removed_by_parent.entry(parent).or_default().insert(*node);
                 }
             }
+        }
+        for observer in self.intersection_observers.values_mut() {
+            observer
+                .targets
+                .retain(|(target, _)| !removed.contains(target));
         }
         for (parent, removed_children) in removed_by_parent {
             if let Some(siblings) = self.children.get_mut(&parent) {
@@ -1230,6 +1289,7 @@ impl PaintEngine {
             .and_then(|node| self.arena.set_scroll_offset(node, scroll_left, scroll_top));
         if metrics.is_some() {
             self.mark_paint_dirty();
+            self.intersection_geometry_dirty = true;
         }
         metrics
     }
@@ -1336,7 +1396,7 @@ impl PaintEngine {
         if self.transitions.has_active() {
             self.mark_paint_dirty();
         }
-        self.dirtiness != Dirtiness::Clean
+        self.dirtiness != Dirtiness::Clean || self.intersection_geometry_dirty
     }
 
     fn flush_dirty_frame_to(
@@ -1369,7 +1429,12 @@ impl PaintEngine {
         force_capture_hidden_selection_units: bool,
     ) -> Option<Frame> {
         self.sync_viewport_scrollbar_color();
-        let root = self.root.and_then(|root| self.node_for(root))?;
+        let Some(root) = self.root.and_then(|root| self.node_for(root)) else {
+            if self.intersection_geometry_dirty {
+                self.evaluate_intersection_observers(width, height, now);
+            }
+            return None;
+        };
         let total_start = Instant::now();
         let layout_start = Instant::now();
         let ensure_layout_start = Instant::now();
@@ -1378,6 +1443,9 @@ impl PaintEngine {
         let textarea_scroll_start = Instant::now();
         self.arena.ensure_dirty_textareas_visible();
         self.arena.prepare_paint(root);
+        if self.intersection_geometry_dirty {
+            self.evaluate_intersection_observers(width, height, now);
+        }
         profile_log(
             "ensure_dirty_textareas_visible",
             textarea_scroll_start.elapsed(),
@@ -1715,6 +1783,156 @@ impl PaintEngine {
             .into_iter()
             .filter_map(|event| self.transition_event_for_dom(event))
             .collect()
+    }
+
+    pub(crate) fn observe_intersection(
+        &mut self,
+        observer_id: u32,
+        target: DomId,
+        root: Option<DomId>,
+        root_margin: IntersectionRootMargin,
+        thresholds: Vec<f64>,
+    ) {
+        let observer = self
+            .intersection_observers
+            .entry(observer_id)
+            .or_insert_with(|| EngineIntersectionObserver {
+                root,
+                root_margin,
+                thresholds,
+                targets: Vec::new(),
+            });
+        if !observer
+            .targets
+            .iter()
+            .any(|(observed, _)| *observed == target)
+        {
+            observer.targets.push((target, None));
+        }
+        self.intersection_geometry_dirty = true;
+    }
+
+    pub(crate) fn unobserve_intersection(&mut self, observer_id: u32, target: DomId) {
+        if let Some(observer) = self.intersection_observers.get_mut(&observer_id) {
+            observer.targets.retain(|(observed, _)| *observed != target);
+        }
+    }
+
+    pub(crate) fn disconnect_intersection_observer(&mut self, observer_id: u32) {
+        self.intersection_observers.remove(&observer_id);
+    }
+
+    pub(crate) fn drain_intersection_events(&mut self) -> Vec<EngineIntersectionEvent> {
+        std::mem::take(&mut self.pending_intersection_events)
+    }
+
+    fn evaluate_intersection_observers(&mut self, width: usize, height: usize, now: Instant) {
+        self.intersection_geometry_dirty = false;
+        let elapsed = now.duration_since(self.started_at).as_secs_f64() * 1_000.0;
+        let observer_ids = self
+            .intersection_observers
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+
+        for observer_id in observer_ids {
+            let Some(observer) = self.intersection_observers.get(&observer_id) else {
+                continue;
+            };
+            let root = observer.root;
+            let root_margin = observer.root_margin;
+            let thresholds = observer.thresholds.clone();
+            let targets = observer.targets.clone();
+            let mut entries = Vec::new();
+            let mut next_targets = Vec::with_capacity(targets.len());
+
+            for (target, previous) in targets {
+                let geometry =
+                    self.intersection_geometry_for(target, root, width, height, root_margin);
+                let empty = AbsoluteRect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                let (bounding_client_rect, intersection_rect, root_bounds) = geometry
+                    .map(|geometry| {
+                        (
+                            geometry.bounding_client_rect,
+                            geometry.intersection_rect,
+                            geometry.root_bounds,
+                        )
+                    })
+                    .unwrap_or((empty, empty, empty));
+                let target_area = bounding_client_rect.area();
+                let intersection_area = intersection_rect.area();
+                let is_intersecting = geometry.is_some_and(|geometry| geometry.is_intersecting);
+                let intersection_ratio = if target_area == 0 {
+                    if is_intersecting {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                } else {
+                    intersection_area as f64 / target_area as f64
+                };
+                let threshold_index =
+                    thresholds.partition_point(|threshold| *threshold <= intersection_ratio);
+                let next_state = IntersectionObservationState {
+                    threshold_index,
+                    is_intersecting,
+                };
+                if previous != Some(next_state) {
+                    entries.push(EngineIntersectionEntry {
+                        target,
+                        bounding_client_rect,
+                        intersection_rect,
+                        root_bounds,
+                        is_intersecting,
+                        intersection_ratio,
+                        time: elapsed,
+                    });
+                }
+                next_targets.push((target, Some(next_state)));
+            }
+            if let Some(observer) = self.intersection_observers.get_mut(&observer_id) {
+                observer.targets = next_targets;
+            }
+
+            if !entries.is_empty() {
+                self.pending_intersection_events
+                    .push(EngineIntersectionEvent {
+                        observer_id,
+                        entries,
+                    });
+            }
+        }
+    }
+
+    fn intersection_geometry_for(
+        &self,
+        target: DomId,
+        root: Option<DomId>,
+        width: usize,
+        height: usize,
+        root_margin: IntersectionRootMargin,
+    ) -> Option<crate::layout::ArenaIntersectionGeometry> {
+        let target = self.node_for(target)?;
+        if !self.connected_nodes.contains(&target) {
+            return None;
+        }
+        let root = match root {
+            Some(root) => {
+                let root = self.node_for(root)?;
+                if !self.connected_nodes.contains(&root) {
+                    return None;
+                }
+                Some(root)
+            }
+            None => None,
+        };
+        self.arena
+            .intersection_geometry(target, root, width, height, root_margin)
     }
 
     #[cfg(test)]
