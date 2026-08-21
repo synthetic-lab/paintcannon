@@ -1,4 +1,5 @@
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::style::CssWhiteSpace;
 
@@ -13,6 +14,99 @@ pub(crate) enum TerminalGlyph {
 pub(crate) struct ParsedTextWithSourceMap {
     pub(crate) characters: Vec<char>,
     pub(crate) source_to_parsed_cursor: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TextGrapheme<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) character_start: usize,
+    pub(crate) character_end: usize,
+    pub(crate) width: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GraphemeSuffix(String);
+
+impl GraphemeSuffix {
+    pub(crate) fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+pub(crate) fn text_graphemes(text: &str) -> impl Iterator<Item = TextGrapheme<'_>> {
+    let mut character_index = 0;
+    text.graphemes(true).map(move |grapheme| {
+        let character_start = character_index;
+        character_index += grapheme.chars().count();
+        TextGrapheme {
+            text: grapheme,
+            character_start,
+            character_end: character_index,
+            width: UnicodeWidthStr::width(grapheme),
+        }
+    })
+}
+
+pub(crate) fn text_cell_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
+pub(crate) fn character_cell_offsets(text: &str) -> Vec<usize> {
+    let mut offsets = vec![0; text.chars().count() + 1];
+    let mut col = 0;
+    for grapheme in text_graphemes(text) {
+        offsets[grapheme.character_start..grapheme.character_end].fill(col);
+        col += grapheme.width;
+        offsets[grapheme.character_end] = col;
+    }
+    offsets
+}
+
+pub(crate) fn cell_offset_for_character(text: &str, character_offset: usize) -> usize {
+    text_graphemes(text)
+        .take_while(|grapheme| grapheme.character_end <= character_offset)
+        .map(|grapheme| grapheme.width)
+        .sum()
+}
+
+pub(crate) fn character_offset_for_cell(text: &str, cell_offset: usize) -> usize {
+    let mut col = 0;
+    for grapheme in text_graphemes(text) {
+        let end = col + grapheme.width;
+        if cell_offset < end {
+            return if (cell_offset - col) * 2 >= grapheme.width {
+                grapheme.character_end
+            } else {
+                grapheme.character_start
+            };
+        }
+        col = end;
+    }
+    text.chars().count()
+}
+
+pub(crate) fn grapheme_boundary_at_or_after_cell(text: &str, cell_offset: usize) -> usize {
+    let mut col = 0;
+    for grapheme in text_graphemes(text) {
+        let end = col + grapheme.width;
+        if cell_offset > col && cell_offset < end {
+            return end;
+        }
+        col = end;
+    }
+    cell_offset
+}
+
+pub(crate) fn grapheme_parts(grapheme: &str) -> (char, Option<Box<GraphemeSuffix>>) {
+    let mut characters = grapheme.chars();
+    let character = characters.next().expect("graphemes are non-empty");
+    let suffix = characters.collect::<String>();
+    let suffix = (!suffix.is_empty()).then(|| Box::new(GraphemeSuffix::new(suffix)));
+    (character, suffix)
 }
 
 pub(crate) fn parse_text_for_white_space(text: &str, white_space: CssWhiteSpace) -> Vec<char> {
@@ -60,10 +154,6 @@ pub(crate) fn parse_text_for_pre_wrap_with_source_map(text: &str) -> ParsedTextW
         characters,
         source_to_parsed_cursor,
     }
-}
-
-pub(crate) fn character_cell_width(character: char) -> usize {
-    UnicodeWidthChar::width(character).unwrap_or(0)
 }
 
 pub(crate) fn terminal_safe_glyph(character: char, cell_width: usize) -> TerminalGlyph {
@@ -183,6 +273,26 @@ mod tests {
         let chars = parse_text_for_white_space("a\u{0085}b", CssWhiteSpace::Pre);
 
         assert_eq!(chars.into_iter().collect::<String>(), "a\u{fffd}b");
+    }
+
+    #[test]
+    fn joined_emoji_is_one_two_cell_grapheme() {
+        let text = "\u{1f469}\u{200d}\u{1f4bb}x";
+        let graphemes = text_graphemes(text).collect::<Vec<_>>();
+
+        assert_eq!(graphemes.len(), 2);
+        assert_eq!(graphemes[0].text, "\u{1f469}\u{200d}\u{1f4bb}");
+        assert_eq!(graphemes[0].character_start, 0);
+        assert_eq!(graphemes[0].character_end, 3);
+        assert_eq!(graphemes[0].width, 2);
+        assert_eq!(graphemes[1].character_start, 3);
+        assert_eq!(character_cell_offsets(text), vec![0, 0, 0, 2, 3]);
+        assert_eq!(cell_offset_for_character(text, 3), 2);
+        assert_eq!(character_offset_for_cell(text, 0), 0);
+        assert_eq!(character_offset_for_cell(text, 1), 3);
+        assert_eq!(character_offset_for_cell(text, 2), 3);
+        assert_eq!(grapheme_boundary_at_or_after_cell(text, 1), 2);
+        assert_eq!(grapheme_boundary_at_or_after_cell(text, 2), 2);
     }
 
     #[test]
