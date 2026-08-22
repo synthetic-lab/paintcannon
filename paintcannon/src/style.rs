@@ -68,6 +68,7 @@ pub(crate) struct DivStyle {
     pub(crate) cursor: CursorStyle,
     pub(crate) overflow_x: LayoutOverflow,
     pub(crate) overflow_y: LayoutOverflow,
+    pub(crate) overflow_anchor: CssOverflowAnchor,
     pub(crate) scrollbar_color: ScrollbarColor,
     pub(crate) scrollbar_gutter: ScrollbarGutter,
     pub(crate) image_rendering: ImageRendering,
@@ -137,6 +138,7 @@ impl Default for DivStyle {
             cursor: CursorStyle::Auto,
             overflow_x: LayoutOverflow::Visible,
             overflow_y: LayoutOverflow::Visible,
+            overflow_anchor: CssOverflowAnchor::Auto,
             scrollbar_color: ScrollbarColor::Auto,
             scrollbar_gutter: ScrollbarGutter::Auto,
             image_rendering: ImageRendering::HalfBlock,
@@ -189,6 +191,12 @@ pub(crate) enum LayoutOverflow {
     Visible,
     Hidden,
     Scroll,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CssOverflowAnchor {
+    Auto,
+    None,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -413,7 +421,7 @@ pub(crate) enum LayoutAlignItems {
     Stretch,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum CssDimension {
     Auto,
     Length(f32),
@@ -430,7 +438,7 @@ impl CssDimension {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum CssLengthPercentage {
     Length(f32),
     Percent(f32),
@@ -445,7 +453,7 @@ impl CssLengthPercentage {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum CssLengthPercentageAuto {
     Auto,
     Length(f32),
@@ -917,6 +925,16 @@ pub(crate) fn parse_overflow(value: &str) -> Result<LayoutOverflow> {
         "hidden" => Ok(LayoutOverflow::Hidden),
         "scroll" => Ok(LayoutOverflow::Scroll),
         value => Err(Error::from_reason(format!("unsupported overflow: {value}"))),
+    }
+}
+
+pub(crate) fn parse_overflow_anchor(value: &str) -> Result<CssOverflowAnchor> {
+    match value.trim() {
+        "auto" => Ok(CssOverflowAnchor::Auto),
+        "none" => Ok(CssOverflowAnchor::None),
+        value => Err(Error::from_reason(format!(
+            "unsupported overflow-anchor: {value}"
+        ))),
     }
 }
 
@@ -1718,5 +1736,10 @@ mod tests {
         assert!(parse_transition("all 200ms")
             .iter()
             .any(|transition| transition.property == TransitionProperty::Opacity));
+    }
+
+    #[test]
+    fn overflow_anchor_defaults_to_auto() {
+        assert_eq!(DivStyle::default().overflow_anchor, CssOverflowAnchor::Auto);
     }
 }

@@ -18,6 +18,7 @@ PaintCannon supports the following CSS:
 - Unicode-aware text wrapping with `overflow-wrap: normal | break-word | anywhere` and
   `word-break: normal | break-all | keep-all | break-word`; both default to `normal`
 - Overflow hidden and scroll, with native mouse scrolling
+- CSS scroll anchoring, with `overflow-anchor: auto | none`
 - `visibility: hidden`, which preserves layout space while suppressing paint
   and hit testing
 - CSS `opacity`, composited once for an element and its descendants as a stacking-context group

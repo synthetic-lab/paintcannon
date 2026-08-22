@@ -5,7 +5,7 @@ use super::*;
 use crate::layout::{IntersectionMarginValue, IntersectionRootMargin};
 use crate::selection::{SelectionMouseEvent, SelectionMouseEventType};
 use crate::style::{
-    Background, CssDimension, CssFontWeight, CssLengthPercentage, LayoutDisplay,
+    Background, CssDimension, CssFontWeight, CssLengthPercentage, CssOverflowAnchor, LayoutDisplay,
     LayoutFlexDirection, LayoutOverflow, TransitionProperty, TransitionSpec,
 };
 use crate::transition::TransitionEventType;
@@ -271,6 +271,248 @@ fn scroll_engine() -> (PaintEngine, DomId) {
     engine.append_child(viewport, content);
     engine.set_root(viewport);
     (engine, viewport)
+}
+
+fn scroll_anchor_engine(viewport_height: f32) -> (PaintEngine, DomId, DomId, Vec<DomId>) {
+    let mut engine = PaintEngine::new();
+    let mut viewport_style = block_style(
+        CssDimension::Length(6.0),
+        CssDimension::Length(viewport_height),
+    );
+    viewport_style.overflow_y = LayoutOverflow::Scroll;
+    let viewport = engine.create_element(viewport_style);
+    let mut content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+    content_style.display = LayoutDisplay::Flex;
+    content_style.flex_direction = LayoutFlexDirection::Column;
+    let content = engine.create_element(content_style);
+    let mut rows = Vec::new();
+    for character in ['a', 'b', 'c', 'd', 'e'] {
+        let row = engine.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(1.0),
+        ));
+        let text = engine.create_text(character.to_string().repeat(5));
+        engine.append_child(row, text);
+        engine.append_child(content, row);
+        rows.push(row);
+    }
+    engine.append_child(viewport, content);
+    engine.set_root(viewport);
+    (engine, viewport, content, rows)
+}
+
+fn prepend_scroll_anchor_row(engine: &mut PaintEngine, content: DomId, before: DomId) -> DomId {
+    let row = engine.create_element(block_style(
+        CssDimension::Percent(1.0),
+        CssDimension::Length(1.0),
+    ));
+    let text = engine.create_text("nnnnn");
+    engine.append_child(row, text);
+    engine.insert_child_before(content, row, before);
+    row
+}
+
+#[test]
+fn scroll_anchoring_keeps_visible_content_stable_after_prepend() {
+    let (mut engine, viewport, content, rows) = scroll_anchor_engine(2.0);
+    engine.render_frame(6, 2).unwrap();
+    engine.set_scroll_offset_for_size(viewport, 0, 2, 6, 2);
+    let before = engine.render_frame(6, 2).unwrap();
+    assert_eq!(before.cell(0, 0).unwrap().character, 'c');
+    assert!(engine.drain_scroll_events().is_empty());
+
+    prepend_scroll_anchor_row(&mut engine, content, rows[0]);
+    let after = engine.render_frame(6, 2).unwrap();
+
+    assert_eq!(after.cell(0, 0).unwrap().character, 'c');
+    assert_eq!(engine.scroll_metrics(viewport).unwrap().scroll_top, 3);
+    assert_eq!(
+        engine.drain_scroll_events(),
+        vec![EngineScrollEvent {
+            target: viewport,
+            metrics: ArenaScrollMetrics {
+                scroll_left: 0,
+                scroll_top: 3,
+                scroll_width: 5,
+                scroll_height: 6,
+                client_width: 5,
+                client_height: 2,
+            },
+        }]
+    );
+}
+
+#[test]
+fn overflow_anchor_none_disables_scroll_anchoring() {
+    let (mut engine, viewport, content, rows) = scroll_anchor_engine(2.0);
+    let mut style = engine
+        .arena
+        .style(engine.node_for(viewport).unwrap())
+        .clone();
+    style.overflow_anchor = CssOverflowAnchor::None;
+    engine.set_style(viewport, style);
+    engine.render_frame(6, 2).unwrap();
+    engine.set_scroll_offset_for_size(viewport, 0, 2, 6, 2);
+
+    prepend_scroll_anchor_row(&mut engine, content, rows[0]);
+    let frame = engine.render_frame(6, 2).unwrap();
+
+    assert_eq!(engine.scroll_metrics(viewport).unwrap().scroll_top, 2);
+    assert_eq!(frame.cell(0, 0).unwrap().character, 'b');
+    assert!(engine.drain_scroll_events().is_empty());
+}
+
+#[test]
+fn overflow_anchor_none_excludes_a_visible_subtree() {
+    let (mut engine, viewport, content, rows) = scroll_anchor_engine(1.0);
+    let mut style = engine
+        .arena
+        .style(engine.node_for(rows[2]).unwrap())
+        .clone();
+    style.overflow_anchor = CssOverflowAnchor::None;
+    engine.set_style(rows[2], style);
+    engine.render_frame(6, 1).unwrap();
+    engine.set_scroll_offset_for_size(viewport, 0, 2, 6, 1);
+
+    prepend_scroll_anchor_row(&mut engine, content, rows[0]);
+    let frame = engine.render_frame(6, 1).unwrap();
+
+    assert_eq!(engine.scroll_metrics(viewport).unwrap().scroll_top, 2);
+    assert_eq!(frame.cell(0, 0).unwrap().character, 'b');
+}
+
+#[test]
+fn focused_input_is_the_priority_scroll_anchor() {
+    let (mut engine, viewport, content, rows) = scroll_anchor_engine(2.0);
+    let input = engine.create_input_with_id(
+        DomId(100),
+        block_style(CssDimension::Percent(1.0), CssDimension::Length(1.0)),
+        "input",
+    );
+    engine.append_child(content, input);
+    engine.set_input_focused(input, true);
+    engine.render_frame(6, 2).unwrap();
+    engine.set_scroll_offset_for_size(viewport, 0, 4, 6, 2);
+
+    let mut row_style = engine
+        .arena
+        .style(engine.node_for(rows[4]).unwrap())
+        .clone();
+    row_style.height = CssDimension::Length(2.0);
+    engine.set_style(rows[4], row_style);
+    engine.render_frame(6, 2).unwrap();
+
+    assert_eq!(engine.scroll_metrics(viewport).unwrap().scroll_top, 5);
+}
+
+#[test]
+fn anchor_path_size_change_suppresses_scroll_adjustment() {
+    let (mut engine, viewport, content, rows) = scroll_anchor_engine(2.0);
+    engine.render_frame(6, 2).unwrap();
+    engine.set_scroll_offset_for_size(viewport, 0, 2, 6, 2);
+
+    let mut anchor_style = engine
+        .arena
+        .style(engine.node_for(rows[2]).unwrap())
+        .clone();
+    anchor_style.height = CssDimension::Length(2.0);
+    engine.set_style(rows[2], anchor_style);
+    prepend_scroll_anchor_row(&mut engine, content, rows[0]);
+    engine.render_frame(6, 2).unwrap();
+
+    assert_eq!(engine.scroll_metrics(viewport).unwrap().scroll_top, 2);
+    assert!(engine.drain_scroll_events().is_empty());
+}
+
+#[test]
+fn removing_the_anchor_invalidates_it_before_node_slots_are_reused() {
+    let (mut engine, viewport, _content, rows) = scroll_anchor_engine(2.0);
+    engine.render_frame(6, 2).unwrap();
+    engine.set_scroll_offset_for_size(viewport, 0, 2, 6, 2);
+
+    engine.destroy_node(rows[2]);
+    let frame = engine.render_frame(6, 2).unwrap();
+
+    assert_eq!(engine.scroll_metrics(viewport).unwrap().scroll_top, 2);
+    assert_eq!(frame.cell(0, 0).unwrap().character, 'd');
+    assert!(engine.drain_scroll_events().is_empty());
+}
+
+#[test]
+fn scroll_anchoring_is_inactive_at_the_scroll_origin() {
+    let (mut engine, viewport, content, rows) = scroll_anchor_engine(2.0);
+    engine.render_frame(6, 2).unwrap();
+
+    prepend_scroll_anchor_row(&mut engine, content, rows[0]);
+    let frame = engine.render_frame(6, 2).unwrap();
+
+    assert_eq!(engine.scroll_metrics(viewport).unwrap().scroll_top, 0);
+    assert_eq!(frame.cell(0, 0).unwrap().character, 'n');
+    assert!(engine.drain_scroll_events().is_empty());
+}
+
+#[test]
+fn nested_scroll_containers_anchor_independently() {
+    let mut engine = PaintEngine::new();
+    let mut outer_style = block_style(CssDimension::Length(8.0), CssDimension::Length(2.0));
+    outer_style.overflow_y = LayoutOverflow::Scroll;
+    let outer = engine.create_element(outer_style);
+    let mut outer_content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+    outer_content_style.display = LayoutDisplay::Flex;
+    outer_content_style.flex_direction = LayoutFlexDirection::Column;
+    let outer_content = engine.create_element(outer_content_style);
+    let top = engine.create_element(block_style(
+        CssDimension::Percent(1.0),
+        CssDimension::Length(2.0),
+    ));
+    let top_text = engine.create_text("top");
+    engine.append_child(top, top_text);
+
+    let mut inner_style = block_style(CssDimension::Percent(1.0), CssDimension::Length(1.0));
+    inner_style.overflow_y = LayoutOverflow::Scroll;
+    let inner = engine.create_element(inner_style);
+    let mut inner_content_style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+    inner_content_style.display = LayoutDisplay::Flex;
+    inner_content_style.flex_direction = LayoutFlexDirection::Column;
+    let inner_content = engine.create_element(inner_content_style);
+    let mut inner_rows = Vec::new();
+    for character in ['a', 'b', 'c'] {
+        let row = engine.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Length(1.0),
+        ));
+        let text = engine.create_text(character.to_string());
+        engine.append_child(row, text);
+        engine.append_child(inner_content, row);
+        inner_rows.push(row);
+    }
+    engine.append_child(inner, inner_content);
+    engine.append_child(outer_content, top);
+    engine.append_child(outer_content, inner);
+    engine.append_child(outer, outer_content);
+    engine.set_root(outer);
+    engine.render_frame(8, 2).unwrap();
+    engine.set_scroll_offset_for_size(outer, 0, 1, 8, 2);
+    engine.set_scroll_offset_for_size(inner, 0, 1, 8, 2);
+
+    let new_top = engine.create_element(block_style(
+        CssDimension::Percent(1.0),
+        CssDimension::Length(1.0),
+    ));
+    engine.insert_child_before(outer_content, new_top, top);
+    prepend_scroll_anchor_row(&mut engine, inner_content, inner_rows[0]);
+    engine.render_frame(8, 2).unwrap();
+
+    assert_eq!(engine.scroll_metrics(outer).unwrap().scroll_top, 2);
+    assert_eq!(engine.scroll_metrics(inner).unwrap().scroll_top, 2);
+    let events = engine.drain_scroll_events();
+    assert_eq!(events.len(), 2);
+    assert!(events
+        .iter()
+        .any(|event| event.target == outer && event.metrics.scroll_top == 2));
+    assert!(events
+        .iter()
+        .any(|event| event.target == inner && event.metrics.scroll_top == 2));
 }
 
 #[test]

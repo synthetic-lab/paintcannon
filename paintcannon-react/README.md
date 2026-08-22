@@ -156,6 +156,7 @@ both supported:
 - `overflow`
 - `overflow-x` / `overflowX`
 - `overflow-y` / `overflowY`
+- `overflow-anchor` / `overflowAnchor` (`"auto"` or `"none"`; defaults to `"auto"`)
 - `scrollbar-color` / `scrollbarColor`
 - `scrollbar-gutter` / `scrollbarGutter`
 - `image-rendering` / `imageRendering`

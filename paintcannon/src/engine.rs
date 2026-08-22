@@ -10,8 +10,8 @@ use termprofile::TermProfile;
 use crate::frame::Frame;
 use crate::image::load_png_image;
 use crate::layout::{
-    AbsoluteRect, ArenaScrollMetrics, ArenaScrollbarHit, IntersectionRootMargin, LayoutArena,
-    LayoutNodeKind, ScrollbarAxis,
+    AbsoluteRect, ArenaScrollAdjustment, ArenaScrollMetrics, ArenaScrollbarHit,
+    IntersectionRootMargin, LayoutArena, LayoutNodeKind, ScrollbarAxis,
 };
 use crate::paint::{paint_arena_with_options, HitRegion, PaintOptions};
 use crate::selection::{
@@ -20,8 +20,8 @@ use crate::selection::{
 use crate::style::{
     Background, BorderStyle, CssDimension, CssFontStyle, CssFontWeight, CssGridLine,
     CssGridPlacement, CssGridTemplateTrack, CssLengthPercentage, CssLengthPercentageAuto,
-    CssOverflowWrap, CssPosition, CssTextDecorationLine, CssTrackSizing, CssVisibility,
-    CssWhiteSpace, CssWordBreak, CssZIndex, CursorStyle, DivStyle, ImageRendering,
+    CssOverflowAnchor, CssOverflowWrap, CssPosition, CssTextDecorationLine, CssTrackSizing,
+    CssVisibility, CssWhiteSpace, CssWordBreak, CssZIndex, CursorStyle, DivStyle, ImageRendering,
     LayoutAlignItems, LayoutDisplay, LayoutFlexDirection, LayoutFlexWrap, LayoutGridAutoFlow,
     LayoutJustifyContent, LayoutOverflow, ScrollbarColor, ScrollbarGutter, TransitionProperty,
     TransitionSpec,
@@ -110,6 +110,12 @@ pub(crate) struct ScrollbarHit {
     pub(crate) scroll_length: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EngineScrollEvent {
+    pub(crate) target: DomId,
+    pub(crate) metrics: ArenaScrollMetrics,
+}
+
 pub(crate) enum StyleMutation {
     Reset(StyleReset),
     Display(LayoutDisplay),
@@ -124,6 +130,7 @@ pub(crate) enum StyleMutation {
     Overflow(LayoutOverflow),
     OverflowX(LayoutOverflow),
     OverflowY(LayoutOverflow),
+    OverflowAnchor(CssOverflowAnchor),
     ScrollbarColor(ScrollbarColor),
     ScrollbarGutter(ScrollbarGutter),
     ImageRendering(ImageRendering),
@@ -222,6 +229,7 @@ pub(crate) enum StyleReset {
     Overflow,
     OverflowX,
     OverflowY,
+    OverflowAnchor,
     ScrollbarColor,
     ScrollbarGutter,
     ImageRendering,
@@ -524,6 +532,7 @@ pub(crate) struct PaintEngine {
     selection_scroll_node: Option<NodeId>,
     intersection_observers: HashMap<u32, EngineIntersectionObserver>,
     pending_intersection_events: Vec<EngineIntersectionEvent>,
+    pending_scroll_events: Vec<EngineScrollEvent>,
     intersection_geometry_dirty: bool,
     started_at: Instant,
 }
@@ -559,6 +568,7 @@ impl PaintEngine {
             selection_scroll_node: None,
             intersection_observers: HashMap::new(),
             pending_intersection_events: Vec::new(),
+            pending_scroll_events: Vec::new(),
             intersection_geometry_dirty: false,
             started_at: Instant::now(),
         }
@@ -1826,6 +1836,10 @@ impl PaintEngine {
         std::mem::take(&mut self.pending_intersection_events)
     }
 
+    pub(crate) fn drain_scroll_events(&mut self) -> Vec<EngineScrollEvent> {
+        std::mem::take(&mut self.pending_scroll_events)
+    }
+
     fn evaluate_intersection_observers(&mut self, width: usize, height: usize, now: Instant) {
         self.intersection_geometry_dirty = false;
         let elapsed = now.duration_since(self.started_at).as_secs_f64() * 1_000.0;
@@ -2001,7 +2015,8 @@ impl PaintEngine {
             height: AvailableSpace::Definite(height as f32),
         };
         for _ in 0..3 {
-            self.arena.compute_layout(root, available);
+            let adjustments = self.arena.compute_layout(root, available);
+            self.record_scroll_adjustments(adjustments);
             let Some(viewport) = self.viewport.and_then(|id| self.node_for(id)) else {
                 break;
             };
@@ -2032,6 +2047,27 @@ impl PaintEngine {
         self.dirtiness = Dirtiness::Paint;
         self.last_layout_size = Some(size);
         true
+    }
+
+    fn record_scroll_adjustments(&mut self, adjustments: Vec<ArenaScrollAdjustment>) {
+        for adjustment in adjustments {
+            let Some(target) = self.node_to_dom.get(&adjustment.node).copied() else {
+                continue;
+            };
+            if let Some(event) = self
+                .pending_scroll_events
+                .iter_mut()
+                .find(|event| event.target == target)
+            {
+                event.metrics = adjustment.metrics;
+            } else {
+                self.pending_scroll_events.push(EngineScrollEvent {
+                    target,
+                    metrics: adjustment.metrics,
+                });
+            }
+            self.intersection_geometry_dirty = true;
+        }
     }
 
     fn ensure_layout_for_size(&mut self, width: usize, height: usize) {
@@ -2169,6 +2205,9 @@ pub(crate) fn apply_style_mutation(style: &mut DivStyle, mutation: StyleMutation
         }
         StyleMutation::OverflowX(overflow) => style.overflow_x = overflow,
         StyleMutation::OverflowY(overflow) => style.overflow_y = overflow,
+        StyleMutation::OverflowAnchor(overflow_anchor) => {
+            style.overflow_anchor = overflow_anchor;
+        }
         StyleMutation::ScrollbarColor(scrollbar_color) => {
             style.scrollbar_color = scrollbar_color;
         }
@@ -2308,6 +2347,7 @@ fn reset_style_property(style: &mut DivStyle, reset: StyleReset) {
         }
         StyleReset::OverflowX => style.overflow_x = default.overflow_x,
         StyleReset::OverflowY => style.overflow_y = default.overflow_y,
+        StyleReset::OverflowAnchor => style.overflow_anchor = default.overflow_anchor,
         StyleReset::ScrollbarColor => style.scrollbar_color = default.scrollbar_color,
         StyleReset::ScrollbarGutter => style.scrollbar_gutter = default.scrollbar_gutter,
         StyleReset::ImageRendering => style.image_rendering = default.image_rendering,

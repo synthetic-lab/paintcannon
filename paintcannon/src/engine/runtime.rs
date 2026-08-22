@@ -412,12 +412,16 @@ fn apply_command_inner(
 
 fn publish_engine_events(engine: &mut PaintEngine, state: &EngineLoopState) {
     let transitions = engine.drain_transition_events();
+    let scrolls = engine.drain_scroll_events();
     let intersections = engine.drain_intersection_events();
-    if transitions.is_empty() && intersections.is_empty() {
+    if transitions.is_empty() && scrolls.is_empty() && intersections.is_empty() {
         return;
     }
     for event in transitions {
         state.event_queue.push(NativeEvent::transition(event));
+    }
+    for event in scrolls {
+        state.event_queue.push(NativeEvent::scroll(event));
     }
     for event in intersections {
         state.event_queue.push(NativeEvent::intersection(event));

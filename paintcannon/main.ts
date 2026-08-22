@@ -220,6 +220,7 @@ export type CSSVisibility = "visible" | "hidden";
 export type CSSPosition = "static" | "relative" | "absolute";
 export type CSSWhiteSpace = "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
 export type CSSOverflowWrap = "normal" | "break-word" | "anywhere";
+export type CSSOverflowAnchor = "auto" | "none";
 export type CSSWordBreak = "normal" | "break-all" | "keep-all" | "break-word";
 export type CSSFontWeight = "normal" | "bold";
 export type CSSFontStyle = "normal" | "italic";
@@ -1814,6 +1815,23 @@ export class PaintCannon {
           this.dispatchIntersectionEvent(nativeEvent.intersection);
           break;
         }
+        case "scroll": {
+          const input = nativeEvent.scroll;
+          if (input === undefined) throw new Error("native scroll event is missing its payload");
+          const target = this.elements.get(input.targetId);
+          if (target === undefined) break;
+          const metrics: NativeScrollMetrics = {
+            scrollLeft: input.scrollLeft,
+            scrollTop: input.scrollTop,
+            scrollWidth: input.scrollWidth,
+            scrollHeight: input.scrollHeight,
+            clientWidth: input.clientWidth,
+            clientHeight: input.clientHeight,
+          };
+          this.scrollMetrics.set(target.id, metrics);
+          this.dispatchScrollEvent(target, metrics, 0, 0);
+          break;
+        }
         case "mouse": {
           if (nativeEvent.mouse === undefined) {
             throw new Error("native mouse event is missing its payload");
@@ -2223,7 +2241,7 @@ export class PaintCannon {
     const nextOffset = hit.scrollOffset + direction * hit.clientLength;
     const metrics = this.setScrollbarAxisOffset(target, axis, nextOffset);
     if (metrics !== null) {
-      this.dispatchScrollEvent(target, input, metrics);
+      this.dispatchScrollEvent(target, metrics, input.deltaX, input.deltaY);
     }
     return true;
   }
@@ -2249,7 +2267,7 @@ export class PaintCannon {
         : Math.round(((nextThumbStart - drag.railStart) / movableLength) * drag.maxScroll);
     const metrics = this.setScrollbarAxisOffset(drag.target, drag.axis, nextOffset);
     if (metrics !== null) {
-      this.dispatchScrollEvent(drag.target, input, metrics);
+      this.dispatchScrollEvent(drag.target, metrics, input.deltaX, input.deltaY);
     }
     return true;
   }
@@ -2299,7 +2317,7 @@ export class PaintCannon {
       return false;
     }
 
-    this.dispatchScrollEvent(scrollTarget, input, metrics);
+    this.dispatchScrollEvent(scrollTarget, metrics, input.deltaX, input.deltaY);
     return true;
   }
 
@@ -2538,8 +2556,9 @@ export class PaintCannon {
 
   private dispatchScrollEvent(
     target: PaintElement,
-    input: TerminalMouseEvent,
     metrics: NativeScrollMetrics,
+    deltaX: number,
+    deltaY: number,
   ): void {
     const event = new PaintScrollEvent({
       target,
@@ -2547,8 +2566,8 @@ export class PaintCannon {
       scrollTop: metrics.scrollTop,
       scrollWidth: metrics.scrollWidth,
       scrollHeight: metrics.scrollHeight,
-      deltaX: input.deltaX,
-      deltaY: input.deltaY,
+      deltaX,
+      deltaY,
     });
     event.setCurrentTarget(target);
     const listeners = Array.from(this.elementEventListeners.get(target.id)?.scroll ?? []);
@@ -3499,6 +3518,14 @@ export class CSSStyleDeclaration {
     this.setProperty("overflow-y", value);
   }
 
+  get overflowAnchor(): CSSOverflowAnchor | string {
+    return this.getPropertyValue("overflow-anchor");
+  }
+
+  set overflowAnchor(value: CSSOverflowAnchor | string) {
+    this.setProperty("overflow-anchor", value);
+  }
+
   get scrollbarColor(): string {
     return this.getPropertyValue("scrollbar-color");
   }
@@ -4154,6 +4181,7 @@ export const SUPPORTED_STYLE_PROPERTY_NAMES = [
   "overflow",
   "overflow-x",
   "overflow-y",
+  "overflow-anchor",
   "scrollbar-color",
   "scrollbar-gutter",
   "image-rendering",
