@@ -27,9 +27,9 @@ use crate::style::{
     parse_grid_line, parse_grid_placement, parse_grid_template_tracks, parse_image_rendering,
     parse_justify_content, parse_length_percentage, parse_length_percentage_auto,
     parse_margin_lengths, parse_non_negative_number, parse_opacity, parse_overflow,
-    parse_overflow_wrap, parse_position, parse_scrollbar_color, parse_scrollbar_gutter,
-    parse_text_decoration_line, parse_transition, parse_visibility, parse_white_space,
-    parse_word_break, parse_z_index, Background,
+    parse_overflow_anchor, parse_overflow_wrap, parse_position, parse_scrollbar_color,
+    parse_scrollbar_gutter, parse_text_decoration_line, parse_transition, parse_visibility,
+    parse_white_space, parse_word_break, parse_z_index, Background,
 };
 use crate::terminal::{query_terminal_colors, query_terminal_size, reset_terminal, TerminalSize};
 
@@ -1031,6 +1031,9 @@ fn style_command(id: u32, property: &str, value: &str) -> Result<EngineCommand> 
         "overflow" => StyleMutation::Overflow(parse_overflow(value)?),
         "overflow-x" | "overflowX" => StyleMutation::OverflowX(parse_overflow(value)?),
         "overflow-y" | "overflowY" => StyleMutation::OverflowY(parse_overflow(value)?),
+        "overflow-anchor" | "overflowAnchor" => {
+            StyleMutation::OverflowAnchor(parse_overflow_anchor(value)?)
+        }
         "scrollbar-color" | "scrollbarColor" => {
             StyleMutation::ScrollbarColor(parse_scrollbar_color(value)?)
         }
@@ -1231,6 +1234,7 @@ fn style_reset(property: &str) -> Result<StyleReset> {
         "overflow" => StyleReset::Overflow,
         "overflow-x" | "overflowX" => StyleReset::OverflowX,
         "overflow-y" | "overflowY" => StyleReset::OverflowY,
+        "overflow-anchor" | "overflowAnchor" => StyleReset::OverflowAnchor,
         "scrollbar-color" | "scrollbarColor" => StyleReset::ScrollbarColor,
         "scrollbar-gutter" | "scrollbarGutter" => StyleReset::ScrollbarGutter,
         "image-rendering" | "imageRendering" => StyleReset::ImageRendering,
@@ -1402,7 +1406,8 @@ impl Drop for PaintCannon {
 mod tests {
     use super::*;
     use crate::style::{
-        CssDimension, CssLengthPercentageAuto, CssPosition, CssVisibility, CssZIndex,
+        CssDimension, CssLengthPercentageAuto, CssOverflowAnchor, CssPosition, CssVisibility,
+        CssZIndex,
     };
 
     #[test]
@@ -1557,6 +1562,32 @@ mod tests {
 
         assert!(style_command(1, "overflow-wrap", "").is_ok());
         assert!(style_command(1, "word-break", "").is_ok());
+    }
+
+    #[test]
+    fn overflow_anchor_style_command_accepts_the_spec_values() {
+        assert!(matches!(
+            style_command(1, "overflow-anchor", "none").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::OverflowAnchor(CssOverflowAnchor::None),
+                ..
+            }
+        ));
+        assert!(matches!(
+            style_command(1, "overflowAnchor", "auto").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::OverflowAnchor(CssOverflowAnchor::Auto),
+                ..
+            }
+        ));
+        assert!(matches!(
+            style_command(1, "overflow-anchor", "").unwrap(),
+            EngineCommand::MutateStyle {
+                mutation: StyleMutation::Reset(StyleReset::OverflowAnchor),
+                ..
+            }
+        ));
+        assert!(style_command(1, "overflow-anchor", "always").is_err());
     }
 
     #[test]

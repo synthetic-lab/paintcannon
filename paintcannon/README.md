@@ -23,6 +23,7 @@ PaintCannon supports the following CSS layout and paint features:
 - Unicode-aware text wrapping with `overflow-wrap: normal | break-word | anywhere` and
   `word-break: normal | break-all | keep-all | break-word`; both default to `normal`
 - Overflow hidden and scroll, with native mouse scrolling
+- CSS scroll anchoring, with `overflow-anchor: auto | none`
 - `visibility: hidden`, which preserves layout space while suppressing paint and hit testing
 - CSS `opacity`, composited once for an element and its descendants as a stacking-context group
 - 24-bit RGB and CSS named background, border, text, placeholder, and selection colors with
@@ -51,6 +52,14 @@ Positioned inline elements retain their inline flow position while their painted
 `overflow-wrap: anywhere` contributes emergency break opportunities to min-content sizing, while
 `overflow-wrap: break-word` does not. The language-aware `word-break` values `manual` and
 `auto-phrase` are not currently supported.
+
+Scroll anchoring is enabled by default. When layout changes move visible content inside a vertically
+scrolled container, PaintCannon adjusts `scrollTop` to keep the selected anchor stable and dispatches
+a `scroll` event. Set `overflow-anchor: none` on a scroll container to disable anchoring, or on a
+descendant to exclude that subtree from anchor selection. Explicit scrolling selects a new anchor;
+containers at `scrollTop === 0` are not anchored. This follows the
+[CSS Scroll Anchoring specification](https://drafts.csswg.org/css-scroll-anchoring/) using terminal
+cells as the layout unit.
 
 Opacity accepts numbers or percentages and is clamped to the CSS range from `0` to `1`. PaintCannon
 queries supporting terminals for their default foreground and background colors so translucent

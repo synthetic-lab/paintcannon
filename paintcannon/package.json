@@ -67,6 +67,7 @@
     "demo:pong": "npm run build:debug && node dist/examples/pong.js",
     "demo:native-scroll": "npm run build:debug && node dist/examples/native-scroll.js",
     "demo:scroll": "npm run build:debug && node dist/examples/scroll.js",
+    "demo:scroll-anchoring": "npm run build:debug && node dist/examples/scroll-anchoring.js",
     "demo:scroll-percent": "npm run build:debug && node dist/examples/scroll-percent.js",
     "demo:scroll-percent-static": "npm run build:debug && node dist/examples/scroll-percent-static.js",
     "demo:span-flex": "npm run build:debug && node dist/examples/span-flex.js",

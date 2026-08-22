@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use napi_derive::napi;
 
-use crate::engine::{EngineIntersectionEvent, EngineTransitionEvent};
+use crate::engine::{EngineIntersectionEvent, EngineScrollEvent, EngineTransitionEvent};
 use crate::layout::AbsoluteRect;
 use crate::style::TransitionProperty;
 use crate::transition::TransitionEventType;
@@ -89,6 +89,18 @@ pub struct IntersectionEvent {
     pub entries: Vec<IntersectionEntry>,
 }
 
+#[derive(Clone, Debug)]
+#[napi(object)]
+pub struct ScrollEvent {
+    pub target_id: u32,
+    pub scroll_left: u32,
+    pub scroll_top: u32,
+    pub scroll_width: u32,
+    pub scroll_height: u32,
+    pub client_width: u32,
+    pub client_height: u32,
+}
+
 #[derive(Clone)]
 #[napi(object)]
 pub struct ClipboardWritePayload {
@@ -108,6 +120,7 @@ pub struct NativeEvent {
     pub focus: Option<TerminalFocusEvent>,
     pub transition: Option<TransitionEvent>,
     pub intersection: Option<IntersectionEvent>,
+    pub scroll: Option<ScrollEvent>,
 }
 
 impl NativeEvent {
@@ -170,6 +183,20 @@ impl NativeEvent {
         Self::with_kind("intersection", |native| native.intersection = Some(event))
     }
 
+    pub(crate) fn scroll(event: EngineScrollEvent) -> Self {
+        let metrics = event.metrics;
+        let event = ScrollEvent {
+            target_id: event.target.0,
+            scroll_left: metrics.scroll_left,
+            scroll_top: metrics.scroll_top,
+            scroll_width: metrics.scroll_width,
+            scroll_height: metrics.scroll_height,
+            client_width: metrics.client_width,
+            client_height: metrics.client_height,
+        };
+        Self::with_kind("scroll", |native| native.scroll = Some(event))
+    }
+
     fn with_kind(kind: &str, set_payload: impl FnOnce(&mut Self)) -> Self {
         let mut event = Self {
             kind: kind.to_string(),
@@ -181,6 +208,7 @@ impl NativeEvent {
             focus: None,
             transition: None,
             intersection: None,
+            scroll: None,
         };
         set_payload(&mut event);
         event
@@ -253,6 +281,17 @@ mod tests {
         queue.push(NativeEvent::focus(TerminalFocusEvent {
             r#type: "blur".to_string(),
         }));
+        queue.push(NativeEvent::scroll(EngineScrollEvent {
+            target: crate::engine::DomId(7),
+            metrics: crate::layout::ArenaScrollMetrics {
+                scroll_left: 0,
+                scroll_top: 3,
+                scroll_width: 10,
+                scroll_height: 20,
+                client_width: 10,
+                client_height: 5,
+            },
+        }));
         queue.push(NativeEvent::resize(TerminalResizeEvent {
             cols: 100,
             rows: 40,
@@ -264,10 +303,14 @@ mod tests {
                 .iter()
                 .map(|event| event.kind.as_str())
                 .collect::<Vec<_>>(),
-            vec!["keyboard", "resize", "focus", "resize"]
+            vec!["keyboard", "resize", "focus", "scroll", "resize"]
         );
         assert_eq!(events[1].resize.as_ref().map(|event| event.cols), Some(80));
-        assert_eq!(events[3].resize.as_ref().map(|event| event.cols), Some(100));
+        assert_eq!(
+            events[3].scroll.as_ref().map(|event| event.scroll_top),
+            Some(3)
+        );
+        assert_eq!(events[4].resize.as_ref().map(|event| event.cols), Some(100));
         assert!(queue.drain().is_empty());
     }
 

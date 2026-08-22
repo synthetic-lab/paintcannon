@@ -459,6 +459,36 @@ describe("core mouse events", () => {
 });
 
 describe("core native scrollbar events", () => {
+  it("dispatches renderer-originated scroll anchoring adjustments", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const received: Array<{ top: number; deltaY: number }> = [];
+    const metrics = {
+      scrollLeft: 0,
+      scrollTop: 7,
+      scrollWidth: 20,
+      scrollHeight: 40,
+      clientWidth: 10,
+      clientHeight: 10,
+    };
+    root.addEventListener("scroll", event => {
+      received.push({ top: event.scrollTop, deltaY: event.deltaY });
+    });
+    mockNative.scrollMetricsById.set(root.id, metrics);
+    mockNative.events.push({
+      kind: "scroll",
+      scroll: {
+        targetId: root.id,
+        ...metrics,
+      },
+    });
+
+    notifyNativeEvents(paintCannon);
+    paintCannon.stop();
+
+    expect(received).toEqual([{ top: 7, deltaY: 0 }]);
+    expect(root.scrollTop).toBe(7);
+  });
+
   it("wraps alternate-screen roots in a private scrollable viewport", () => {
     const paintCannon = new PaintCannon({ alternateScreen: true, fps: 120 });
     const mockNative = currentMockNative();
@@ -1058,6 +1088,22 @@ describe("core app focus events", () => {
 });
 
 describe("core style validation", () => {
+  it("supports the overflow-anchor opt-out property", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+
+    root.style.overflowAnchor = "none";
+
+    expect(root.style.overflowAnchor).toBe("none");
+    expect(mockNative.styleMutations).toContainEqual({
+      id: root.id,
+      property: "overflow-anchor",
+      value: "none",
+    });
+    expect(root.style.removeProperty("overflowAnchor")).toBe("none");
+    expect(root.style.overflowAnchor).toBe("");
+    paintCannon.stop();
+  });
+
   it("supports positioned layout and z-index properties", () => {
     const { paintCannon, mockNative, root } = createPaintTree();
 

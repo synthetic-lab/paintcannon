@@ -1,4 +1,4 @@
-use std::{collections::HashSet, time::Instant};
+use std::{collections::HashSet, ops::Range, time::Instant};
 
 use taffy::{
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
@@ -10,8 +10,8 @@ use taffy::{
 
 use crate::line_break::LineBreakPlan;
 use crate::style::{
-    BorderStyle, CssDimension, CssLengthPercentageAuto, CssOverflowWrap, CssPosition,
-    CssWhiteSpace, CssWordBreak, CssZIndex, DivStyle, LayoutDisplay, LayoutOverflow,
+    BorderStyle, CssDimension, CssLengthPercentageAuto, CssOverflowAnchor, CssOverflowWrap,
+    CssPosition, CssWhiteSpace, CssWordBreak, CssZIndex, DivStyle, LayoutDisplay, LayoutOverflow,
     ScrollbarGutter,
 };
 use crate::text::{
@@ -64,6 +64,7 @@ pub(crate) struct LayoutArena {
     stacking_candidates: HashSet<NodeId>,
     opacity_transition_nodes: HashSet<NodeId>,
     dirty_textareas: HashSet<NodeId>,
+    focused_text_control: Option<NodeId>,
     layout_passes: u64,
     layout_mode_stack: Vec<RunMode>,
     profile: LayoutProfileStats,
@@ -120,9 +121,22 @@ struct LayoutNode {
     auto_vertical_scrollbar: bool,
     scroll_left: u32,
     scroll_top: u32,
+    scroll_anchor: Option<ScrollAnchor>,
     fragments: Vec<InlineFragment>,
     measure_cache: InlineMeasureCache,
     visible_overflow_size: Size<f32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ScrollAnchor {
+    node: NodeId,
+    block_offset: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ArenaScrollAdjustment {
+    pub(crate) node: NodeId,
+    pub(crate) metrics: ArenaScrollMetrics,
 }
 
 #[derive(Clone, Copy)]
@@ -252,6 +266,17 @@ pub(crate) struct IntersectionRootMargin {
     pub(crate) left: IntersectionMarginValue,
 }
 
+impl Default for IntersectionRootMargin {
+    fn default() -> Self {
+        Self {
+            top: IntersectionMarginValue::Cells(0.0),
+            right: IntersectionMarginValue::Cells(0.0),
+            bottom: IntersectionMarginValue::Cells(0.0),
+            left: IntersectionMarginValue::Cells(0.0),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ArenaIntersectionGeometry {
     pub(crate) bounding_client_rect: AbsoluteRect,
@@ -311,6 +336,7 @@ impl LayoutArena {
             stacking_candidates: HashSet::new(),
             opacity_transition_nodes: HashSet::new(),
             dirty_textareas: HashSet::new(),
+            focused_text_control: None,
             layout_passes: 0,
             layout_mode_stack: Vec::new(),
             profile: LayoutProfileStats::default(),
@@ -435,6 +461,11 @@ impl LayoutArena {
     pub(crate) fn set_input_focused(&mut self, node: NodeId, focused: bool) {
         if let LayoutNodeKind::Input(input) = &mut self.nodes[node_index(node)].kind {
             input.focused = focused;
+            if focused {
+                self.focused_text_control = Some(node);
+            } else if self.focused_text_control == Some(node) {
+                self.focused_text_control = None;
+            }
         }
     }
 
@@ -464,8 +495,11 @@ impl LayoutArena {
         if let LayoutNodeKind::TextArea(textarea) = &mut self.nodes[node_index(node)].kind {
             textarea.focused = focused;
             if focused {
+                self.focused_text_control = Some(node);
                 textarea.scroll_cursor_dirty = true;
                 self.dirty_textareas.insert(node);
+            } else if self.focused_text_control == Some(node) {
+                self.focused_text_control = None;
             }
         }
     }
@@ -693,9 +727,13 @@ impl LayoutArena {
     }
 
     pub(crate) fn remove_child(&mut self, parent: NodeId, child: NodeId) {
-        let children = &mut self.nodes[node_index(parent)].children;
-        if let Some(index) = children.iter().position(|id| *id == child) {
-            children.remove(index);
+        let index = self.nodes[node_index(parent)]
+            .children
+            .iter()
+            .position(|id| *id == child);
+        if let Some(index) = index {
+            self.invalidate_scroll_anchors_in_subtree(child);
+            self.nodes[node_index(parent)].children.remove(index);
             self.nodes[node_index(child)].parent = None;
             self.stacking_tree_dirty = true;
             self.clear_cache_subtree(child);
@@ -708,13 +746,15 @@ impl LayoutArena {
         parent: NodeId,
         removed: &std::collections::HashSet<NodeId>,
     ) {
-        let children = &mut self.nodes[node_index(parent)].children;
-        let original_len = children.len();
-        children.retain(|child| !removed.contains(child));
-        if children.len() == original_len {
+        let original_len = self.nodes[node_index(parent)].children.len();
+        self.nodes[node_index(parent)]
+            .children
+            .retain(|child| !removed.contains(child));
+        if self.nodes[node_index(parent)].children.len() == original_len {
             return;
         }
         for child in removed {
+            self.invalidate_scroll_anchors_in_subtree(*child);
             let child_index = node_index(*child);
             if self.nodes[child_index].parent == Some(parent) {
                 self.nodes[child_index].parent = None;
@@ -725,6 +765,10 @@ impl LayoutArena {
     }
 
     pub(crate) fn remove_node(&mut self, node: NodeId) {
+        self.invalidate_scroll_anchors_in_subtree(node);
+        if self.focused_text_control == Some(node) {
+            self.focused_text_control = None;
+        }
         let index = node_index(node);
         self.scroll_nodes.remove(&node);
         self.absolute_nodes.remove(&node);
@@ -739,6 +783,7 @@ impl LayoutArena {
         item.taffy_style = item.style.to_taffy();
         item.auto_horizontal_scrollbar = false;
         item.auto_vertical_scrollbar = false;
+        item.scroll_anchor = None;
         item.children.clear();
         item.parent = None;
         item.stacking_children.clear();
@@ -757,6 +802,9 @@ impl LayoutArena {
 
     pub(crate) fn set_style(&mut self, node: NodeId, style: DivStyle) {
         let opacity_transition_active = self.opacity_transition_nodes.contains(&node);
+        let previous_style = self.nodes[node_index(node)].style.clone();
+        let overflow_anchor_changed = previous_style.overflow_anchor != style.overflow_anchor;
+        self.invalidate_scroll_anchors_for_style_change(node, &previous_style, &style);
         let item = &mut self.nodes[node_index(node)];
         let taffy_style = style.to_taffy_with_auto_scrollbars(
             item.auto_horizontal_scrollbar,
@@ -791,6 +839,9 @@ impl LayoutArena {
             self.stacking_candidates.remove(&node);
         }
         self.update_scroll_node(node);
+        if overflow_anchor_changed {
+            self.refresh_scroll_anchors();
+        }
         if layout_changed {
             self.clear_cache_subtree_and_ancestors(node);
         }
@@ -819,7 +870,11 @@ impl LayoutArena {
         }
     }
 
-    pub(crate) fn compute_layout(&mut self, root: NodeId, available: Size<AvailableSpace>) {
+    pub(crate) fn compute_layout(
+        &mut self,
+        root: NodeId,
+        available: Size<AvailableSpace>,
+    ) -> Vec<ArenaScrollAdjustment> {
         self.layout_passes += 1;
         self.profile = LayoutProfileStats::default();
         if self.stacking_tree_dirty {
@@ -846,6 +901,9 @@ impl LayoutArena {
                 break;
             }
         }
+        let adjustments = self.adjust_scroll_anchors();
+        self.refresh_scroll_anchors();
+        adjustments
     }
 
     pub(crate) fn layout(&self, node: NodeId) -> Layout {
@@ -939,6 +997,7 @@ impl LayoutArena {
             auto_vertical_scrollbar: false,
             scroll_left: 0,
             scroll_top: 0,
+            scroll_anchor: None,
             fragments: Vec::new(),
             measure_cache: InlineMeasureCache::default(),
             visible_overflow_size: Size::ZERO,
@@ -1393,6 +1452,7 @@ impl LayoutArena {
             self.scroll_nodes.insert(node);
         } else {
             self.scroll_nodes.remove(&node);
+            self.nodes[node_index(node)].scroll_anchor = None;
         }
     }
 
@@ -1853,6 +1913,10 @@ impl LayoutArena {
                 metrics.scroll_height.saturating_sub(metrics.client_height),
             )
         };
+        let previous_offset = (
+            self.nodes[node_index(node)].scroll_left,
+            self.nodes[node_index(node)].scroll_top,
+        );
         let item = &mut self.nodes[node_index(node)];
         item.scroll_left = scroll_left.min(max_left);
         item.scroll_top = scroll_top.min(max_top);
@@ -1860,7 +1924,345 @@ impl LayoutArena {
             textarea.scroll_cursor_dirty = false;
             self.dirty_textareas.remove(&node);
         }
-        self.scroll_metrics_for_node(node)
+        let metrics = self.scroll_metrics_for_node(node);
+        if previous_offset != (scroll_left.min(max_left), scroll_top.min(max_top)) {
+            self.select_scroll_anchor(node);
+        }
+        metrics
+    }
+
+    fn adjust_scroll_anchors(&mut self) -> Vec<ArenaScrollAdjustment> {
+        let scroll_nodes = self.scroll_nodes.iter().copied().collect::<Vec<_>>();
+        let mut adjustments = Vec::new();
+        for scroller in scroll_nodes {
+            let index = node_index(scroller);
+            let Some(anchor) = self.nodes[index].scroll_anchor else {
+                continue;
+            };
+            if self.nodes[index].style.overflow_anchor == CssOverflowAnchor::None
+                || self.nodes[index].scroll_top == 0
+                || !self.is_descendant_of(anchor.node, scroller)
+                || self.anchor_path_is_excluded(anchor.node, scroller)
+            {
+                self.nodes[index].scroll_anchor = None;
+                continue;
+            }
+            let Some(block_offset) = self.anchor_block_offset(scroller, anchor.node) else {
+                self.nodes[index].scroll_anchor = None;
+                continue;
+            };
+            let delta = block_offset - anchor.block_offset;
+            if delta == 0 {
+                continue;
+            }
+
+            let Some(metrics) = self.scroll_metrics_snapshot(scroller) else {
+                continue;
+            };
+            let max_top = axis_max_scroll(
+                self.nodes[index].style.overflow_y,
+                metrics.scroll_height.saturating_sub(metrics.client_height),
+            );
+            let next_top = (i64::from(self.nodes[index].scroll_top) + i64::from(delta))
+                .clamp(0, i64::from(max_top)) as u32;
+            if next_top == self.nodes[index].scroll_top {
+                continue;
+            }
+            self.nodes[index].scroll_top = next_top;
+            if let Some(metrics) = self.scroll_metrics_snapshot(scroller) {
+                adjustments.push(ArenaScrollAdjustment {
+                    node: scroller,
+                    metrics,
+                });
+            }
+        }
+        adjustments
+    }
+
+    fn refresh_scroll_anchors(&mut self) {
+        let scroll_nodes = self.scroll_nodes.iter().copied().collect::<Vec<_>>();
+        for scroller in scroll_nodes {
+            let current = self.nodes[node_index(scroller)].scroll_anchor;
+            let updated = current.and_then(|anchor| {
+                if self.is_descendant_of(anchor.node, scroller)
+                    && !self.anchor_path_is_excluded(anchor.node, scroller)
+                {
+                    self.anchor_block_offset(scroller, anchor.node)
+                        .map(|block_offset| ScrollAnchor {
+                            node: anchor.node,
+                            block_offset,
+                        })
+                } else {
+                    None
+                }
+            });
+            if updated.is_some() {
+                self.nodes[node_index(scroller)].scroll_anchor = updated;
+            } else {
+                self.select_scroll_anchor(scroller);
+            }
+        }
+    }
+
+    fn select_scroll_anchor(&mut self, scroller: NodeId) {
+        let index = node_index(scroller);
+        let anchor = self.find_scroll_anchor(scroller).and_then(|node| {
+            self.anchor_block_offset(scroller, node)
+                .map(|block_offset| ScrollAnchor { node, block_offset })
+        });
+        self.nodes[index].scroll_anchor = anchor;
+    }
+
+    fn find_scroll_anchor(&self, scroller: NodeId) -> Option<NodeId> {
+        let item = &self.nodes[node_index(scroller)];
+        if item.style.overflow_anchor == CssOverflowAnchor::None || item.scroll_top == 0 {
+            return None;
+        }
+
+        if let Some(focused) = self.focused_text_control.filter(|focused| {
+            self.is_descendant_of(*focused, scroller)
+                && !self.anchor_path_is_excluded(*focused, scroller)
+        }) {
+            if self.is_viable_anchor_candidate(focused, scroller) {
+                return self.examine_anchor_candidate(focused, scroller);
+            }
+        }
+
+        for &child in &item.children {
+            if let Some(anchor) = self.examine_anchor_candidate(child, scroller) {
+                return Some(anchor);
+            }
+        }
+        None
+    }
+
+    fn examine_anchor_candidate(&self, node: NodeId, scroller: NodeId) -> Option<NodeId> {
+        if self.anchor_subtree_is_excluded(node, scroller) {
+            return None;
+        }
+
+        let is_non_atomic_inline = self.nodes[node_index(node)].style.display
+            == LayoutDisplay::Inline
+            && matches!(self.nodes[node_index(node)].kind, LayoutNodeKind::Element);
+        let is_element = !matches!(self.nodes[node_index(node)].kind, LayoutNodeKind::Text(_));
+        let geometry = is_element
+            .then(|| self.anchor_geometry(node, scroller))
+            .flatten();
+        let visible = geometry.is_some_and(|geometry| {
+            geometry.intersection_rect.width() > 0 && geometry.intersection_rect.height() > 0
+        });
+        if !visible && is_element {
+            return None;
+        }
+        if visible
+            && !is_non_atomic_inline
+            && geometry
+                .is_some_and(|geometry| geometry.intersection_rect == geometry.bounding_client_rect)
+        {
+            return Some(node);
+        }
+
+        let child_range = self.anchor_candidate_child_range(node, scroller);
+        for &child in &self.nodes[node_index(node)].children[child_range] {
+            if let Some(anchor) = self.examine_anchor_candidate(child, scroller) {
+                return Some(anchor);
+            }
+        }
+
+        (visible && !is_non_atomic_inline).then_some(node)
+    }
+
+    fn anchor_candidate_child_range(&self, node: NodeId, scroller: NodeId) -> Range<usize> {
+        let children = &self.nodes[node_index(node)].children;
+        if children.is_empty()
+            || !can_cull_vertical_anchor_children(&self.nodes[node_index(node)].style)
+            || self
+                .absolute_nodes
+                .iter()
+                .any(|absolute| self.is_descendant_of(*absolute, node))
+        {
+            return 0..children.len();
+        }
+        let Some(root_bounds) = self
+            .anchor_geometry(node, scroller)
+            .map(|geometry| geometry.root_bounds)
+        else {
+            return 0..children.len();
+        };
+
+        let mut low = 0;
+        let mut high = children.len();
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let (_, bottom) = self.anchor_child_vertical_edges(children[mid]);
+            if bottom <= root_bounds.top {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        let start = low;
+
+        high = children.len();
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let (top, _) = self.anchor_child_vertical_edges(children[mid]);
+            if top < root_bounds.bottom {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        start..low
+    }
+
+    fn anchor_child_vertical_edges(&self, child: NodeId) -> (i32, i32) {
+        let origin = self.absolute_paint_layout_origin(child);
+        let layout = self.layout(child);
+        let height = if self.nodes[node_index(child)].style.overflow_y == LayoutOverflow::Visible {
+            self.nodes[node_index(child)].visible_overflow_size.height
+        } else {
+            layout.size.height
+        }
+        .round()
+        .max(0.0) as i32;
+        let top = origin.y.round() as i32;
+        (top, top.saturating_add(height))
+    }
+
+    fn is_viable_anchor_candidate(&self, node: NodeId, scroller: NodeId) -> bool {
+        if self.anchor_subtree_is_excluded(node, scroller)
+            || matches!(self.nodes[node_index(node)].kind, LayoutNodeKind::Text(_))
+            || self.nodes[node_index(node)].style.display == LayoutDisplay::Inline
+                && matches!(self.nodes[node_index(node)].kind, LayoutNodeKind::Element)
+        {
+            return false;
+        }
+        self.anchor_geometry(node, scroller)
+            .is_some_and(|geometry| {
+                geometry.intersection_rect.width() > 0 && geometry.intersection_rect.height() > 0
+            })
+    }
+
+    fn anchor_geometry(&self, node: NodeId, scroller: NodeId) -> Option<ArenaIntersectionGeometry> {
+        self.intersection_geometry(
+            node,
+            Some(scroller),
+            0,
+            0,
+            IntersectionRootMargin::default(),
+        )
+    }
+
+    fn anchor_block_offset(&self, scroller: NodeId, anchor: NodeId) -> Option<i32> {
+        let geometry = self.anchor_geometry(anchor, scroller)?;
+        let scroll_top = self.nodes[node_index(scroller)]
+            .scroll_top
+            .min(i32::MAX as u32) as i32;
+        Some(
+            geometry
+                .bounding_client_rect
+                .top
+                .saturating_sub(geometry.root_bounds.top)
+                .saturating_add(scroll_top),
+        )
+    }
+
+    fn anchor_subtree_is_excluded(&self, node: NodeId, scroller: NodeId) -> bool {
+        self.nodes[node_index(node)].style.overflow_anchor == CssOverflowAnchor::None
+            || self.absolute_anchor_is_outside_scroller_containing_block(node, scroller)
+    }
+
+    fn anchor_path_is_excluded(&self, anchor: NodeId, scroller: NodeId) -> bool {
+        let mut current = Some(anchor);
+        while let Some(node) = current {
+            if self.anchor_subtree_is_excluded(node, scroller) {
+                return true;
+            }
+            if node == scroller {
+                return false;
+            }
+            current = self.nodes[node_index(node)].parent;
+        }
+        true
+    }
+
+    fn absolute_anchor_is_outside_scroller_containing_block(
+        &self,
+        node: NodeId,
+        scroller: NodeId,
+    ) -> bool {
+        if self.nodes[node_index(node)].style.position != CssPosition::Absolute {
+            return false;
+        }
+        let mut passed_scroller = false;
+        let mut current = self.nodes[node_index(node)].parent;
+        while let Some(ancestor) = current {
+            if ancestor == scroller {
+                passed_scroller = true;
+            }
+            if self.nodes[node_index(ancestor)].style.position != CssPosition::Static {
+                return passed_scroller && ancestor != scroller;
+            }
+            current = self.nodes[node_index(ancestor)].parent;
+        }
+        passed_scroller && self.nodes[node_index(scroller)].parent.is_some()
+    }
+
+    fn is_descendant_of(&self, node: NodeId, ancestor: NodeId) -> bool {
+        let mut current = self.nodes[node_index(node)].parent;
+        while let Some(parent) = current {
+            if parent == ancestor {
+                return true;
+            }
+            current = self.nodes[node_index(parent)].parent;
+        }
+        false
+    }
+
+    fn invalidate_scroll_anchors_in_subtree(&mut self, subtree: NodeId) {
+        let scroll_nodes = self.scroll_nodes.iter().copied().collect::<Vec<_>>();
+        for scroller in scroll_nodes {
+            let anchor = self.nodes[node_index(scroller)].scroll_anchor;
+            if anchor.is_some_and(|anchor| {
+                anchor.node == subtree || self.is_descendant_of(anchor.node, subtree)
+            }) {
+                self.nodes[node_index(scroller)].scroll_anchor = None;
+            }
+        }
+    }
+
+    fn invalidate_scroll_anchors_for_style_change(
+        &mut self,
+        node: NodeId,
+        previous: &DivStyle,
+        next: &DivStyle,
+    ) {
+        let path_trigger = scroll_anchor_suppression_property_changed(previous, next);
+        let absolute_toggle = (previous.position == CssPosition::Absolute)
+            != (next.position == CssPosition::Absolute);
+        let exclusion_changed = previous.overflow_anchor != next.overflow_anchor;
+        if !path_trigger && !absolute_toggle && !exclusion_changed {
+            return;
+        }
+
+        let scroll_nodes = self.scroll_nodes.iter().copied().collect::<Vec<_>>();
+        for scroller in scroll_nodes {
+            let Some(anchor) = self.nodes[node_index(scroller)].scroll_anchor else {
+                continue;
+            };
+            let node_is_on_anchor_path = node == scroller
+                || node == anchor.node
+                || self.is_descendant_of(anchor.node, node)
+                    && self.is_descendant_of(node, scroller);
+            let node_is_in_scroller = node != scroller && self.is_descendant_of(node, scroller);
+            if (path_trigger && node_is_on_anchor_path)
+                || (absolute_toggle && node_is_in_scroller)
+                || (exclusion_changed && node_is_on_anchor_path)
+            {
+                self.nodes[node_index(scroller)].scroll_anchor = None;
+            }
+        }
     }
 
     pub(crate) fn clamp_scroll_offsets(&mut self) {
@@ -1870,9 +2272,16 @@ impl LayoutArena {
             let Some(metrics) = self.scroll_metrics_for_node(node) else {
                 continue;
             };
+            let previous_offset = (
+                self.nodes[node_index(node)].scroll_left,
+                self.nodes[node_index(node)].scroll_top,
+            );
             let item = &mut self.nodes[node_index(node)];
             item.scroll_left = metrics.scroll_left;
             item.scroll_top = metrics.scroll_top;
+            if previous_offset != (metrics.scroll_left, metrics.scroll_top) {
+                self.select_scroll_anchor(node);
+            }
         }
     }
 
@@ -3466,6 +3875,41 @@ fn axis_max_scroll(overflow: LayoutOverflow, max_scroll: u32) -> u32 {
         max_scroll
     } else {
         0
+    }
+}
+
+fn scroll_anchor_suppression_property_changed(previous: &DivStyle, next: &DivStyle) -> bool {
+    previous.top != next.top
+        || previous.right != next.right
+        || previous.bottom != next.bottom
+        || previous.left != next.left
+        || previous.margin_top != next.margin_top
+        || previous.margin_right != next.margin_right
+        || previous.margin_bottom != next.margin_bottom
+        || previous.margin_left != next.margin_left
+        || previous.padding_top != next.padding_top
+        || previous.padding_right != next.padding_right
+        || previous.padding_bottom != next.padding_bottom
+        || previous.padding_left != next.padding_left
+        || previous.width != next.width
+        || previous.height != next.height
+        || previous.min_width != next.min_width
+        || previous.max_width != next.max_width
+        || previous.min_height != next.min_height
+        || previous.max_height != next.max_height
+        || previous.position != next.position
+}
+
+fn can_cull_vertical_anchor_children(style: &DivStyle) -> bool {
+    match style.display {
+        LayoutDisplay::Block => true,
+        LayoutDisplay::Flex => {
+            matches!(
+                style.flex_direction,
+                crate::style::LayoutFlexDirection::Column
+            ) && matches!(style.flex_wrap, crate::style::LayoutFlexWrap::NoWrap)
+        }
+        LayoutDisplay::Inline | LayoutDisplay::Grid => false,
     }
 }
 
@@ -5870,9 +6314,13 @@ mod tests {
         content_style.display = LayoutDisplay::Flex;
         content_style.flex_direction = LayoutFlexDirection::Column;
         let content = arena.create_element(content_style);
-        for _ in 0..10_000 {
+        let mut expected_anchor = None;
+        for index in 0..10_000 {
             let row = fixed_box(&mut arena, 20.0, 1.0);
             arena.append_child(content, row);
+            if index == 9_990 {
+                expected_anchor = Some(row);
+            }
         }
         arena.append_child(viewport, content);
 
@@ -5887,6 +6335,13 @@ mod tests {
         let metrics = arena.scroll_metrics(viewport).unwrap();
         assert_eq!(metrics.client_height, 5);
         assert_eq!(metrics.scroll_height, 10_000);
+        arena.set_scroll_offset(viewport, 0, 9_990).unwrap();
+        assert_eq!(
+            arena.nodes[node_index(viewport)]
+                .scroll_anchor
+                .map(|anchor| anchor.node),
+            expected_anchor
+        );
         let profile = arena.profile_stats();
         assert_eq!(profile.absolute_layout_visits, 0);
         assert_eq!(profile.stacking_tree_visits, 0);
