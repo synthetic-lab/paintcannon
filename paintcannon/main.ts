@@ -1820,14 +1820,9 @@ export class PaintCannon {
           if (input === undefined) throw new Error("native scroll event is missing its payload");
           const target = this.elements.get(input.targetId);
           if (target === undefined) break;
-          const metrics: NativeScrollMetrics = {
-            scrollLeft: input.scrollLeft,
-            scrollTop: input.scrollTop,
-            scrollWidth: input.scrollWidth,
-            scrollHeight: input.scrollHeight,
-            clientWidth: input.clientWidth,
-            clientHeight: input.clientHeight,
-          };
+          // Layout or explicit scrolling may have superseded the queued adjustment.
+          const metrics = this.binding.scrollMetrics(target.id);
+          if (metrics === null) break;
           this.scrollMetrics.set(target.id, metrics);
           this.dispatchScrollEvent(target, metrics, 0, 0);
           break;
