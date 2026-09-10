@@ -459,6 +459,38 @@ describe("core mouse events", () => {
 });
 
 describe("core native scrollbar events", () => {
+  it("keeps bottom-following enabled when a queued anchor event arrives after an explicit scroll", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    let following = true;
+    root.addEventListener("scroll", event => {
+      following = event.scrollTop >= Math.max(0, event.scrollHeight - root.clientHeight);
+    });
+    const anchoredMetrics = {
+      scrollLeft: 0,
+      scrollTop: 4,
+      scrollWidth: 5,
+      scrollHeight: 7,
+      clientWidth: 5,
+      clientHeight: 2,
+    };
+    mockNative.scrollMetricsById.set(root.id, anchoredMetrics);
+    mockNative.events.push({
+      kind: "scroll",
+      scroll: { targetId: root.id, ...anchoredMetrics },
+    });
+
+    try {
+      // Octo's layout effect pins the updated content before JS drains native events.
+      root.scrollTop = root.scrollHeight - root.clientHeight;
+      expect(root.scrollTop).toBe(5);
+      notifyNativeEvents(paintCannon);
+      expect(root.scrollTop).toBe(5);
+      expect(following).toBe(true);
+    } finally {
+      paintCannon.stop();
+    }
+  });
+
   it("dispatches renderer-originated scroll anchoring adjustments", () => {
     const { paintCannon, mockNative, root } = createPaintTree();
     const received: Array<{ top: number; deltaY: number }> = [];

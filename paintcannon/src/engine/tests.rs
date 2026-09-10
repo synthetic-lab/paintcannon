@@ -343,6 +343,30 @@ fn scroll_anchoring_keeps_visible_content_stable_after_prepend() {
 }
 
 #[test]
+fn anchor_event_can_remain_queued_after_client_pins_updated_content_to_bottom() {
+    let (mut engine, viewport, content, rows) = scroll_anchor_engine(2.0);
+    engine.render_frame(6, 2).unwrap();
+    engine.set_scroll_offset_for_size(viewport, 0, 3, 6, 2);
+
+    prepend_scroll_anchor_row(&mut engine, content, rows[0]);
+    engine.mutate_style(rows[4], StyleMutation::Height(CssDimension::Length(2.0)));
+
+    // A client's scrollHeight read computes layout and queues the anchor adjustment.
+    let metrics = engine.scroll_metrics_for_size(viewport, 6, 2).unwrap();
+    assert_eq!(metrics.scroll_top, 4);
+    assert_eq!(metrics.scroll_height, 7);
+    let bottom = metrics.scroll_height - metrics.client_height;
+    engine.set_scroll_offset_for_size(viewport, 0, bottom, 6, 2);
+    assert_eq!(engine.scroll_metrics(viewport).unwrap().scroll_top, 5);
+
+    // The already queued notification still describes the intermediate position.
+    let events = engine.drain_scroll_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].metrics.scroll_top, 4);
+    assert_eq!(events[0].metrics.scroll_height, 7);
+}
+
+#[test]
 fn overflow_anchor_none_disables_scroll_anchoring() {
     let (mut engine, viewport, content, rows) = scroll_anchor_engine(2.0);
     let mut style = engine
