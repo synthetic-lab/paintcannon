@@ -112,6 +112,29 @@ the application or inserted into a focused text control.
 Each image is a `PaintFile` object with `name`, `type`, `size`, `lastModified`, `arrayBuffer()`,
 `bytes()`, `text()`, and `stream()`.
 
+All elements support `.focus()` and `.blur()`, including divs, spans, and buttons. There is one
+focused element per PaintCannon instance. Keyboard events target it and bubble through its
+ancestors before reaching app-level listeners. Use `stopPropagation()` to consume a key in a
+menu or nested flow; use `preventDefault()` to cancel default behavior without stopping bubbling.
+Focusing a non-text element blurs the previous text control and disables text insertion until a
+text control receives focus again.
+Clicks focus text controls automatically. Generic elements and buttons require an explicit
+click handler that calls `.focus()`.
+Programmatic focus ignores elements with `display: none` or `visibility: hidden` on themselves
+or an ancestor; after making them visible, call `.focus()` again.
+
+Tab / Shift-Tab continues to cycle through inputs and textareas in creation order.
+Generic elements receive focus through `.focus()` or React `autoFocus`, not Tab navigation.
+`preventDefault()` cancels Tab navigation; `stopPropagation()` alone does not.
+
+Blurring the focused element, detaching it (or an ancestor), or destroying its subtree clears
+focus. Subsequent keys target the root's first element child, or the root itself if empty.
+Focus is not automatically restored to an ancestor or a previously focused element; explicitly
+call `.focus()` on the desired container when leaving a nested flow. Focus can be assigned
+before attachment, as with text controls; reattaching a removed element does not restore focus.
+Element `focus` and `blur` events remain non-bubbling, and their `target` and `currentTarget`
+types are now `PaintElement` because generic elements can emit them too.
+
 By default, text is inserted into the focused input or textarea. Image files are not inserted. Call
 `preventDefault()` when taking over paste handling yourself:
 

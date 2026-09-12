@@ -16,7 +16,7 @@ import type {
   PaintNode,
   SpanElement as PaintSpanElement,
 } from "paintcannon";
-import { ELEMENT_EVENT_TYPES, PaintCannon } from "paintcannon";
+import { ELEMENT_EVENT_TYPES, InputElement, PaintCannon, TextAreaElement } from "paintcannon";
 import { AnimationContext, AnimationScheduler, AppContext } from "./hooks/index.ts";
 import * as hostComponents from "./host-components/index.ts";
 
@@ -419,6 +419,14 @@ function applyCommonProps(
 ): void {
   applyStyle(node, oldProps.style, newProps.style);
   applyEvents(node, oldProps, newProps);
+  if (
+    !(node instanceof InputElement) &&
+    !(node instanceof TextAreaElement) &&
+    newProps.autoFocus === true &&
+    oldProps.autoFocus !== true
+  ) {
+    node.focus();
+  }
 }
 
 function applyStyle(

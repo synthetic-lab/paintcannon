@@ -665,7 +665,12 @@ export class PaintCannon {
   private readonly captureMouse: boolean;
   private readonly animationFrameCallbacks = new Map<number, AnimationFrameCallback>();
   private readonly textControls = new Set<TextControlElement>();
-  private focusedTextControl: TextControlElement | undefined;
+  private focusedElement: PaintElement | undefined;
+  private readonly detachingSubtrees: Set<number>[] = [];
+
+  private get focusedTextControl(): TextControlElement | undefined {
+    return isTextControl(this.focusedElement) ? this.focusedElement : undefined;
+  }
   private readonly keyboardEventListeners: Record<KeyboardEventType, Set<KeyboardEventListener>> = {
     keydown: new Set(),
     keyup: new Set(),
@@ -1483,9 +1488,13 @@ export class PaintCannon {
   private clearDetachedState(node: PaintNodeBase): void {
     const ids = this.collectSubtreeIds(node.id);
 
-    if (this.focusedTextControl !== undefined && ids.has(this.focusedTextControl.id)) {
-      this.blurFocusedInput(this.focusedTextControl, true);
-      this.focusedTextControl = undefined;
+    if (this.focusedElement !== undefined && ids.has(this.focusedElement.id)) {
+      this.detachingSubtrees.push(ids);
+      try {
+        this.blurElement(this.focusedElement);
+      } finally {
+        this.detachingSubtrees.pop();
+      }
     }
     if (this.hoveredElement !== undefined && ids.has(this.hoveredElement.id)) {
       this.hoveredElement = undefined;
@@ -1523,9 +1532,8 @@ export class PaintCannon {
       }
     }
 
-    if (this.focusedTextControl !== undefined && ids.has(this.focusedTextControl.id)) {
-      this.blurFocusedInput(this.focusedTextControl, true);
-      this.focusedTextControl = undefined;
+    if (this.focusedElement !== undefined && ids.has(this.focusedElement.id)) {
+      this.blurElement(this.focusedElement);
     }
     if (this.hoveredElement !== undefined && ids.has(this.hoveredElement.id)) {
       this.hoveredElement = undefined;
@@ -2045,29 +2053,60 @@ export class PaintCannon {
   }
 
   focusInput(element: TextControlElement): void {
-    if (this.focusedTextControl === element) {
-      return;
-    }
-
-    if (this.focusedTextControl !== undefined) {
-      this.blurFocusedInput(this.focusedTextControl, true);
-    }
-    this.focusedTextControl = element;
-    element.setFocused(true);
-    this.dispatchFocusEvent("focus", element);
+    this.focusElement(element);
   }
 
   blurInput(element: TextControlElement): void {
-    if (this.focusedTextControl !== element) {
+    this.blurElement(element);
+  }
+
+  private isHiddenFromFocus(element: PaintElement): boolean {
+    let current: PaintElement | undefined = element;
+    while (current !== undefined) {
+      if (current.style.display === "none" || current.style.visibility === "hidden") return true;
+      current = this.parents.get(current.id);
+    }
+    return false;
+  }
+
+  private isDetachingElement(element: PaintElement): boolean {
+    return this.detachingSubtrees.some(ids => ids.has(element.id));
+  }
+
+  focusElement(element: PaintElement): void {
+    if (
+      this.elements.get(element.id) !== element ||
+      this.isDetachingElement(element) ||
+      this.focusedElement === element ||
+      this.isHiddenFromFocus(element)
+    ) {
       return;
     }
 
-    this.blurFocusedInput(element, true);
-    this.focusedTextControl = undefined;
+    if (this.focusedElement !== undefined) {
+      this.blurElement(this.focusedElement);
+      // A blur handler may explicitly move focus elsewhere.
+      if (this.focusedElement !== undefined) {
+        return;
+      }
+    }
+    if (this.elements.get(element.id) !== element || this.isHiddenFromFocus(element)) {
+      return;
+    }
+    this.focusedElement = element;
+    if (isTextControl(element)) {
+      element.setFocused(true);
+    }
+    this.dispatchFocusEvent("focus", element);
   }
 
-  private blurFocusedInput(element: TextControlElement, syncNative: boolean): void {
-    if (syncNative) {
+  blurElement(element: PaintElement): void {
+    if (this.focusedElement !== element) {
+      return;
+    }
+
+    this.focusedElement = undefined;
+    if (isTextControl(element)) {
       element.setFocused(false);
     }
     this.dispatchFocusEvent("blur", element);
@@ -2382,8 +2421,8 @@ export class PaintCannon {
   }
 
   private keyboardEventTarget(): PaintElement | undefined {
-    if (this.focusedTextControl !== undefined) {
-      return this.focusedTextControl;
+    if (this.focusedElement !== undefined) {
+      return this.focusedElement;
     }
     if (this.rootElement === undefined) {
       return undefined;
@@ -2505,7 +2544,7 @@ export class PaintCannon {
     return event;
   }
 
-  private dispatchFocusEvent(type: FocusElementEventType, target: TextControlElement): void {
+  private dispatchFocusEvent(type: FocusElementEventType, target: PaintElement): void {
     const event = new PaintFocusEvent({ type, target });
     event.setCurrentTarget(target);
     const listeners = Array.from(this.elementEventListeners.get(target.id)?.[type] ?? []);
@@ -2642,7 +2681,7 @@ interface PaintMouseEventInit {
 
 interface PaintFocusEventInit {
   type: FocusElementEventType;
-  target: TextControlElement;
+  target: PaintElement;
 }
 
 interface PaintSubmitEventInit {
@@ -2712,8 +2751,8 @@ export class PaintMouseEvent {
 
 export class PaintFocusEvent {
   readonly type: FocusElementEventType;
-  readonly target: TextControlElement;
-  currentTarget: TextControlElement;
+  readonly target: PaintElement;
+  currentTarget: PaintElement;
   defaultPrevented = false;
   propagationStopped = false;
 
@@ -2731,7 +2770,7 @@ export class PaintFocusEvent {
     this.propagationStopped = true;
   }
 
-  setCurrentTarget(element: TextControlElement): void {
+  setCurrentTarget(element: PaintElement): void {
     this.currentTarget = element;
   }
 }
@@ -2954,6 +2993,18 @@ abstract class PaintElementEventTarget<
     super(owner, id, setNativeStyleProperty);
   }
 
+  focus(): void {
+    if (isPaintElement(this)) {
+      this.ownerDocument.focusElement(this);
+    }
+  }
+
+  blur(): void {
+    if (isPaintElement(this)) {
+      this.ownerDocument.blurElement(this);
+    }
+  }
+
   addEventListener<TType extends ElementEventType>(
     type: TType,
     listener: EventListenerForTuple<TEvents, TType>,
@@ -3168,14 +3219,6 @@ abstract class TextControlElementBase<
 
     this.setCursorPositionFromNative(cursor);
     return true;
-  }
-
-  focus(): void {
-    this.ownerDocument.focusInput(this.textControlNode());
-  }
-
-  blur(): void {
-    this.ownerDocument.blurInput(this.textControlNode());
   }
 
   insertText(text: string): void {

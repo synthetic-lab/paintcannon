@@ -40,6 +40,253 @@ afterEach(() => {
 });
 
 describe("core keyboard events", () => {
+  it("keeps Tab navigation limited to text controls after generic focus", () => {
+    const { paintCannon, mockNative, root, child: menu } = createPaintTree();
+    const input = paintCannon.createElement("input");
+    const button = paintCannon.createElement("button");
+    const textarea = paintCannon.createElement("textarea");
+    root.appendChild(input);
+    root.appendChild(button);
+    root.appendChild(textarea);
+    const focused: PaintElement[] = [];
+    for (const element of [menu, input, button, textarea]) {
+      element.addEventListener("focus", () => focused.push(element));
+    }
+    menu.focus();
+    for (const shiftKey of [false, false, false, true]) {
+      mockNative.events.push(keyboardInput(keyDown("Tab", { shiftKey })));
+      notifyNativeEvents(paintCannon);
+    }
+    expect(focused).toEqual([menu, input, textarea, input, textarea]);
+    paintCannon.stop();
+  });
+
+  it.each([
+    ["display", "none", false],
+    ["visibility", "hidden", false],
+    ["display", "none", true],
+    ["visibility", "hidden", true],
+  ] as const)("ignores focus when %s is %s (ancestor: %s)", (property, value, ancestor) => {
+    const { paintCannon, mockNative, root, child: fallback } = createPaintTree();
+    const parent = paintCannon.createElement("div");
+    const menu = paintCannon.createElement("div");
+    root.appendChild(parent);
+    parent.appendChild(menu);
+    (ancestor ? parent : menu).style[property] = value;
+    const focus = vi.fn();
+    const targets: Array<PaintElement | undefined> = [];
+    menu.addEventListener("focus", focus);
+    paintCannon.addEventListener("keydown", event => targets.push(event.target));
+    menu.focus();
+    mockNative.events.push(keyboardInput(keyDown("Escape")));
+    notifyNativeEvents(paintCannon);
+    expect(focus).not.toHaveBeenCalled();
+    expect(targets).toEqual([fallback]);
+    paintCannon.stop();
+  });
+
+  it("allows focus before attachment and after a hidden element becomes visible", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const menu = paintCannon.createElement("div");
+    const focus = vi.fn();
+    const targets: Array<PaintElement | undefined> = [];
+    menu.addEventListener("focus", focus);
+    paintCannon.addEventListener("keydown", event => targets.push(event.target));
+    menu.focus();
+    mockNative.events.push(keyboardInput(keyDown("Escape")));
+    notifyNativeEvents(paintCannon);
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(targets).toEqual([menu]);
+    menu.blur();
+    root.appendChild(menu);
+    menu.style.display = "none";
+    menu.focus();
+    expect(focus).toHaveBeenCalledTimes(1);
+    menu.style.display = "flex";
+    menu.focus();
+    mockNative.events.push(keyboardInput(keyDown("Escape")));
+    notifyNativeEvents(paintCannon);
+    expect(focus).toHaveBeenCalledTimes(2);
+    expect(targets).toEqual([menu, menu]);
+    paintCannon.stop();
+  });
+
+  it.each([false, true])("bubbles Escape from a focused menu (consumed: %s)", consume => {
+    const { paintCannon, mockNative, root, child: modal } = createPaintTree();
+    const menu = paintCannon.createElement("div");
+    modal.appendChild(menu);
+    const events: string[] = [];
+    // Register ancestors first to ensure registration order is irrelevant.
+    root.addEventListener("keydown", () => events.push("root"));
+    modal.addEventListener("keydown", () => events.push("modal"));
+    menu.addEventListener("keydown", event => {
+      expect(event.target).toBe(menu);
+      expect(event.currentTarget).toBe(menu);
+      events.push(event.key);
+      if (consume) event.stopPropagation();
+    });
+    menu.focus();
+    mockNative.events.push(keyboardInput(keyDown("Escape")));
+    notifyNativeEvents(paintCannon);
+    paintCannon.stop();
+    expect(events).toEqual(consume ? ["Escape"] : ["Escape", "modal", "root"]);
+  });
+
+  it("lets a deeper focused flow consume Escape before the menu", () => {
+    const { paintCannon, mockNative, child: modal } = createPaintTree();
+    const menu = paintCannon.createElement("div");
+    const flow = paintCannon.createElement("button");
+    modal.appendChild(menu);
+    menu.appendChild(flow);
+    const events: string[] = [];
+    modal.addEventListener("keydown", () => events.push("modal"));
+    menu.addEventListener("keydown", () => events.push("menu"));
+    flow.addEventListener("keydown", event => {
+      events.push("flow");
+      event.stopPropagation();
+    });
+    flow.focus();
+    mockNative.events.push(keyboardInput(keyDown("Escape")));
+    notifyNativeEvents(paintCannon);
+    paintCannon.stop();
+    expect(events).toEqual(["flow"]);
+  });
+
+  it.each(["blur", "detach", "destroy", "detach ancestor", "destroy ancestor"])(
+    "clears generic focus on %s and restores the root-child fallback",
+    action => {
+      const { paintCannon, mockNative, root, child: fallback } = createPaintTree();
+      const parent = paintCannon.createElement("div");
+      const menu = paintCannon.createElement("div");
+      root.appendChild(parent);
+      parent.appendChild(menu);
+      const targets: Array<PaintElement | undefined> = [];
+      paintCannon.addEventListener("keydown", event => targets.push(event.target));
+      menu.focus();
+      if (action === "blur") menu.blur();
+      if (action === "detach") menu.detach();
+      if (action === "destroy") menu.destroy();
+      if (action === "detach ancestor") parent.detach();
+      if (action === "destroy ancestor") parent.destroy();
+      mockNative.events.push(keyboardInput(keyDown("Escape")));
+      notifyNativeEvents(paintCannon);
+      paintCannon.stop();
+      expect(targets).toEqual([fallback]);
+    },
+  );
+
+  it("cannot refocus a detaching subtree from blur but can focus another element", () => {
+    const { paintCannon, mockNative, root, child: fallback } = createPaintTree();
+    const menu = paintCannon.createElement("div");
+    root.appendChild(menu);
+    const targets: Array<PaintElement | undefined> = [];
+    paintCannon.addEventListener("keydown", event => targets.push(event.target));
+    menu.addEventListener("blur", () => {
+      menu.focus();
+      fallback.focus();
+    });
+    menu.focus();
+    menu.detach();
+    root.appendChild(menu);
+    mockNative.events.push(keyboardInput(keyDown("Escape")));
+    notifyNativeEvents(paintCannon);
+    expect(targets).toEqual([fallback]);
+    paintCannon.stop();
+  });
+
+  it.each([false, true])(
+    "generic preventDefault cancels Tab without stopping bubbling (%s)",
+    prevent => {
+      const { paintCannon, mockNative, root, child: menu } = createPaintTree();
+      const input = paintCannon.createElement("input");
+      root.appendChild(input);
+      const events: boolean[] = [];
+      menu.addEventListener("keydown", event => {
+        if (prevent) event.preventDefault();
+      });
+      root.addEventListener("keydown", event => events.push(event.defaultPrevented));
+      menu.focus();
+      mockNative.events.push(keyboardInput(keyDown("Tab")));
+      notifyNativeEvents(paintCannon);
+      expect(events).toEqual([prevent]);
+      expect(mockNative.textControls.get(input.id)?.focused).toBe(!prevent);
+      paintCannon.stop();
+    },
+  );
+
+  it.each(["input", "textarea"] as const)("preserves %s editing across generic focus", tag => {
+    const { paintCannon, mockNative, root, child: menu } = createPaintTree();
+    const input = paintCannon.createElement(tag);
+    root.appendChild(input);
+    const focusEvents: string[] = [];
+    input.addEventListener("blur", () => focusEvents.push("input blur"));
+    menu.addEventListener("focus", () => focusEvents.push("menu focus"));
+    menu.addEventListener("blur", () => focusEvents.push("menu blur"));
+    menu.addEventListener("keydown", event => event.preventDefault());
+    const send = (key: string) => {
+      mockNative.events.push(keyboardInput(keyDown(key)));
+      notifyNativeEvents(paintCannon);
+    };
+    input.focus();
+    send("a");
+    menu.focus();
+    expect(mockNative.textControls.get(input.id)?.focused).toBe(false);
+    send("b");
+    input.focus();
+    send("c");
+    expect(input.value).toBe("ac");
+    expect(input.cursorPosition).toBe(2);
+    expect(mockNative.textControls.get(input.id)?.focused).toBe(true);
+    expect(focusEvents).toEqual(["input blur", "menu focus", "menu blur"]);
+    paintCannon.stop();
+  });
+
+  it.each([
+    ["input", "bubble"],
+    ["input", "stop"],
+    ["input", "prevent"],
+    ["textarea", "bubble"],
+    ["textarea", "stop"],
+    ["textarea", "prevent"],
+  ] as const)("preserves %s keyboard bubbling and editing with %s", (tag, behavior) => {
+    const { paintCannon, mockNative, root, child: modal } = createPaintTree();
+    const input = paintCannon.createElement(tag);
+    modal.appendChild(input);
+    const events: string[] = [];
+    // Ancestors register first; input handlers must still run first.
+    root.addEventListener("keydown", event => {
+      expect(event.target).toBe(input);
+      expect(event.currentTarget).toBe(root);
+      events.push("root");
+    });
+    modal.addEventListener("keydown", event => {
+      expect(event.target).toBe(input);
+      expect(event.currentTarget).toBe(modal);
+      events.push("modal");
+    });
+    paintCannon.addEventListener("keydown", () => events.push("document"));
+    input.addEventListener("keydown", event => {
+      expect(event.target).toBe(input);
+      expect(event.currentTarget).toBe(input);
+      events.push(tag);
+      if (behavior === "stop") event.stopPropagation();
+      if (behavior === "prevent") event.preventDefault();
+    });
+    modal.focus();
+    input.focus();
+    mockNative.events.push(keyboardInput(keyDown("x")));
+    notifyNativeEvents(paintCannon);
+    expect(events).toEqual(behavior === "stop" ? [tag] : [tag, "modal", "root", "document"]);
+    const expectedValue = behavior === "prevent" ? "" : "x";
+    expect(input.value).toBe(expectedValue);
+    expect(input.cursorPosition).toBe(expectedValue.length);
+    expect(mockNative.textControls.get(input.id)).toMatchObject({
+      value: expectedValue,
+      focused: true,
+    });
+    paintCannon.stop();
+  });
+
   it("drains events only when native code notifies JavaScript", () => {
     vi.useFakeTimers();
     const paintCannon = new PaintCannon({ fps: 60 });
