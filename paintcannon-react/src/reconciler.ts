@@ -16,7 +16,7 @@ import type {
   PaintNode,
   SpanElement as PaintSpanElement,
 } from "paintcannon";
-import { ELEMENT_EVENT_TYPES, InputElement, PaintCannon, TextAreaElement } from "paintcannon";
+import { ELEMENT_EVENT_TYPES, PaintCannon } from "paintcannon";
 import { AnimationContext, AnimationScheduler, AppContext } from "./hooks/index.ts";
 import * as hostComponents from "./host-components/index.ts";
 
@@ -119,7 +119,10 @@ const reconciler = createReconciler({
     removeVirtualChild(container, child);
     destroyHostNode(child);
   },
-  finalizeInitialChildren: () => false,
+  finalizeInitialChildren: (_instance, _type, props) => props.autoFocus === true,
+  commitMount(instance: HostElement) {
+    instance.node.focus();
+  },
   resetTextContent: () => {},
   getPublicInstance(instance: HostNode) {
     return instance.node;
@@ -419,14 +422,6 @@ function applyCommonProps(
 ): void {
   applyStyle(node, oldProps.style, newProps.style);
   applyEvents(node, oldProps, newProps);
-  if (
-    !(node instanceof InputElement) &&
-    !(node instanceof TextAreaElement) &&
-    newProps.autoFocus === true &&
-    oldProps.autoFocus !== true
-  ) {
-    node.focus();
-  }
 }
 
 function applyStyle(

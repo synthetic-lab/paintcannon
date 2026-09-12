@@ -666,7 +666,6 @@ export class PaintCannon {
   private readonly animationFrameCallbacks = new Map<number, AnimationFrameCallback>();
   private readonly textControls = new Set<TextControlElement>();
   private focusedElement: PaintElement | undefined;
-  private readonly detachingSubtrees: Set<number>[] = [];
 
   private get focusedTextControl(): TextControlElement | undefined {
     return isTextControl(this.focusedElement) ? this.focusedElement : undefined;
@@ -1489,12 +1488,7 @@ export class PaintCannon {
     const ids = this.collectSubtreeIds(node.id);
 
     if (this.focusedElement !== undefined && ids.has(this.focusedElement.id)) {
-      this.detachingSubtrees.push(ids);
-      try {
-        this.blurElement(this.focusedElement);
-      } finally {
-        this.detachingSubtrees.pop();
-      }
+      this.blurElement(this.focusedElement);
     }
     if (this.hoveredElement !== undefined && ids.has(this.hoveredElement.id)) {
       this.hoveredElement = undefined;
@@ -2069,14 +2063,19 @@ export class PaintCannon {
     return false;
   }
 
-  private isDetachingElement(element: PaintElement): boolean {
-    return this.detachingSubtrees.some(ids => ids.has(element.id));
+  private isConnectedToRoot(element: PaintElement): boolean {
+    let current: PaintElement | undefined = element;
+    while (current !== undefined) {
+      if (current === this.rootElement) return true;
+      current = this.parents.get(current.id);
+    }
+    return false;
   }
 
   focusElement(element: PaintElement): void {
     if (
       this.elements.get(element.id) !== element ||
-      this.isDetachingElement(element) ||
+      !this.isConnectedToRoot(element) ||
       this.focusedElement === element ||
       this.isHiddenFromFocus(element)
     ) {
@@ -2090,7 +2089,11 @@ export class PaintCannon {
         return;
       }
     }
-    if (this.elements.get(element.id) !== element || this.isHiddenFromFocus(element)) {
+    if (
+      this.elements.get(element.id) !== element ||
+      !this.isConnectedToRoot(element) ||
+      this.isHiddenFromFocus(element)
+    ) {
       return;
     }
     this.focusedElement = element;

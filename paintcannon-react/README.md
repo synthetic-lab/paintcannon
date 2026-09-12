@@ -97,36 +97,6 @@ These components map to PaintCannon's DOM-like core API and support typed style
 props, bubbling events, forms, focus handling, controlled inputs, and mouse
 interactions. The subset of the React-DOM props they support is as follows:
 
-All host components accept `autoFocus` and expose `.focus()` / `.blur()` through refs.
-Tab / Shift-Tab continues to cycle only through inputs and textareas.
-`autoFocus` applies when enabled, and is not reapplied on ordinary rerenders. For example,
-a focused menu can consume Escape in a submenu while its modal handles Escape at the main level:
-
-```tsx
-<Div
-  onKeyDown={event => {
-    if (event.key === "Escape") closeModal();
-  }}
->
-  <Div
-    autoFocus
-    onKeyDown={event => {
-      if (event.key === "Escape" && inSubmenu) {
-        event.stopPropagation();
-        returnToMainMenu();
-      }
-    }}
-  >
-    {menuContent}
-  </Div>
-</Div>
-```
-
-Place nested flow handlers on descendant elements and focus those elements to handle keys first.
-When a flow ends, focus the menu ref again. Blur or subtree removal clears focus and restores the
-root-child keyboard fallback; focus does not automatically return to the menu. Generic focus
-shares ownership with text inputs; use a ref or `autoFocus` to focus a generic element.
-
 Host component `onFocus` and `onBlur` are element focus events. Terminal
 window/pane focus is exposed by the underlying PaintCannon instance as
 `paintCannon.hasFocus` and app-level `focus`/`blur` events. The root returned

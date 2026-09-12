@@ -85,8 +85,8 @@ describe("core keyboard events", () => {
     paintCannon.stop();
   });
 
-  it("allows focus before attachment and after a hidden element becomes visible", () => {
-    const { paintCannon, mockNative, root } = createPaintTree();
+  it("ignores focus before attachment and allows focus after a hidden element becomes visible", () => {
+    const { paintCannon, mockNative, root, child: fallback } = createPaintTree();
     const menu = paintCannon.createElement("div");
     const focus = vi.fn();
     const targets: Array<PaintElement | undefined> = [];
@@ -95,19 +95,18 @@ describe("core keyboard events", () => {
     menu.focus();
     mockNative.events.push(keyboardInput(keyDown("Escape")));
     notifyNativeEvents(paintCannon);
-    expect(focus).toHaveBeenCalledTimes(1);
-    expect(targets).toEqual([menu]);
-    menu.blur();
+    expect(focus).not.toHaveBeenCalled();
+    expect(targets).toEqual([fallback]);
     root.appendChild(menu);
     menu.style.display = "none";
     menu.focus();
-    expect(focus).toHaveBeenCalledTimes(1);
+    expect(focus).not.toHaveBeenCalled();
     menu.style.display = "flex";
     menu.focus();
     mockNative.events.push(keyboardInput(keyDown("Escape")));
     notifyNativeEvents(paintCannon);
-    expect(focus).toHaveBeenCalledTimes(2);
-    expect(targets).toEqual([menu, menu]);
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(targets).toEqual([fallback, menu]);
     paintCannon.stop();
   });
 
