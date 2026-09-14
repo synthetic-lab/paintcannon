@@ -119,7 +119,10 @@ const reconciler = createReconciler({
     removeVirtualChild(container, child);
     destroyHostNode(child);
   },
-  finalizeInitialChildren: () => false,
+  finalizeInitialChildren: (_instance, _type, props) => props.autoFocus === true,
+  commitMount(instance: HostElement) {
+    instance.node.focus();
+  },
   resetTextContent: () => {},
   getPublicInstance(instance: HostNode) {
     return instance.node;

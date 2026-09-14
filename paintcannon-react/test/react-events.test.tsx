@@ -6,6 +6,7 @@ import {
   PaintKeyboardEvent,
   paintCannonDeps,
   type InputElement,
+  type DivElement,
   type PaintElement,
   type PaintResizeEvent,
   type TextAreaElement,
@@ -14,6 +15,7 @@ import { Div, Input, Textarea, render } from "../src/index.ts";
 import {
   createMockNativeBinding,
   keyboardInput,
+  keyDown,
   mouseEvent,
   pasteInput,
   resizeEvent,
@@ -38,6 +40,79 @@ afterEach(() => {
 });
 
 describe("keyboard events", () => {
+  it("supports menu autoFocus, ref focus, and Escape bubbling to a modal", async () => {
+    const events: string[] = [];
+    let menu: DivElement | undefined;
+    let update = (): void => {};
+    function App(): React.ReactElement {
+      const [submenu, setSubmenu] = React.useState(true);
+      update = () => setSubmenu(false);
+      return (
+        <Div onKeyDown={() => events.push("modal")}>
+          <Div
+            autoFocus
+            ref={node => {
+              menu = node;
+            }}
+            onKeyDown={event => {
+              events.push("menu");
+              if (submenu) event.stopPropagation();
+            }}
+          />
+        </Div>
+      );
+    }
+    const root = render(<App />, { fps: 120 });
+    await commit();
+    dispatchKey(root.paintCannon, "Escape");
+    expect(events).toEqual(["menu"]);
+    menu?.blur();
+    update();
+    await commit();
+    dispatchKey(root.paintCannon, "Escape");
+    expect(events).toEqual(["menu", "modal"]);
+    menu?.focus();
+    dispatchKey(root.paintCannon, "Escape");
+    expect(events).toEqual(["menu", "modal", "menu", "modal"]);
+    root.paintCannon.stop();
+  });
+
+  it.each([Input, Textarea])(
+    "bubbles text-control onKeyDown through a generic container (%s)",
+    async Control => {
+      const events: string[] = [];
+      let menu: DivElement | undefined;
+      let control: InputElement | TextAreaElement | undefined;
+      const root = render(
+        <Div onKeyDown={() => events.push("modal")}>
+          <Div
+            ref={node => {
+              menu = node;
+            }}
+            onKeyDown={() => events.push("menu")}
+          >
+            <Control
+              ref={node => {
+                control = node;
+              }}
+              onKeyDown={() => events.push("control")}
+            />
+          </Div>
+        </Div>,
+        { fps: 120 },
+      );
+      await commit();
+      menu?.focus();
+      control?.focus();
+      const mockNative = mockNativeInstances[mockNativeInstances.length - 1];
+      mockNative.events.push(keyboardInput(keyDown("x")));
+      notifyNativeEvents(root.paintCannon);
+      expect(events).toEqual(["control", "menu", "modal"]);
+      expect(control?.value).toBe("x");
+      root.paintCannon.stop();
+    },
+  );
+
   it("targets root content when no text control is focused", async () => {
     const events: string[] = [];
     const root = render(<Div onKeyDown={event => events.push(event.key)}>root</Div>, { fps: 120 });

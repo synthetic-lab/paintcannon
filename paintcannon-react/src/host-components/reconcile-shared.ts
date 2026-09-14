@@ -30,7 +30,7 @@ export function applyScrollableProps(node: Scrollable, props: Partial<Scrollable
 
 export function applyTextControlProps<T extends InputElement | TextAreaElement>(
   node: T,
-  oldProps: Partial<input.Props | textarea.Props>,
+  _oldProps: Partial<input.Props | textarea.Props>,
   newProps: input.Props | textarea.Props,
 ): void {
   if (newProps.value !== undefined) {
@@ -41,8 +41,5 @@ export function applyTextControlProps<T extends InputElement | TextAreaElement>(
   }
   if (newProps.cursorPosition !== undefined) {
     node.cursorPosition = newProps.cursorPosition;
-  }
-  if (newProps.autoFocus === true && oldProps.autoFocus !== true) {
-    node.focus();
   }
 }

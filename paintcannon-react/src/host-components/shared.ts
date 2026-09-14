@@ -50,11 +50,11 @@ type ElementEventProps = {
 export type CommonProps = ElementEventProps & {
   children?: React.ReactNode;
   style?: CSSStyleProperties;
+  autoFocus?: boolean;
 };
 
 export type TextControlProps = CommonProps & {
   value?: string;
   placeholder?: string;
   cursorPosition?: number;
-  autoFocus?: boolean;
 };
