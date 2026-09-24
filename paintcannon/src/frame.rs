@@ -5,7 +5,7 @@ use termprofile::TermProfile;
 
 use crate::style::{Background, BorderStyle, DivStyle};
 use crate::terminal::{write_synchronized_output_begin, write_synchronized_output_end};
-use crate::text::GraphemeSuffix;
+use crate::text::{uses_text_presentation, GraphemeSuffix};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ClipRect {
@@ -641,9 +641,7 @@ impl Frame {
         }
 
         let result: io::Result<()> = (|| {
-            if synchronized {
-                write!(out, "\x1b[?7l")?;
-            }
+            write!(out, "\x1b[?7l")?;
             write!(out, "\x1b[?25l")?;
 
             let Some(previous) = previous else {
@@ -672,6 +670,12 @@ impl Frame {
                         if self.cell_matches(previous, index) {
                             break;
                         }
+                        if self.cell_needs_cursor_positioning(index)
+                            || previous.cell_needs_cursor_positioning(index)
+                        {
+                            col = self.width;
+                            break;
+                        }
                         col += 1;
                     }
 
@@ -682,11 +686,7 @@ impl Frame {
             Ok(())
         })();
 
-        let wrap_result = if synchronized {
-            write!(out, "\x1b[?7h")
-        } else {
-            Ok(())
-        };
+        let wrap_result = write!(out, "\x1b[?7h");
         let end_result = if synchronized {
             write_synchronized_output_end(out)
         } else {
@@ -732,11 +732,17 @@ impl Frame {
         let mut current_italic = false;
         let mut current_underline = false;
         let mut current_strikethrough = false;
+        let mut position_cursor = false;
         for col in start_col..end_col {
             let cell = self.cells[row * self.width + col];
             if cell.wide_continuation {
+                position_cursor = true;
                 continue;
             }
+            if position_cursor {
+                write!(out, "\x1b[{};{}H", row + 1, col + 1)?;
+            }
+            position_cursor = self.cell_needs_cursor_positioning(row * self.width + col);
             if cell.reversed != current_reversed {
                 if cell.reversed {
                     write!(out, "\x1b[7m")?;
@@ -785,8 +791,26 @@ impl Frame {
                 write!(out, "{}", cell.foreground.ansi_fg(color_profile))?;
                 current_foreground = cell.foreground;
             }
+            let mut continuation_col = col + 1;
+            while continuation_col < end_col
+                && self.cells[row * self.width + continuation_col].wide_continuation
+            {
+                continuation_col += 1;
+            }
+            if continuation_col > col + 1 {
+                for _ in col..continuation_col {
+                    write!(out, " ")?;
+                }
+                write!(out, "\x1b[{};{}H", row + 1, col + 1)?;
+            }
             write!(out, "{}", cell.character)?;
-            if let Some(suffix) = self.grapheme_suffixes.get(&(row * self.width + col)) {
+            let suffix = self
+                .grapheme_suffixes
+                .get(&(row * self.width + col))
+                .map_or("", String::as_str);
+            if uses_text_presentation(cell.character, suffix) {
+                write!(out, "\u{fe0e}")?;
+            } else {
                 write!(out, "{suffix}")?;
             }
         }
@@ -795,6 +819,10 @@ impl Frame {
             out,
             "\x1b[27m\x1b[22m\x1b[23m\x1b[24m\x1b[29m\x1b[39m\x1b[49m"
         )
+    }
+
+    fn cell_needs_cursor_positioning(&self, index: usize) -> bool {
+        !self.cells[index].character.is_ascii() || self.grapheme_suffixes.contains_key(&index)
     }
 
     fn trailing_empty_rows_start(&self) -> usize {
@@ -1607,7 +1635,7 @@ mod tests {
             GraphemeGlyph {
                 character: '\u{26a0}',
                 suffix: Some("\u{fe0f}"),
-                width: 2,
+                width: 1,
             },
             GlyphStyle::default(),
             ClipBounds::unbounded(),
@@ -1621,6 +1649,37 @@ mod tests {
             frame.selected_text(&selection).as_deref(),
             Some("\u{26a0}\u{fe0f}")
         );
+    }
+
+    #[test]
+    fn terminal_output_uses_text_presentation_for_standalone_symbols() {
+        for character in ['⚠', '❤', '♥', '☀', '™', '🏳'] {
+            for suffix in [None, Some("\u{fe0e}"), Some("\u{fe0f}")] {
+                let mut frame = Frame::new(2, 1, false);
+                frame.write_grapheme(
+                    0,
+                    0,
+                    GraphemeGlyph {
+                        character,
+                        suffix,
+                        width: 1,
+                    },
+                    GlyphStyle::default(),
+                    ClipBounds::unbounded(),
+                );
+                let mut bytes = Vec::new();
+                frame
+                    .write_full_to(&mut bytes, TermProfile::NoColor)
+                    .unwrap();
+                let rendered = String::from_utf8(bytes).unwrap();
+
+                assert!(
+                    rendered.contains(&format!("{character}\u{fe0e}")),
+                    "{rendered:?}"
+                );
+                assert!(!rendered.contains('\u{fe0f}'), "{rendered:?}");
+            }
+        }
     }
 
     #[test]
@@ -1686,8 +1745,8 @@ mod tests {
             0,
             0,
             GraphemeGlyph {
-                character: '\u{26a0}',
-                suffix: Some("\u{fe0e}"),
+                character: 'e',
+                suffix: Some("\u{301}"),
                 width: 1,
             },
             GlyphStyle::default(),
@@ -1698,8 +1757,8 @@ mod tests {
             0,
             0,
             GraphemeGlyph {
-                character: '\u{26a0}',
-                suffix: Some("\u{fe0f}"),
+                character: 'e',
+                suffix: Some("\u{308}"),
                 width: 1,
             },
             GlyphStyle::default(),
@@ -1711,8 +1770,71 @@ mod tests {
             .unwrap();
         let output = String::from_utf8(bytes).unwrap();
 
-        assert!(output.contains("\u{26a0}\u{fe0f}"));
-        assert!(!output.contains("\u{26a0}\u{fe0e}"));
+        assert!(output.contains("e\u{308}"));
+        assert!(!output.contains("e\u{301}"));
+    }
+
+    #[test]
+    fn changing_an_emoji_repaints_the_following_border_at_its_column() {
+        for (character, suffix) in [('👍', "\u{1f3fd}"), ('👩', "\u{200d}\u{1f4bb}")] {
+            let mut previous = Frame::new(6, 1, false);
+            previous.write_glyph(0, 0, '│', 1, GlyphStyle::default(), ClipBounds::unbounded());
+            previous.write_glyph(
+                1,
+                0,
+                '🐙',
+                2,
+                GlyphStyle::default(),
+                ClipBounds::unbounded(),
+            );
+            previous.write_glyph(3, 0, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
+            previous.write_glyph(4, 0, '│', 1, GlyphStyle::default(), ClipBounds::unbounded());
+            let mut next = previous.clone();
+            next.write_grapheme(
+                1,
+                0,
+                GraphemeGlyph {
+                    character,
+                    suffix: Some(suffix),
+                    width: 2,
+                },
+                GlyphStyle::default(),
+                ClipBounds::unbounded(),
+            );
+            let mut bytes = Vec::new();
+            next.write_diff_to(&mut bytes, Some(&previous), TermProfile::NoColor, false)
+                .unwrap();
+            let output = String::from_utf8(bytes).unwrap();
+
+            assert!(
+                output.contains(&format!("{character}{suffix}\x1b[1;4Hx│")),
+                "{output:?}"
+            );
+            assert!(!output.contains('\u{fe0f}'), "{output:?}");
+        }
+    }
+
+    #[test]
+    fn diff_starting_in_a_continuation_cell_positions_the_following_text() {
+        let mut previous = Frame::new(3, 1, false);
+        previous.write_glyph(
+            0,
+            0,
+            '🐙',
+            2,
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+        );
+        previous.write_glyph(2, 0, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        let mut next = previous.clone();
+        next.cells[1].background = Background::Red;
+        next.write_glyph(2, 0, 'y', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        let mut bytes = Vec::new();
+        next.write_diff_to(&mut bytes, Some(&previous), TermProfile::NoColor, false)
+            .unwrap();
+
+        let output = String::from_utf8(bytes).unwrap();
+        assert!(output.contains("\x1b[1;3Hy"), "{output:?}");
     }
 
     #[test]
@@ -1775,15 +1897,17 @@ mod tests {
         let mut next = Frame::new(4, 1, false);
         next.write_glyph(3, 0, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
 
-        let mut bytes = Vec::new();
-        next.write_diff_to(&mut bytes, None, TermProfile::NoColor, true)
-            .unwrap();
-        let output = String::from_utf8(bytes).unwrap();
+        for synchronized in [false, true] {
+            let mut bytes = Vec::new();
+            next.write_diff_to(&mut bytes, None, TermProfile::NoColor, synchronized)
+                .unwrap();
+            let output = String::from_utf8(bytes).unwrap();
 
-        assert!(output.contains("\x1b[?7l"));
-        assert!(output.contains("\x1b[?7h"));
-        assert!(output.find("\x1b[?7l") < output.find("x"));
-        assert!(output.find("x") < output.find("\x1b[?7h"));
+            assert!(output.contains("\x1b[?7l"));
+            assert!(output.contains("\x1b[?7h"));
+            assert!(output.find("\x1b[?7l") < output.find("x"));
+            assert!(output.find("x") < output.find("\x1b[?7h"));
+        }
     }
 
     #[test]

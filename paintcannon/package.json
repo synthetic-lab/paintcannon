@@ -48,6 +48,7 @@
     "demo:controlled": "npm run build:debug && node dist/examples/pseudo-controlled-input.js",
     "demo:chunky-rounded": "npm run build:debug && node dist/examples/chunky-rounded-hover.js",
     "demo:destroy": "npm run build:debug && node dist/examples/destroy-nodes.js",
+    "demo:emoji-width": "napi build --platform --output-dir dist/napi --dts index.d.ts --js index.js --esm && npm run build:ts && node dist/examples/emoji-width.js",
     "demo:detach": "npm run build:debug && node dist/examples/detach-reattach.js",
     "demo:focus": "npm run build:debug && node dist/examples/focus-blur.js",
     "demo:keyboard": "npm run build:debug && node dist/examples/keyboard-events.js",

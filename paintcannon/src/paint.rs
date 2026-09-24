@@ -3377,7 +3377,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_span_preserves_emoji_variation_selector_in_terminal_output() {
+    fn inline_span_uses_text_presentation_for_warning() {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Length(4.0), CssDimension::Auto));
         let span = arena.create_element(DivStyle {
@@ -3405,8 +3405,8 @@ mod tests {
         let rendered = String::from_utf8(bytes).unwrap();
 
         assert!(
-            rendered.contains(emoji),
-            "terminal output dropped the emoji variation selector: {rendered:?}"
+            rendered.contains("\u{26a0}\u{fe0e}"),
+            "terminal output did not use text presentation: {rendered:?}"
         );
     }
 
@@ -3438,6 +3438,93 @@ mod tests {
             "terminal output dropped the emoji joiner: {rendered:?}"
         );
         assert_eq!(output.frame.cell(2, 0).unwrap().character, 'x');
+    }
+
+    #[test]
+    fn block_text_uses_text_presentation_for_bare_warning() {
+        let mut arena = LayoutArena::new();
+        let row = arena.create_element(block_style(CssDimension::Length(4.0), CssDimension::Auto));
+        let text = arena.create_text("\u{26a0}x");
+        arena.append_child(row, text);
+
+        arena.compute_layout(
+            row,
+            Size {
+                width: AvailableSpace::Definite(4.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        let output = paint_arena(&arena, row, 4, 1, false);
+        let mut bytes = Vec::new();
+        output
+            .frame
+            .write_full_to(&mut bytes, termprofile::TermProfile::NoColor)
+            .unwrap();
+        let rendered = String::from_utf8(bytes).unwrap();
+
+        assert!(
+            rendered.contains("\u{26a0}\u{fe0e}"),
+            "terminal output did not use text presentation: {rendered:?}"
+        );
+        assert_eq!(output.frame.cell(1, 0).unwrap().character, 'x');
+    }
+
+    #[test]
+    fn mixed_emoji_keep_their_box_width_and_original_selection_text() {
+        let mut arena = LayoutArena::new();
+        let root = arena.create_element(DivStyle {
+            display: LayoutDisplay::Flex,
+            ..DivStyle::default()
+        });
+        let panel = arena.create_element(DivStyle {
+            display: LayoutDisplay::Flex,
+            border_top: BorderStyle::Rounded,
+            border_bottom: BorderStyle::Rounded,
+            border_left: BorderStyle::Rounded,
+            border_right: BorderStyle::Rounded,
+            padding_left: CssLengthPercentage::Length(1.0),
+            padding_right: CssLengthPercentage::Length(1.0),
+            ..DivStyle::default()
+        });
+        let source = "⚠🐙❤️👩‍💻👍🏽";
+        let text = arena.create_text(source);
+        arena.append_child(panel, text);
+        arena.append_child(root, panel);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(20.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        let output = paint_arena(&arena, root, 20, 3, false);
+
+        assert_eq!(arena.layout(panel).size.width, 12.0);
+        assert_eq!(output.frame.cell(11, 0).unwrap().character, '╮');
+        assert_eq!(output.frame.cell(11, 1).unwrap().character, '│');
+        assert_eq!(output.frame.cell(11, 2).unwrap().character, '╯');
+        assert_eq!(
+            output
+                .frame
+                .selected_text(&crate::frame::Selection {
+                    anchor: crate::frame::SelectionPoint { order: 0 },
+                    focus: crate::frame::SelectionPoint { order: 4 },
+                })
+                .as_deref(),
+            Some(source)
+        );
+
+        let mut bytes = Vec::new();
+        output
+            .frame
+            .write_full_to(&mut bytes, termprofile::TermProfile::NoColor)
+            .unwrap();
+        let rendered = String::from_utf8(bytes).unwrap();
+        assert!(rendered.contains("⚠\u{fe0e}"));
+        assert!(rendered.contains("❤\u{fe0e}"));
+        assert!(rendered.contains("👩‍💻"));
+        assert!(rendered.contains("👍🏽\x1b[2;11H │"));
+        assert!(!rendered.contains('\u{fe0f}'));
     }
 
     #[test]
@@ -4412,7 +4499,7 @@ mod tests {
     }
 
     #[test]
-    fn textarea_preserves_emoji_variation_selector_in_terminal_output() {
+    fn textarea_uses_text_presentation_for_warning() {
         let mut arena = LayoutArena::new();
         let emoji = "\u{26a0}\u{fe0f}";
         let textarea = arena.create_textarea(
@@ -4436,8 +4523,8 @@ mod tests {
         let rendered = String::from_utf8(bytes).unwrap();
 
         assert!(
-            rendered.contains(emoji),
-            "textarea output dropped the emoji variation selector: {rendered:?}"
+            rendered.contains("\u{26a0}\u{fe0e}"),
+            "textarea output did not use text presentation: {rendered:?}"
         );
     }
 

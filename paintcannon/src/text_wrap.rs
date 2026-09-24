@@ -302,6 +302,18 @@ mod tests {
     }
 
     #[test]
+    fn mixed_emoji_wrap_and_position_the_cursor_using_their_display_widths() {
+        let wrapped = WrappedText::new("⚠🐙❤️👩‍💻👍🏽", 5);
+
+        assert_eq!(wrapped.visual_line_range(0), Some(0..4));
+        assert_eq!(wrapped.visual_line_range(1), Some(4..9));
+        assert_eq!(wrapped.cursor_position(3), (0, 3));
+        assert_eq!(wrapped.cursor_position(4), (1, 0));
+        assert_eq!(wrapped.cursor_position(7), (1, 2));
+        assert_eq!(wrapped.cursor_position(9), (1, 4));
+    }
+
+    #[test]
     fn cursor_positions_and_ranges_use_original_offsets_after_text_normalization() {
         let tabbed = WrappedText::new("a\tb", 8);
         assert_eq!(tabbed.cursor_position(2), (0, 5));
