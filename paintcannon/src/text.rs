@@ -1,5 +1,5 @@
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use crate::style::CssWhiteSpace;
 
@@ -46,38 +46,13 @@ pub(crate) fn text_graphemes(text: &str) -> impl Iterator<Item = TextGrapheme<'_
             text: grapheme,
             character_start,
             character_end: character_index,
-            width: grapheme_cell_width(grapheme),
+            width: UnicodeWidthStr::width(grapheme),
         }
     })
 }
 
 pub(crate) fn text_cell_width(text: &str) -> usize {
     text_graphemes(text).map(|grapheme| grapheme.width).sum()
-}
-
-fn grapheme_cell_width(grapheme: &str) -> usize {
-    let base = grapheme.chars().next().expect("graphemes are non-empty");
-    if uses_text_presentation(base, &grapheme[base.len_utf8()..]) {
-        1
-    } else {
-        UnicodeWidthStr::width(grapheme)
-    }
-}
-
-pub(crate) fn uses_text_presentation(character: char, suffix: &str) -> bool {
-    if character.is_ascii()
-        || !matches!(suffix, "" | "\u{fe0e}" | "\u{fe0f}")
-        || UnicodeWidthChar::width(character) != Some(1)
-    {
-        return false;
-    }
-
-    let mut bytes = [0; 7];
-    let base_len = character.encode_utf8(&mut bytes).len();
-    let selector_len = '\u{fe0f}'.encode_utf8(&mut bytes[base_len..]).len();
-    let emoji = std::str::from_utf8(&bytes[..base_len + selector_len])
-        .expect("characters were encoded as UTF-8");
-    UnicodeWidthStr::width(emoji) == 2
 }
 
 pub(crate) fn character_cell_offsets(text: &str) -> Vec<usize> {
@@ -301,14 +276,14 @@ mod tests {
     }
 
     #[test]
-    fn text_presentation_symbols_measure_one_cell_with_either_selector() {
+    fn symbol_widths_follow_the_requested_presentation() {
         for symbol in ["⚠", "❤", "♥", "©", "®", "™", "☀", "☘", "▶", "↔", "🏳"] {
-            for selector in ["", "\u{fe0e}", "\u{fe0f}"] {
+            for (selector, width) in [("", 1), ("\u{fe0e}", 1), ("\u{fe0f}", 2)] {
                 let text = format!("{symbol}{selector}");
-                assert_eq!(text_cell_width(&text), 1, "{text:?}");
+                assert_eq!(text_cell_width(&text), width, "{text:?}");
                 assert_eq!(
                     cell_offset_for_character(&text, text.chars().count()),
-                    1,
+                    width,
                     "{text:?}"
                 );
             }
@@ -339,20 +314,17 @@ mod tests {
     #[test]
     fn mixed_emoji_offsets_follow_the_rendered_widths() {
         let text = "⚠🐙❤️👩‍💻👍🏽";
-        assert_eq!(text_cell_width(text), 8);
+        assert_eq!(text_cell_width(text), 9);
         assert_eq!(
             character_cell_offsets(text),
-            vec![0, 1, 3, 3, 4, 4, 4, 6, 6, 8]
+            vec![0, 1, 3, 3, 5, 5, 5, 7, 7, 9]
         );
-        assert_eq!(character_offset_for_cell(text, 6), 7);
-        assert_eq!(character_offset_for_cell(text, 8), 9);
+        assert_eq!(character_offset_for_cell(text, 7), 7);
+        assert_eq!(character_offset_for_cell(text, 9), 9);
     }
 
     #[test]
-    fn ordinary_text_does_not_request_emoji_presentation() {
-        for character in ['a', '1', '#', '*', 'é', '界', '─', '🐙'] {
-            assert!(!uses_text_presentation(character, ""));
-        }
+    fn ordinary_text_keeps_its_character_widths() {
         assert_eq!(text_cell_width("1#*e\u{301}界"), 6);
     }
 

@@ -5,7 +5,7 @@ use termprofile::TermProfile;
 
 use crate::style::{Background, BorderStyle, DivStyle};
 use crate::terminal::{write_synchronized_output_begin, write_synchronized_output_end};
-use crate::text::{uses_text_presentation, GraphemeSuffix};
+use crate::text::GraphemeSuffix;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ClipRect {
@@ -804,13 +804,7 @@ impl Frame {
                 write!(out, "\x1b[{};{}H", row + 1, col + 1)?;
             }
             write!(out, "{}", cell.character)?;
-            let suffix = self
-                .grapheme_suffixes
-                .get(&(row * self.width + col))
-                .map_or("", String::as_str);
-            if uses_text_presentation(cell.character, suffix) {
-                write!(out, "\u{fe0e}")?;
-            } else {
+            if let Some(suffix) = self.grapheme_suffixes.get(&(row * self.width + col)) {
                 write!(out, "{suffix}")?;
             }
         }
@@ -1635,7 +1629,7 @@ mod tests {
             GraphemeGlyph {
                 character: '\u{26a0}',
                 suffix: Some("\u{fe0f}"),
-                width: 1,
+                width: 2,
             },
             GlyphStyle::default(),
             ClipBounds::unbounded(),
@@ -1652,17 +1646,17 @@ mod tests {
     }
 
     #[test]
-    fn terminal_output_uses_text_presentation_for_standalone_symbols() {
+    fn terminal_output_preserves_the_requested_symbol_presentation() {
         for character in ['⚠', '❤', '♥', '☀', '™', '🏳'] {
-            for suffix in [None, Some("\u{fe0e}"), Some("\u{fe0f}")] {
-                let mut frame = Frame::new(2, 1, false);
+            for (suffix, width) in [(None, 1), (Some("\u{fe0e}"), 1), (Some("\u{fe0f}"), 2)] {
+                let mut frame = Frame::new(3, 1, false);
                 frame.write_grapheme(
                     0,
                     0,
                     GraphemeGlyph {
                         character,
                         suffix,
-                        width: 1,
+                        width,
                     },
                     GlyphStyle::default(),
                     ClipBounds::unbounded(),
@@ -1674,10 +1668,13 @@ mod tests {
                 let rendered = String::from_utf8(bytes).unwrap();
 
                 assert!(
-                    rendered.contains(&format!("{character}\u{fe0e}")),
+                    rendered.contains(&format!(
+                        "{character}{}\x1b[1;{}H",
+                        suffix.unwrap_or(""),
+                        width + 1
+                    )),
                     "{rendered:?}"
                 );
-                assert!(!rendered.contains('\u{fe0f}'), "{rendered:?}");
             }
         }
     }

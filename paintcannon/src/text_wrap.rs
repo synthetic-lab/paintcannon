@@ -314,6 +314,21 @@ mod tests {
     }
 
     #[test]
+    fn symbol_presentation_changes_wrapping_and_cursor_positions() {
+        let emoji = WrappedText::new("⚠️⚠️x", 4);
+        assert_eq!(emoji.visual_line_range(0), Some(0..4));
+        assert_eq!(emoji.cursor_position(2), (0, 2));
+        assert_eq!(emoji.cursor_position(4), (1, 0));
+        assert_eq!(emoji.cursor_position(5), (1, 1));
+
+        let text = WrappedText::new("⚠︎⚠︎x", 4);
+        assert_eq!(text.visual_line_range(0), Some(0..5));
+        assert_eq!(text.cursor_position(2), (0, 1));
+        assert_eq!(text.cursor_position(4), (0, 2));
+        assert_eq!(text.cursor_position(5), (0, 3));
+    }
+
+    #[test]
     fn cursor_positions_and_ranges_use_original_offsets_after_text_normalization() {
         let tabbed = WrappedText::new("a\tb", 8);
         assert_eq!(tabbed.cursor_position(2), (0, 5));

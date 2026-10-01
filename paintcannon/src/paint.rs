@@ -3377,7 +3377,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_span_uses_text_presentation_for_warning() {
+    fn inline_span_preserves_emoji_presentation_for_warning() {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Length(4.0), CssDimension::Auto));
         let span = arena.create_element(DivStyle {
@@ -3405,8 +3405,8 @@ mod tests {
         let rendered = String::from_utf8(bytes).unwrap();
 
         assert!(
-            rendered.contains("\u{26a0}\u{fe0e}"),
-            "terminal output did not use text presentation: {rendered:?}"
+            rendered.contains(emoji),
+            "terminal output did not preserve emoji presentation: {rendered:?}"
         );
     }
 
@@ -3441,7 +3441,7 @@ mod tests {
     }
 
     #[test]
-    fn block_text_uses_text_presentation_for_bare_warning() {
+    fn block_text_preserves_bare_warning() {
         let mut arena = LayoutArena::new();
         let row = arena.create_element(block_style(CssDimension::Length(4.0), CssDimension::Auto));
         let text = arena.create_text("\u{26a0}x");
@@ -3463,8 +3463,8 @@ mod tests {
         let rendered = String::from_utf8(bytes).unwrap();
 
         assert!(
-            rendered.contains("\u{26a0}\u{fe0e}"),
-            "terminal output did not use text presentation: {rendered:?}"
+            rendered.contains("\u{26a0}\x1b[1;2Hx"),
+            "terminal output did not preserve the bare warning: {rendered:?}"
         );
         assert_eq!(output.frame.cell(1, 0).unwrap().character, 'x');
     }
@@ -3499,10 +3499,10 @@ mod tests {
         );
         let output = paint_arena(&arena, root, 20, 3, false);
 
-        assert_eq!(arena.layout(panel).size.width, 12.0);
-        assert_eq!(output.frame.cell(11, 0).unwrap().character, '╮');
-        assert_eq!(output.frame.cell(11, 1).unwrap().character, '│');
-        assert_eq!(output.frame.cell(11, 2).unwrap().character, '╯');
+        assert_eq!(arena.layout(panel).size.width, 13.0);
+        assert_eq!(output.frame.cell(12, 0).unwrap().character, '╮');
+        assert_eq!(output.frame.cell(12, 1).unwrap().character, '│');
+        assert_eq!(output.frame.cell(12, 2).unwrap().character, '╯');
         assert_eq!(
             output
                 .frame
@@ -3520,11 +3520,11 @@ mod tests {
             .write_full_to(&mut bytes, termprofile::TermProfile::NoColor)
             .unwrap();
         let rendered = String::from_utf8(bytes).unwrap();
-        assert!(rendered.contains("⚠\u{fe0e}"));
-        assert!(rendered.contains("❤\u{fe0e}"));
+        assert!(rendered.contains("⚠\x1b[2;4H"));
+        assert!(rendered.contains("❤️"));
         assert!(rendered.contains("👩‍💻"));
-        assert!(rendered.contains("👍🏽\x1b[2;11H │"));
-        assert!(!rendered.contains('\u{fe0f}'));
+        assert!(rendered.contains("👍🏽\x1b[2;12H │"));
+        assert!(!rendered.contains('\u{fe0e}'));
     }
 
     #[test]
@@ -4499,7 +4499,7 @@ mod tests {
     }
 
     #[test]
-    fn textarea_uses_text_presentation_for_warning() {
+    fn textarea_preserves_emoji_presentation_for_warning() {
         let mut arena = LayoutArena::new();
         let emoji = "\u{26a0}\u{fe0f}";
         let textarea = arena.create_textarea(
@@ -4523,8 +4523,8 @@ mod tests {
         let rendered = String::from_utf8(bytes).unwrap();
 
         assert!(
-            rendered.contains("\u{26a0}\u{fe0e}"),
-            "textarea output did not use text presentation: {rendered:?}"
+            rendered.contains(emoji),
+            "textarea output did not preserve emoji presentation: {rendered:?}"
         );
     }
 
