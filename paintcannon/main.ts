@@ -1965,10 +1965,10 @@ export class PaintCannon {
       case "Delete":
         return input.deleteForward();
       case "ArrowLeft":
-        input.cursorPosition -= 1;
+        input.moveCursorHorizontally(-1);
         return true;
       case "ArrowRight":
-        input.cursorPosition += 1;
+        input.moveCursorHorizontally(1);
         return true;
       case "ArrowUp":
         if (input instanceof TextAreaElement) {
@@ -2001,7 +2001,7 @@ export class PaintCannon {
         }
         return this.submitInputForm(input);
       default:
-        if (event.key.length === 1) {
+        if (Array.from(event.key).length === 1) {
           input.insertText(event.key);
           return true;
         }
@@ -2026,10 +2026,10 @@ export class PaintCannon {
         }
         return true;
       case "KeyB":
-        input.cursorPosition -= 1;
+        input.moveCursorHorizontally(-1);
         return true;
       case "KeyF":
-        input.cursorPosition += 1;
+        input.moveCursorHorizontally(1);
         return true;
       case "KeyD":
         return input.deleteForward();
@@ -3128,6 +3128,7 @@ export class ImageElement extends PaintElementEventTarget<BasicElementEventListe
 abstract class TextControlElementBase<
   TEvents extends ElementEventListenerTuple,
 > extends PaintElementEventTarget<TEvents> {
+  private readonly graphemeSegmenter = new Intl.Segmenter("und", { granularity: "grapheme" });
   private inputType = "text";
   private inputValue = "";
   private placeholderValue = "";
@@ -3211,7 +3212,7 @@ abstract class TextControlElementBase<
     }
 
     const length = Array.from(this.inputValue).length;
-    this.cursor = Math.max(0, Math.min(length, Math.floor(position)));
+    this.cursor = this.graphemeRangeAt(Math.max(0, Math.min(length, Math.floor(position)))).start;
   }
 
   setCursorPositionFromNativePoint(x: number, y: number): boolean {
@@ -3239,8 +3240,9 @@ abstract class TextControlElementBase<
     }
 
     const chars = Array.from(this.inputValue);
-    chars.splice(this.cursor - 1, 1);
-    this.cursor -= 1;
+    const start = this.graphemeRangeAt(this.cursor - 1).start;
+    chars.splice(start, this.cursor - start);
+    this.cursor = start;
     this.inputValue = chars.join("");
     this.syncValue();
     return true;
@@ -3252,7 +3254,8 @@ abstract class TextControlElementBase<
       return false;
     }
 
-    chars.splice(this.cursor, 1);
+    const end = this.graphemeRangeAt(this.cursor).end;
+    chars.splice(this.cursor, end - this.cursor);
     this.inputValue = chars.join("");
     this.syncValue();
     return true;
@@ -3304,6 +3307,14 @@ abstract class TextControlElementBase<
     return true;
   }
 
+  moveCursorHorizontally(direction: -1 | 1): void {
+    this.cursor =
+      direction === -1
+        ? this.graphemeRangeAt(this.cursor - 1).start
+        : this.graphemeRangeAt(this.cursor).end;
+    this.syncValue();
+  }
+
   cursorToStart(): void {
     this.cursor = 0;
     this.syncValue();
@@ -3323,7 +3334,20 @@ abstract class TextControlElementBase<
     this.setNativeInputFocused(this.id, focused);
   }
 
+  private graphemeRangeAt(position: number): { start: number; end: number } {
+    let start = 0;
+    for (const { segment } of this.graphemeSegmenter.segment(this.inputValue)) {
+      const end = start + Array.from(segment).length;
+      if (position < end) {
+        return { start, end };
+      }
+      start = end;
+    }
+    return { start, end: start };
+  }
+
   private syncValue(): void {
+    this.cursor = this.graphemeRangeAt(this.cursor).start;
     this.setNativeInputValue(this.id, this.inputValue, this.cursor);
   }
 }

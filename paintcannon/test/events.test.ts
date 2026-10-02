@@ -400,6 +400,57 @@ describe("core keyboard events", () => {
     });
   });
 
+  it.each(["input", "textarea"] as const)("edits whole graphemes in %s", tag => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const input = paintCannon.createElement(tag);
+    root.appendChild(input);
+    input.focus();
+
+    for (const grapheme of ["👍🏽", "❤️", "⚠️", "👩‍💻", "👨‍👩‍👧‍👦", "🇺🇸", "1️⃣", "e\u0301"]) {
+      const end = 1 + Array.from(grapheme).length;
+      const press = (key: string) => {
+        mockNative.events.push(keyboardInput(keyDown(key)));
+        notifyNativeEvents(paintCannon);
+      };
+      input.value = `a${grapheme}b`;
+      input.cursorPosition = end;
+      press("ArrowLeft");
+      expect(input.cursorPosition).toBe(1);
+      press("ArrowRight");
+      expect(input.cursorPosition).toBe(end);
+      press("Backspace");
+      expect(input.value).toBe("ab");
+      expect(input.cursorPosition).toBe(1);
+      expect(mockNative.textControls.get(input.id)).toMatchObject({ value: "ab", cursor: 1 });
+
+      input.value = `a${grapheme}b`;
+      input.cursorPosition = 2;
+      expect(input.cursorPosition).toBe(1);
+      press("Delete");
+      expect(input.value).toBe("ab");
+      expect(input.cursorPosition).toBe(1);
+    }
+    paintCannon.stop();
+  });
+
+  it("accepts emoji keyboard input and deletes the completed sequence", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const input = paintCannon.createElement("textarea");
+    root.appendChild(input);
+    input.focus();
+    for (const key of ["👍", "🏽"]) {
+      mockNative.events.push(keyboardInput(keyDown(key)));
+      notifyNativeEvents(paintCannon);
+    }
+    expect(input.value).toBe("👍🏽");
+    expect(input.cursorPosition).toBe(2);
+    mockNative.events.push(keyboardInput(keyDown("Backspace")));
+    notifyNativeEvents(paintCannon);
+    expect(input.value).toBe("");
+    expect(input.cursorPosition).toBe(0);
+    paintCannon.stop();
+  });
+
   it("reapplying the current value preserves the cursor", () => {
     const { paintCannon, mockNative, root } = createPaintTree();
     const input = paintCannon.createElement("input");
