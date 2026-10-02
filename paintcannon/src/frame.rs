@@ -670,8 +670,8 @@ impl Frame {
                         if self.cell_matches(previous, index) {
                             break;
                         }
-                        if self.cell_needs_cursor_positioning(index)
-                            || previous.cell_needs_cursor_positioning(index)
+                        if self.cell_uses_complex_grapheme(index)
+                            || previous.cell_uses_complex_grapheme(index)
                         {
                             col = self.width;
                             break;
@@ -742,7 +742,7 @@ impl Frame {
             if position_cursor {
                 write!(out, "\x1b[{};{}H", row + 1, col + 1)?;
             }
-            position_cursor = self.cell_needs_cursor_positioning(row * self.width + col);
+            position_cursor = self.cell_uses_complex_grapheme(row * self.width + col);
             if cell.reversed != current_reversed {
                 if cell.reversed {
                     write!(out, "\x1b[7m")?;
@@ -815,7 +815,7 @@ impl Frame {
         )
     }
 
-    fn cell_needs_cursor_positioning(&self, index: usize) -> bool {
+    fn cell_uses_complex_grapheme(&self, index: usize) -> bool {
         !self.cells[index].character.is_ascii() || self.grapheme_suffixes.contains_key(&index)
     }
 
