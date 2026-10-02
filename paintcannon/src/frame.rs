@@ -732,17 +732,17 @@ impl Frame {
         let mut current_italic = false;
         let mut current_underline = false;
         let mut current_strikethrough = false;
-        let mut position_cursor = false;
+        let mut next_glyph_needs_positioning = false;
         for col in start_col..end_col {
             let cell = self.cells[row * self.width + col];
             if cell.wide_continuation {
-                position_cursor = true;
+                next_glyph_needs_positioning = true;
                 continue;
             }
-            if position_cursor {
+            if next_glyph_needs_positioning {
                 write!(out, "\x1b[{};{}H", row + 1, col + 1)?;
             }
-            position_cursor = self.cell_uses_complex_grapheme(row * self.width + col);
+            next_glyph_needs_positioning = self.cell_uses_complex_grapheme(row * self.width + col);
             if cell.reversed != current_reversed {
                 if cell.reversed {
                     write!(out, "\x1b[7m")?;
@@ -791,14 +791,14 @@ impl Frame {
                 write!(out, "{}", cell.foreground.ansi_fg(color_profile))?;
                 current_foreground = cell.foreground;
             }
-            let mut continuation_col = col + 1;
-            while continuation_col < end_col
-                && self.cells[row * self.width + continuation_col].wide_continuation
+            let mut first_col_after_glyph = col + 1;
+            while first_col_after_glyph < end_col
+                && self.cells[row * self.width + first_col_after_glyph].wide_continuation
             {
-                continuation_col += 1;
+                first_col_after_glyph += 1;
             }
-            if continuation_col > col + 1 {
-                for _ in col..continuation_col {
+            if first_col_after_glyph > col + 1 {
+                for _ in col..first_col_after_glyph {
                     write!(out, " ")?;
                 }
                 write!(out, "\x1b[{};{}H", row + 1, col + 1)?;
