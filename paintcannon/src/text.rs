@@ -52,7 +52,7 @@ pub(crate) fn text_graphemes(text: &str) -> impl Iterator<Item = TextGrapheme<'_
 }
 
 pub(crate) fn text_cell_width(text: &str) -> usize {
-    UnicodeWidthStr::width(text)
+    text_graphemes(text).map(|grapheme| grapheme.width).sum()
 }
 
 pub(crate) fn character_cell_offsets(text: &str) -> Vec<usize> {
@@ -273,6 +273,59 @@ mod tests {
         let chars = parse_text_for_white_space("a\u{0085}b", CssWhiteSpace::Pre);
 
         assert_eq!(chars.into_iter().collect::<String>(), "a\u{fffd}b");
+    }
+
+    #[test]
+    fn symbol_widths_follow_the_requested_presentation() {
+        for symbol in ["⚠", "❤", "♥", "©", "®", "™", "☀", "☘", "▶", "↔", "🏳"] {
+            for (selector, width) in [("", 1), ("\u{fe0e}", 1), ("\u{fe0f}", 2)] {
+                let text = format!("{symbol}{selector}");
+                assert_eq!(text_cell_width(&text), width, "{text:?}");
+                assert_eq!(
+                    cell_offset_for_character(&text, text.chars().count()),
+                    width,
+                    "{text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compound_emoji_keep_their_grapheme_widths() {
+        for text in [
+            "🐙",
+            "🛑",
+            "👍🏽",
+            "👩‍💻",
+            "👩🏽‍🚀",
+            "❤️‍🔥",
+            "🏳️‍🌈",
+            "👨‍👩‍👧‍👦",
+            "🇺🇸",
+            "1️⃣",
+            "#️⃣",
+            "🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}",
+        ] {
+            assert_eq!(text_cell_width(text), 2, "{text:?}");
+            assert_eq!(text_graphemes(text).count(), 1, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn mixed_emoji_offsets_follow_the_rendered_widths() {
+        let text = "⚠🐙❤️👩‍💻👍🏽";
+        assert_eq!(text_cell_width(text), 9);
+        assert_eq!(
+            character_cell_offsets(text),
+            vec![0, 1, 3, 3, 5, 5, 5, 7, 7, 9]
+        );
+        assert_eq!(character_offset_for_cell(text, 7), 7);
+        assert_eq!(character_offset_for_cell(text, 9), 9);
+    }
+
+    #[test]
+    fn ordinary_text_keeps_its_character_widths() {
+        assert_eq!(text_cell_width("1#*e\u{301}界"), 6);
     }
 
     #[test]

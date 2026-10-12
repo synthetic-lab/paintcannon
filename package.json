@@ -29,6 +29,8 @@
     "demo:controlled:core": "npm run demo:controlled --workspace paintcannon",
     "demo:chunky-rounded": "npm run demo:chunky-rounded --workspace paintcannon",
     "demo:destroy": "npm run demo:destroy --workspace paintcannon",
+    "demo:emoji-width": "npm run demo:emoji-width --workspace paintcannon --",
+    "demo:emoji-chat": "npm run demo:emoji-width --workspace paintcannon-react --",
     "demo:detach": "npm run demo:detach --workspace paintcannon",
     "demo:keyboard": "npm run demo:keyboard --workspace paintcannon",
     "demo:images": "npm run demo:images --workspace paintcannon",
