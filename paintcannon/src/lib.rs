@@ -4,6 +4,7 @@ mod event_notification;
 mod frame;
 mod image;
 mod input;
+mod input_reader;
 mod layout;
 mod line_break;
 mod native_event;

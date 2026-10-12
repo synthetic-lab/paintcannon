@@ -43,9 +43,9 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "bitflags"
-version = "2.11.1"
+version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
+checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "by_address"
@@ -514,8 +514,10 @@ dependencies = [
  "napi-build",
  "napi-derive",
  "png",
+ "signal-hook",
  "taffy",
  "terminal-colorsaurus",
+ "terminput",
  "termprofile",
  "unicode-linebreak",
  "unicode-segmentation",
@@ -848,6 +850,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ad441d87dd98bc5eeb31cf2fb7e4839968763006b478efb38668a3bf9da0d59"
 dependencies = [
  "home",
+]
+
+[[package]]
+name = "terminput"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33fe296cb813b5bad99a8eb911e6a08e48f0854ee1e8b427073e657a509a7097"
+dependencies = [
+ "bitflags",
 ]
 
 [[package]]

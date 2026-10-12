@@ -9,18 +9,20 @@ use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{
-        self as terminal_event, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture,
-        EnableBracketedPaste, EnableFocusChange, EnableMouseCapture, Event as TerminalEvent,
-        KeyCode, KeyEvent as TerminalKeyEvent, KeyEventKind, KeyModifiers,
-        KeyboardEnhancementFlags, MouseButton, MouseEvent as CrosstermMouseEvent, MouseEventKind,
+        DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+        EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags,
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{
-        disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
-        LeaveAlternateScreen,
-    },
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use terminput::{
+    Event as TerminalEvent, KeyCode, KeyEvent as TerminalKeyEvent, KeyEventKind, KeyModifiers,
+    MediaKeyCode, ModifierDirection, ModifierKeyCode, MouseButton, MouseEvent as InputMouseEvent,
+    MouseEventKind, ScrollDirection,
+};
+
+use crate::input_reader::InputReader;
 
 use crate::engine::EngineCommand;
 use crate::event_notification::EventNotification;
@@ -78,6 +80,7 @@ impl TerminalInput {
             capture_ctrl_c,
             initial_terminal_size,
         } = options;
+        let mut reader = InputReader::open().ok()?;
         if enable_raw_mode().is_err() {
             return None;
         }
@@ -99,8 +102,10 @@ impl TerminalInput {
             set_bool(&bracketed_paste_enabled, true);
         }
 
-        let kitty_keyboard_enabled =
-            !force_compat_mode && supports_keyboard_enhancement().unwrap_or(false);
+        let kitty_keyboard_enabled = !force_compat_mode
+            && reader
+                .negotiate_keyboard(&mut io::stdout())
+                .unwrap_or(false);
         let keyboard_enhancement_pushed = Arc::new(Mutex::new(false));
         if kitty_keyboard_enabled {
             let _ = execute!(
@@ -147,98 +152,94 @@ impl TerminalInput {
             let mut tmux_focus_return_pending = false;
 
             while !thread_stop.load(Ordering::Relaxed) {
-                match terminal_event::poll(Duration::from_millis(25)) {
-                    Ok(true) => {
-                        if let Ok(event) = terminal_event::read() {
-                            match event {
-                                TerminalEvent::Key(event) => {
-                                    if !capture_ctrl_c && is_ctrl_c_event(&event) {
-                                        thread_interrupted_by_ctrl_c.store(true, Ordering::Release);
-                                        stop_renderer(thread_renderer_tx.as_ref());
-                                        reset_terminal(!get_bool(&thread_alternate_screen_entered));
-                                        release_terminal_state(
-                                            &thread_terminal_captured,
-                                            &thread_mouse_capture_enabled,
-                                            &thread_focus_change_enabled,
-                                            &thread_bracketed_paste_enabled,
-                                            &thread_keyboard_enhancement_pushed,
-                                            &thread_alternate_screen_entered,
-                                        );
-                                        signal_process_group(libc::SIGINT);
-                                        thread_stop.store(true, Ordering::Relaxed);
-                                        break;
-                                    }
+                match reader.read(Duration::from_millis(25)) {
+                    Ok(Some(event)) => match event {
+                        TerminalEvent::Key(event) => {
+                            if !capture_ctrl_c && is_ctrl_c_event(&event) {
+                                thread_interrupted_by_ctrl_c.store(true, Ordering::Release);
+                                stop_renderer(thread_renderer_tx.as_ref());
+                                reset_terminal(!get_bool(&thread_alternate_screen_entered));
+                                release_terminal_state(
+                                    &thread_terminal_captured,
+                                    &thread_mouse_capture_enabled,
+                                    &thread_focus_change_enabled,
+                                    &thread_bracketed_paste_enabled,
+                                    &thread_keyboard_enhancement_pushed,
+                                    &thread_alternate_screen_entered,
+                                );
+                                signal_process_group(libc::SIGINT);
+                                thread_stop.store(true, Ordering::Relaxed);
+                                break;
+                            }
 
-                                    if handle_terminal_key_event(
-                                        event,
-                                        &mut pressed_keys,
-                                        &thread_event_queue,
-                                        &thread_synthetic_keyup_delay_ms,
-                                        kitty_keyboard_enabled,
-                                    ) {
-                                        thread_event_notifier.notify();
-                                    }
-                                }
-                                TerminalEvent::Paste(data) => {
-                                    push_paste_event(&thread_event_queue, data);
-                                    thread_event_notifier.notify();
-                                }
-                                TerminalEvent::Mouse(event) => {
-                                    handle_terminal_mouse_event(
-                                        event,
-                                        &mut mouse_down,
-                                        &thread_event_queue,
-                                        if capture_mouse {
-                                            thread_renderer_tx.as_ref()
-                                        } else {
-                                            None
-                                        },
-                                    );
-                                    thread_event_notifier.notify();
-                                }
-                                TerminalEvent::Resize(cols, rows) => {
-                                    if observe_terminal_size(
-                                        &mut observed_terminal_size,
-                                        &thread_event_queue,
-                                        (u32::from(cols), u32::from(rows)),
-                                        thread_renderer_tx.as_ref(),
-                                    ) {
-                                        tmux_focus_check_pending = true;
-                                        thread_event_notifier.notify();
-                                    }
-                                }
-                                TerminalEvent::FocusGained => {
-                                    tmux_focus_return_pending = false;
-                                    let initial_report = awaiting_initial_focus_report;
-                                    awaiting_initial_focus_report = false;
-                                    if handle_terminal_focus_event(
-                                        true,
-                                        &thread_event_queue,
-                                        &thread_focused,
-                                        thread_renderer_tx.as_ref(),
-                                        initial_report,
-                                    ) {
-                                        thread_event_notifier.notify();
-                                    }
-                                }
-                                TerminalEvent::FocusLost => {
-                                    tmux_focus_return_pending = false;
-                                    let initial_report = awaiting_initial_focus_report;
-                                    awaiting_initial_focus_report = false;
-                                    if handle_terminal_focus_event(
-                                        false,
-                                        &thread_event_queue,
-                                        &thread_focused,
-                                        thread_renderer_tx.as_ref(),
-                                        initial_report,
-                                    ) {
-                                        thread_event_notifier.notify();
-                                    }
-                                }
+                            if handle_terminal_key_event(
+                                event,
+                                &mut pressed_keys,
+                                &thread_event_queue,
+                                &thread_synthetic_keyup_delay_ms,
+                                kitty_keyboard_enabled,
+                            ) {
+                                thread_event_notifier.notify();
                             }
                         }
-                    }
-                    Ok(false) => {
+                        TerminalEvent::Paste(data) => {
+                            push_paste_event(&thread_event_queue, data);
+                            thread_event_notifier.notify();
+                        }
+                        TerminalEvent::Mouse(event) => {
+                            handle_terminal_mouse_event(
+                                event,
+                                &mut mouse_down,
+                                &thread_event_queue,
+                                if capture_mouse {
+                                    thread_renderer_tx.as_ref()
+                                } else {
+                                    None
+                                },
+                            );
+                            thread_event_notifier.notify();
+                        }
+                        TerminalEvent::Resize { cols, rows } => {
+                            if observe_terminal_size(
+                                &mut observed_terminal_size,
+                                &thread_event_queue,
+                                (cols, rows),
+                                thread_renderer_tx.as_ref(),
+                            ) {
+                                tmux_focus_check_pending = true;
+                                thread_event_notifier.notify();
+                            }
+                        }
+                        TerminalEvent::FocusGained => {
+                            tmux_focus_return_pending = false;
+                            let initial_report = awaiting_initial_focus_report;
+                            awaiting_initial_focus_report = false;
+                            if handle_terminal_focus_event(
+                                true,
+                                &thread_event_queue,
+                                &thread_focused,
+                                thread_renderer_tx.as_ref(),
+                                initial_report,
+                            ) {
+                                thread_event_notifier.notify();
+                            }
+                        }
+                        TerminalEvent::FocusLost => {
+                            tmux_focus_return_pending = false;
+                            let initial_report = awaiting_initial_focus_report;
+                            awaiting_initial_focus_report = false;
+                            if handle_terminal_focus_event(
+                                false,
+                                &thread_event_queue,
+                                &thread_focused,
+                                thread_renderer_tx.as_ref(),
+                                initial_report,
+                            ) {
+                                thread_event_notifier.notify();
+                            }
+                        }
+                    },
+                    Ok(None) => {
                         if synthesize_expired_keyups(&mut pressed_keys, &thread_event_queue) {
                             thread_event_notifier.notify();
                         }
@@ -479,7 +480,7 @@ fn is_ctrl_c_event(event: &TerminalKeyEvent) -> bool {
     }
 
     match event.code {
-        KeyCode::Char('c') | KeyCode::Char('C') => event.modifiers.contains(KeyModifiers::CONTROL),
+        KeyCode::Char('c') | KeyCode::Char('C') => event.modifiers.contains(KeyModifiers::CTRL),
         KeyCode::Char('\u{3}') => true,
         _ => false,
     }
@@ -606,11 +607,19 @@ fn push_paste_event(events: &NativeEventQueue, data: String) {
 }
 
 fn handle_terminal_mouse_event(
-    event: CrosstermMouseEvent,
+    event: InputMouseEvent,
     mouse_down: &mut Option<MouseDown>,
     events: &NativeEventQueue,
     renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
 ) {
+    if matches!(
+        event.kind,
+        MouseEventKind::Down(MouseButton::Unknown)
+            | MouseEventKind::Up(MouseButton::Unknown)
+            | MouseEventKind::Drag(MouseButton::Unknown)
+    ) {
+        return;
+    }
     match event.kind {
         MouseEventKind::Down(button) => {
             *mouse_down = Some(MouseDown { button });
@@ -643,22 +652,22 @@ fn handle_terminal_mouse_event(
                 mouse_event_from_terminal("mousemove", event, MouseButton::Left),
             );
         }
-        MouseEventKind::ScrollUp => {
+        MouseEventKind::Scroll(ScrollDirection::Up) => {
             send_pointer_event(renderer_tx, &event);
             send_selection_cursor_event(renderer_tx, &event);
             push_mouse_event(events, wheel_event_from_terminal(event, 0, -1));
         }
-        MouseEventKind::ScrollDown => {
+        MouseEventKind::Scroll(ScrollDirection::Down) => {
             send_pointer_event(renderer_tx, &event);
             send_selection_cursor_event(renderer_tx, &event);
             push_mouse_event(events, wheel_event_from_terminal(event, 0, 1));
         }
-        MouseEventKind::ScrollLeft => {
+        MouseEventKind::Scroll(ScrollDirection::Left) => {
             send_pointer_event(renderer_tx, &event);
             send_selection_cursor_event(renderer_tx, &event);
             push_mouse_event(events, wheel_event_from_terminal(event, -1, 0));
         }
-        MouseEventKind::ScrollRight => {
+        MouseEventKind::Scroll(ScrollDirection::Right) => {
             send_pointer_event(renderer_tx, &event);
             send_selection_cursor_event(renderer_tx, &event);
             push_mouse_event(events, wheel_event_from_terminal(event, 1, 0));
@@ -669,7 +678,7 @@ fn handle_terminal_mouse_event(
 fn send_selection_event(
     renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
     event_type: SelectionMouseEventType,
-    event: &CrosstermMouseEvent,
+    event: &InputMouseEvent,
     button: MouseButton,
 ) {
     if button != MouseButton::Left {
@@ -694,7 +703,7 @@ fn send_selection_event(
 
 fn send_pointer_event(
     renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
-    event: &CrosstermMouseEvent,
+    event: &InputMouseEvent,
 ) {
     let Some(renderer_tx) = renderer_tx else {
         return;
@@ -708,7 +717,7 @@ fn send_pointer_event(
 
 fn send_selection_cursor_event(
     renderer_tx: Option<&crossbeam_channel::Sender<EngineCommand>>,
-    event: &CrosstermMouseEvent,
+    event: &InputMouseEvent,
 ) {
     let Some(renderer_tx) = renderer_tx else {
         return;
@@ -837,7 +846,7 @@ fn terminal_focus_event(focused: bool) -> TerminalFocusEvent {
 
 fn mouse_event_from_terminal(
     event_type: &str,
-    event: CrosstermMouseEvent,
+    event: InputMouseEvent,
     button: MouseButton,
 ) -> TerminalMouseEvent {
     let modifiers = event.modifiers;
@@ -848,7 +857,7 @@ fn mouse_event_from_terminal(
         button: mouse_button_value(button),
         delta_x: 0,
         delta_y: 0,
-        ctrl_key: modifiers.contains(KeyModifiers::CONTROL),
+        ctrl_key: modifiers.contains(KeyModifiers::CTRL),
         alt_key: modifiers.contains(KeyModifiers::ALT),
         meta_key: modifiers
             .intersects(KeyModifiers::META | KeyModifiers::SUPER | KeyModifiers::HYPER),
@@ -857,7 +866,7 @@ fn mouse_event_from_terminal(
 }
 
 fn wheel_event_from_terminal(
-    event: CrosstermMouseEvent,
+    event: InputMouseEvent,
     delta_x: i32,
     delta_y: i32,
 ) -> TerminalMouseEvent {
@@ -869,7 +878,7 @@ fn wheel_event_from_terminal(
         button: 0,
         delta_x,
         delta_y,
-        ctrl_key: modifiers.contains(KeyModifiers::CONTROL),
+        ctrl_key: modifiers.contains(KeyModifiers::CTRL),
         alt_key: modifiers.contains(KeyModifiers::ALT),
         meta_key: modifiers
             .intersects(KeyModifiers::META | KeyModifiers::SUPER | KeyModifiers::HYPER),
@@ -882,6 +891,7 @@ fn mouse_button_value(button: MouseButton) -> u32 {
         MouseButton::Left => 0,
         MouseButton::Middle => 1,
         MouseButton::Right => 2,
+        MouseButton::Unknown => 0,
     }
 }
 
@@ -899,7 +909,7 @@ fn pressed_key_from_terminal(event: TerminalKeyEvent) -> Option<PressedKey> {
     Some(PressedKey {
         key,
         code,
-        ctrl_key: modifiers.contains(KeyModifiers::CONTROL),
+        ctrl_key: modifiers.contains(KeyModifiers::CTRL),
         alt_key: modifiers.contains(KeyModifiers::ALT),
         meta_key: modifiers
             .intersects(KeyModifiers::META | KeyModifiers::SUPER | KeyModifiers::HYPER),
@@ -960,12 +970,11 @@ fn key_value(code: KeyCode) -> Option<String> {
         KeyCode::End => "End".to_string(),
         KeyCode::PageUp => "PageUp".to_string(),
         KeyCode::PageDown => "PageDown".to_string(),
-        KeyCode::Tab | KeyCode::BackTab => "Tab".to_string(),
+        KeyCode::Tab => "Tab".to_string(),
         KeyCode::Delete => "Delete".to_string(),
         KeyCode::Insert => "Insert".to_string(),
         KeyCode::F(number) => format!("F{number}"),
         KeyCode::Char(character) => character.to_string(),
-        KeyCode::Null => "Unidentified".to_string(),
         KeyCode::Esc => "Escape".to_string(),
         KeyCode::CapsLock => "CapsLock".to_string(),
         KeyCode::ScrollLock => "ScrollLock".to_string(),
@@ -974,8 +983,8 @@ fn key_value(code: KeyCode) -> Option<String> {
         KeyCode::Pause => "Pause".to_string(),
         KeyCode::Menu => "ContextMenu".to_string(),
         KeyCode::KeypadBegin => "Clear".to_string(),
-        KeyCode::Media(media) => media.to_string(),
-        KeyCode::Modifier(modifier) => modifier.to_string(),
+        KeyCode::Media(media) => media_key_name(media).to_string(),
+        KeyCode::Modifier(modifier, direction) => modifier_key_name(modifier, direction),
     })
 }
 
@@ -997,11 +1006,10 @@ fn code_value(code: KeyCode) -> String {
         KeyCode::End => "End".to_string(),
         KeyCode::PageUp => "PageUp".to_string(),
         KeyCode::PageDown => "PageDown".to_string(),
-        KeyCode::Tab | KeyCode::BackTab => "Tab".to_string(),
+        KeyCode::Tab => "Tab".to_string(),
         KeyCode::Delete => "Delete".to_string(),
         KeyCode::Insert => "Insert".to_string(),
         KeyCode::F(number) => format!("F{number}"),
-        KeyCode::Null => "Unidentified".to_string(),
         KeyCode::Esc => "Escape".to_string(),
         KeyCode::CapsLock => "CapsLock".to_string(),
         KeyCode::ScrollLock => "ScrollLock".to_string(),
@@ -1010,8 +1018,64 @@ fn code_value(code: KeyCode) -> String {
         KeyCode::Pause => "Pause".to_string(),
         KeyCode::Menu => "ContextMenu".to_string(),
         KeyCode::KeypadBegin => "NumpadClear".to_string(),
-        KeyCode::Media(media) => media.to_string().replace(' ', ""),
-        KeyCode::Modifier(modifier) => modifier.to_string().replace(' ', ""),
+        KeyCode::Media(media) => media_key_name(media).replace(' ', ""),
+        KeyCode::Modifier(modifier, direction) => {
+            modifier_key_name(modifier, direction).replace(' ', "")
+        }
+    }
+}
+
+fn media_key_name(media: MediaKeyCode) -> &'static str {
+    match media {
+        MediaKeyCode::Play => "Play",
+        MediaKeyCode::Pause => "Pause",
+        MediaKeyCode::PlayPause => "Play/Pause",
+        MediaKeyCode::Reverse => "Reverse",
+        MediaKeyCode::Stop => "Stop",
+        MediaKeyCode::FastForward => "Fast Forward",
+        MediaKeyCode::Rewind => "Rewind",
+        MediaKeyCode::TrackNext => "Next Track",
+        MediaKeyCode::TrackPrevious => "Previous Track",
+        MediaKeyCode::Record => "Record",
+        MediaKeyCode::LowerVolume => "Lower Volume",
+        MediaKeyCode::RaiseVolume => "Raise Volume",
+        MediaKeyCode::MuteVolume => "Mute Volume",
+    }
+}
+
+fn modifier_key_name(modifier: ModifierKeyCode, direction: ModifierDirection) -> String {
+    let name = match modifier {
+        ModifierKeyCode::Shift => "Shift",
+        ModifierKeyCode::Control => {
+            if cfg!(target_os = "macos") {
+                "Control"
+            } else {
+                "Ctrl"
+            }
+        }
+        ModifierKeyCode::Alt => {
+            if cfg!(target_os = "macos") {
+                "Option"
+            } else {
+                "Alt"
+            }
+        }
+        ModifierKeyCode::Super => {
+            if cfg!(target_os = "macos") {
+                "Command"
+            } else {
+                "Super"
+            }
+        }
+        ModifierKeyCode::Hyper => "Hyper",
+        ModifierKeyCode::Meta => "Meta",
+        ModifierKeyCode::IsoLevel3Shift => return "Iso Level 3 Shift".to_string(),
+        ModifierKeyCode::IsoLevel5Shift => return "Iso Level 5 Shift".to_string(),
+    };
+    match direction {
+        ModifierDirection::Left => format!("Left {name}"),
+        ModifierDirection::Right => format!("Right {name}"),
+        ModifierDirection::Unknown => name.to_string(),
     }
 }
 
@@ -1305,11 +1369,9 @@ mod tests {
 
     #[test]
     fn pressed_key_from_terminal_passes_through_shifted_byte() {
-        let event = TerminalKeyEvent::new_with_kind(
-            KeyCode::Char('A'),
-            KeyModifiers::SHIFT,
-            KeyEventKind::Press,
-        );
+        let event = TerminalKeyEvent::new(KeyCode::Char('A'))
+            .modifiers(KeyModifiers::SHIFT)
+            .kind(KeyEventKind::Press);
         let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
         assert_eq!(pressed_key.key, "A");
         assert_eq!(pressed_key.code, "KeyA");
@@ -1333,11 +1395,9 @@ mod tests {
             ('(', "Digit9"),
             (')', "Digit0"),
         ] {
-            let event = TerminalKeyEvent::new_with_kind(
-                KeyCode::Char(character),
-                KeyModifiers::SHIFT,
-                KeyEventKind::Press,
-            );
+            let event = TerminalKeyEvent::new(KeyCode::Char(character))
+                .modifiers(KeyModifiers::SHIFT)
+                .kind(KeyEventKind::Press);
             let pressed_key =
                 pressed_key_from_terminal(event).expect("pressed key should be produced");
             assert_eq!(pressed_key.key, character.to_string());
@@ -1348,11 +1408,9 @@ mod tests {
 
     #[test]
     fn pressed_key_from_terminal_plain_letter_without_shift_stays_lowercase() {
-        let event = TerminalKeyEvent::new_with_kind(
-            KeyCode::Char('a'),
-            KeyModifiers::NONE,
-            KeyEventKind::Press,
-        );
+        let event = TerminalKeyEvent::new(KeyCode::Char('a'))
+            .modifiers(KeyModifiers::NONE)
+            .kind(KeyEventKind::Press);
         let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
         assert_eq!(pressed_key.key, "a");
         assert!(!pressed_key.shift_key);
@@ -1360,11 +1418,9 @@ mod tests {
 
     #[test]
     fn pressed_key_from_terminal_shift_tab_keeps_named_key_and_shift_flag() {
-        let event = TerminalKeyEvent::new_with_kind(
-            KeyCode::BackTab,
-            KeyModifiers::SHIFT,
-            KeyEventKind::Press,
-        );
+        let event = TerminalKeyEvent::new(KeyCode::Tab)
+            .modifiers(KeyModifiers::SHIFT)
+            .kind(KeyEventKind::Press);
         let pressed_key = pressed_key_from_terminal(event).expect("pressed key should be produced");
         assert_eq!(pressed_key.key, "Tab");
         assert_eq!(pressed_key.code, "Tab");
@@ -1382,11 +1438,9 @@ mod tests {
         let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
 
         handle_terminal_key_event(
-            TerminalKeyEvent::new_with_kind(
-                KeyCode::Char('a'),
-                KeyModifiers::NONE,
-                KeyEventKind::Press,
-            ),
+            TerminalKeyEvent::new(KeyCode::Char('a'))
+                .modifiers(KeyModifiers::NONE)
+                .kind(KeyEventKind::Press),
             &mut pressed_keys,
             &events,
             &delay,
@@ -1409,7 +1463,9 @@ mod tests {
         let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
 
         handle_terminal_key_event(
-            TerminalKeyEvent::new_with_kind(KeyCode::Tab, KeyModifiers::NONE, KeyEventKind::Press),
+            TerminalKeyEvent::new(KeyCode::Tab)
+                .modifiers(KeyModifiers::NONE)
+                .kind(KeyEventKind::Press),
             &mut pressed_keys,
             &events,
             &delay,
@@ -1434,7 +1490,9 @@ mod tests {
         let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
 
         handle_terminal_key_event(
-            TerminalKeyEvent::new_with_kind(KeyCode::Left, KeyModifiers::NONE, KeyEventKind::Press),
+            TerminalKeyEvent::new(KeyCode::Left)
+                .modifiers(KeyModifiers::NONE)
+                .kind(KeyEventKind::Press),
             &mut pressed_keys,
             &events,
             &delay,
@@ -1455,7 +1513,9 @@ mod tests {
         let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
 
         handle_terminal_key_event(
-            TerminalKeyEvent::new_with_kind(KeyCode::Tab, KeyModifiers::NONE, KeyEventKind::Press),
+            TerminalKeyEvent::new(KeyCode::Tab)
+                .modifiers(KeyModifiers::NONE)
+                .kind(KeyEventKind::Press),
             &mut pressed_keys,
             &events,
             &delay,
@@ -1479,11 +1539,9 @@ mod tests {
         let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
 
         handle_terminal_key_event(
-            TerminalKeyEvent::new_with_kind(
-                KeyCode::Char('a'),
-                KeyModifiers::NONE,
-                KeyEventKind::Press,
-            ),
+            TerminalKeyEvent::new(KeyCode::Char('a'))
+                .modifiers(KeyModifiers::NONE)
+                .kind(KeyEventKind::Press),
             &mut pressed_keys,
             &events,
             &delay,
