@@ -7,6 +7,7 @@ import type {
   NativePaintCannon,
   NativeScrollbarHit,
   NativeScrollMetrics,
+  NerdFontSet,
   TerminalMouseEvent,
   TerminalSize,
 } from "../main.ts";
@@ -51,6 +52,14 @@ export function createMockNativeBinding(instances: MockNativePaintCannon[] = [])
 }
 
 export class MockNativePaintCannon implements NativePaintCannon {
+  symbolsForLegacyComputing = false;
+  async hasSymbolsForLegacyComputing(): Promise<boolean> {
+    return this.symbolsForLegacyComputing;
+  }
+  supportedNerdFontSets = new Set<NerdFontSet>();
+  async hasNerdFontSet(set: NerdFontSet): Promise<boolean> {
+    return this.supportedNerdFontSets.has(set);
+  }
   readonly kittyKeyboardEnabled = false;
   interruptedByCtrlC = false;
   rendererStopped = false;

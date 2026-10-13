@@ -66,6 +66,8 @@
     "demo:opacity": "npm run build:debug && node dist/examples/opacity.js",
     "demo:opacity-transition": "npm run build:debug && node dist/examples/opacity-transition.js",
     "demo:pong": "npm run build:debug && node dist/examples/pong.js",
+    "demo:powerline": "npm run build:debug && NERD_FONT=1 node dist/examples/powerline.js",
+    "demo:powerline:fallback": "npm run build:debug && NERD_FONT=0 node dist/examples/powerline.js",
     "demo:native-scroll": "npm run build:debug && node dist/examples/native-scroll.js",
     "demo:scroll": "npm run build:debug && node dist/examples/scroll.js",
     "demo:scroll-anchoring": "npm run build:debug && node dist/examples/scroll-anchoring.js",
@@ -83,6 +85,7 @@
     "prepublishOnly": "npm run build:native:local && npm run build:ts && node scripts/verify-native-artifacts.mjs && npm run napi:prepublish"
   },
   "napi": {
+    "constEnum": false,
     "binaryName": "paintcannon",
     "packageName": "@syntheticlab/paintcannon-native",
     "targets": [

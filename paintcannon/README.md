@@ -41,6 +41,8 @@ PaintCannon also exposes terminal-specific border styles:
 - `heavy`
 - `rounded`
 - `chunky-rounded`
+- `chunky`
+- `chunky-best-effort`
 - `ascii`
 
 Positioned elements support `position: static | relative | absolute`, the `top`, `right`,
@@ -209,6 +211,93 @@ Inside tmux, enable focus reporting in tmux first:
 ```tmux
 set -g focus-events on
 ```
+
+## Nerd Font Detection
+
+Use `pc.font.hasNerdFontSet()` to choose icons or plain-text fallbacks:
+
+```ts
+const branchIcon = (await pc.font.hasNerdFontSet("powerline")) ? "\ue0a0" : "branch";
+```
+
+The check is asynchronous and conservative: `false` means support could not be
+confirmed. Accepted sets are `"powerline"`, `"powerline-extended"`,
+`"font-awesome"`, `"devicons"`, and `"material-design"` (also exported as the
+`NerdFontSet` type). Check the specific sets your application uses. Detection
+samples representative characters for each set independently; an unsupported
+set does not disable another set. A stopped instance returns `false`.
+
+Detection tries these sources in order:
+
+1. `NERD_FONT=0` forces all sets to `false`; `NERD_FONT=1` forces them to `true`,
+   without queries. Other set values (including empty) also enable the override.
+   Unset the variable to use automatic detection.
+2. Many popular terminal emulators bundle Nerd Font symbols; we attempt to
+   detect them when the terminal can be identified. Detected terminals are:
+   - Ghostty
+   - Wezterm
+   - Rio
+   - Kitty
+   - Alacritty
+   - Foot
+   - Apple Terminal
+   - Iterm2
+   - Konsole
+   - VTE-based terminals such as Gnome
+   - XtermJS
+   - Xterm
+   - Rxvt
+   - VSCode
+     Detection checks `TERM_PROGRAM` and falls back to emulator-specific `TERM`
+     values such as `xterm-ghostty` and `xterm-kitty`. [OpenSSH forwards `TERM`
+     when allocating a PTY](https://man.openbsd.org/ssh_config#SendEnv), but does
+     not automatically forward `TERM_PROGRAM`. Generic values such as
+     `xterm-256color` cannot identify an emulator. Inside tmux, detection also
+     checks its global `TERM_PROGRAM` and `TERM` environment values using the
+     same terminal definitions.
+3. The [Rio Glyph
+   Protocol](https://github.com/raphamorim/rio/blob/main/specs/glyph-protocol.md),
+   only for sets not confirmed by the terminal table. This works over SSH; tmux
+   requires `set -g allow-passthrough on`.
+
+PaintCannon does not inspect installed fonts or parse terminal configuration.
+Unknown support returns `false`; users can set `NERD_FONT=1` when they have
+configured a Nerd Font in a terminal without built-in symbols or protocol support.
+
+To verify tmux transport manually, run `bash scripts/test-font-probe-tmux.sh`
+from the repository root. It uses an isolated tmux server and a simulated
+terminal, cleans up on exit, and requires Python 3. It is not part of CI and
+does not test your actual terminal's glyph coverage.
+
+`chunky` uses Powerline Extended triangles when that set is detected.
+`chunky-rounded` uses Symbols for Legacy Computing corners
+(U+1FB41, U+1FB4C, U+1FB52, U+1FB5D) when supported. Both fall back to filled
+square corners and retain filled edges. Detection completion only repaints;
+it does not change layout. `npm run demo:borders` shows both styles.
+
+`chunky-best-effort` chooses rounded legacy corners first, Powerline Extended
+triangles second, and filled square corners last. It uses the same one-cell
+border layout in all three cases. The borders demo also shows this style.
+
+### Symbols for Legacy Computing
+
+```ts
+const supported = await pc.font.hasSymbolsForLegacyComputing();
+```
+
+This cached `Promise<boolean>` checks known terminal built-in support first,
+including the smooth mosaic corners used by `chunky-rounded`. It is independent
+of `NERD_FONT`: Nerd Fonts do not guarantee those characters. If the table does
+not recognize the terminal, environment markers such as `VTE_VERSION` can
+establish legacy glyph support without identifying a particular application.
+Recognized terminals use their table entry; these fallback markers do not
+override it. If support remains unconfirmed, the Glyph Protocol probes a
+sextant and all four border corners. Unconfirmed support and stopped instances
+return `false`.
+
+The [Rust capability table](src/glyph_detection/terminals.rs) links to the
+upstream implementations. As with Nerd Font detection, tmux's outer
+`TERM_PROGRAM` and `TERM` are checked; no local font or terminal configuration is inspected.
 
 ## Usage
 

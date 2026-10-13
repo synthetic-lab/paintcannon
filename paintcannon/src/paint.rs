@@ -42,6 +42,8 @@ pub(crate) struct PaintOptions<'a> {
     pub(crate) default_foreground: Background,
     pub(crate) default_background: Background,
     pub(crate) terminal_focused: bool,
+    pub(crate) powerline_extended: bool,
+    pub(crate) legacy_symbols: bool,
 }
 
 impl PaintOutput {
@@ -85,6 +87,8 @@ pub(crate) fn paint_arena(
             default_foreground: Background::White,
             default_background: Background::Black,
             terminal_focused: true,
+            powerline_extended: false,
+            legacy_symbols: true,
         },
     )
 }
@@ -101,6 +105,8 @@ pub(crate) fn paint_arena_with_options(
         frame: Frame::new(width, height, capture_hidden_selection_units),
         hit_regions: Vec::new(),
     };
+    output.frame.powerline_extended = options.powerline_extended;
+    output.frame.legacy_symbols = options.legacy_symbols;
     {
         let mut painter = Painter {
             arena,
@@ -3223,6 +3229,8 @@ mod tests {
                 default_foreground: Background::White,
                 default_background: Background::Black,
                 terminal_focused: true,
+                powerline_extended: false,
+                legacy_symbols: false,
             },
             capture_hidden_selection_units: false,
             output: &mut output,
@@ -4365,6 +4373,8 @@ mod tests {
                 default_foreground: Background::White,
                 default_background: Background::Black,
                 terminal_focused: false,
+                powerline_extended: false,
+                legacy_symbols: false,
             },
         );
 
@@ -4558,6 +4568,8 @@ mod tests {
                 default_foreground: Background::White,
                 default_background: Background::Black,
                 terminal_focused: false,
+                powerline_extended: false,
+                legacy_symbols: false,
             },
         );
 

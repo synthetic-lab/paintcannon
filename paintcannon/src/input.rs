@@ -39,6 +39,7 @@ const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
 const TERMINAL_SIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) struct TerminalInput {
+    glyph_queries: crossbeam_channel::Sender<crate::glyph_detection::protocol::Request>,
     focused: Arc<AtomicBool>,
     interrupted_by_ctrl_c: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
@@ -81,6 +82,7 @@ impl TerminalInput {
             initial_terminal_size,
         } = options;
         let mut reader = InputReader::open().ok()?;
+        let glyph_queries = reader.enable_glyph_queries();
         if enable_raw_mode().is_err() {
             return None;
         }
@@ -152,6 +154,10 @@ impl TerminalInput {
             let mut tmux_focus_return_pending = false;
 
             while !thread_stop.load(Ordering::Relaxed) {
+                {
+                    let captured = thread_terminal_captured.lock().ok();
+                    reader.poll_glyph_queries(captured.as_deref().copied().unwrap_or(false));
+                }
                 match reader.read(Duration::from_millis(25)) {
                     Ok(Some(event)) => match event {
                         TerminalEvent::Key(event) => {
@@ -301,6 +307,7 @@ impl TerminalInput {
         }
 
         Some(Self {
+            glyph_queries,
             focused,
             interrupted_by_ctrl_c,
             stop,
@@ -321,6 +328,12 @@ impl TerminalInput {
 
     pub(crate) fn has_focus(&self) -> bool {
         self.focused.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn glyph_queries(
+        &self,
+    ) -> crossbeam_channel::Sender<crate::glyph_detection::protocol::Request> {
+        self.glyph_queries.clone()
     }
 
     pub(crate) fn interrupted_by_ctrl_c(&self) -> bool {

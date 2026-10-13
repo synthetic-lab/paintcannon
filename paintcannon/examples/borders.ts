@@ -16,7 +16,7 @@ title.style.borderBottom = "solid";
 title.style.borderColor = "cyan";
 title.appendChild(
   pc.createTextNode(
-    "Borders: solid, double, heavy, rounded, chunky-rounded, ascii, and mixed sides",
+    "Borders: solid, double, heavy, rounded, chunky-rounded, chunky, chunky-best-effort, ascii, and mixed sides",
   ),
 );
 
@@ -36,6 +36,8 @@ pc.transaction(() => {
   grid.appendChild(box("heavy", "heavy", "red"));
   grid.appendChild(box("rounded", "rounded", "cyan"));
   grid.appendChild(box("chunky-rounded", "chunky-rounded", "green"));
+  grid.appendChild(box("chunky", "chunky", "green"));
+  grid.appendChild(box("chunky-best-effort", "chunky-best-effort", "green"));
   grid.appendChild(box("ascii", "ascii", "white"));
 
   const mixed = pc.createElement("div");

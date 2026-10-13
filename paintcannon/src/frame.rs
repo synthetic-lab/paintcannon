@@ -46,6 +46,8 @@ pub(crate) struct Frame {
     grapheme_suffixes: HashMap<usize, String>,
     next_selection_order: usize,
     capture_hidden_selection_units: bool,
+    pub(crate) powerline_extended: bool,
+    pub(crate) legacy_symbols: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,6 +165,8 @@ impl Frame {
             grapheme_suffixes: HashMap::new(),
             next_selection_order: 0,
             capture_hidden_selection_units,
+            powerline_extended: false,
+            legacy_symbols: false,
         }
     }
 
@@ -269,13 +273,19 @@ impl Frame {
         let Some(bounds) = self.visible_rect(rect, clip) else {
             return;
         };
-        let chunky_style = box_style.filter(|style| has_chunky_rounded_corner(style));
+        let shaped = |style| match style {
+            BorderStyle::Chunky => self.powerline_extended,
+            BorderStyle::ChunkyRounded => self.legacy_symbols,
+            BorderStyle::ChunkyBestEffort => self.legacy_symbols || self.powerline_extended,
+            _ => false,
+        };
+        let chunky_style = box_style.filter(|style| has_shaped_corner(style, shaped));
 
         for row in bounds.top as usize..bounds.bottom as usize {
             let start = row * self.width;
             for col in bounds.left as usize..bounds.right as usize {
                 if chunky_style.is_some_and(|style| {
-                    is_chunky_rounded_corner(rect, style, col as i32, row as i32)
+                    is_shaped_corner(rect, style, col as i32, row as i32, shaped)
                 }) {
                     continue;
                 }
@@ -468,7 +478,14 @@ impl Frame {
                 self.write_border_cell(
                     x,
                     top,
-                    border_char_at(style, x == left, x == right, true, false),
+                    border_char_at(
+                        style,
+                        x == left,
+                        x == right,
+                        true,
+                        false,
+                        self.legacy_symbols,
+                    ),
                     border_color,
                     selection_background,
                     clip,
@@ -481,7 +498,14 @@ impl Frame {
                 self.write_border_cell(
                     x,
                     bottom,
-                    border_char_at(style, x == left, x == right, false, true),
+                    border_char_at(
+                        style,
+                        x == left,
+                        x == right,
+                        false,
+                        true,
+                        self.legacy_symbols,
+                    ),
                     border_color,
                     selection_background,
                     clip,
@@ -840,6 +864,14 @@ impl Frame {
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
+        let character = if (!self.powerline_extended
+            && matches!(character, '\u{e0b8}' | '\u{e0ba}' | '\u{e0bc}' | '\u{e0be}'))
+            || (!self.legacy_symbols && matches!(character, '🭁' | '🭌' | '🭒' | '🭝'))
+        {
+            '█'
+        } else {
+            character
+        };
         let Some(index) = self.cell_index(x, y) else {
             return;
         };
@@ -950,7 +982,10 @@ fn composite_cell(
 }
 
 fn foreground_glyph_fills_cell(character: char) -> bool {
-    matches!(character, '█' | '🭁' | '🭌' | '🭒' | '🭝')
+    matches!(
+        character,
+        '█' | '🭁' | '🭌' | '🭒' | '🭝' | '\u{e0b8}' | '\u{e0ba}' | '\u{e0bc}' | '\u{e0be}'
+    )
 }
 
 fn visual_background(cell: Cell) -> Background {
@@ -1073,14 +1108,18 @@ fn has_border(style: &DivStyle) -> bool {
         || style.border_left != BorderStyle::None
 }
 
-fn has_chunky_rounded_corner(style: &DivStyle) -> bool {
-    (style.border_top == BorderStyle::ChunkyRounded
-        || style.border_bottom == BorderStyle::ChunkyRounded)
-        && (style.border_left == BorderStyle::ChunkyRounded
-            || style.border_right == BorderStyle::ChunkyRounded)
+fn has_shaped_corner(style: &DivStyle, shaped: impl Fn(BorderStyle) -> bool) -> bool {
+    (shaped(style.border_top) || shaped(style.border_bottom))
+        && (shaped(style.border_left) || shaped(style.border_right))
 }
 
-fn is_chunky_rounded_corner(rect: ClipRect, style: &DivStyle, x: i32, y: i32) -> bool {
+fn is_shaped_corner(
+    rect: ClipRect,
+    style: &DivStyle,
+    x: i32,
+    y: i32,
+    shaped: impl Fn(BorderStyle) -> bool,
+) -> bool {
     let left = rect.left;
     let right = rect.right - 1;
     let top = rect.top;
@@ -1089,26 +1128,23 @@ fn is_chunky_rounded_corner(rect: ClipRect, style: &DivStyle, x: i32, y: i32) ->
         return false;
     }
 
-    (x == left
-        && y == top
-        && style.border_top == BorderStyle::ChunkyRounded
-        && style.border_left == BorderStyle::ChunkyRounded)
+    (x == left && y == top && shaped(style.border_top) && shaped(style.border_left))
         || (right != left
             && x == right
             && y == top
-            && style.border_top == BorderStyle::ChunkyRounded
-            && style.border_right == BorderStyle::ChunkyRounded)
+            && shaped(style.border_top)
+            && shaped(style.border_right))
         || (bottom != top
             && x == left
             && y == bottom
-            && style.border_bottom == BorderStyle::ChunkyRounded
-            && style.border_left == BorderStyle::ChunkyRounded)
+            && shaped(style.border_bottom)
+            && shaped(style.border_left))
         || (right != left
             && bottom != top
             && x == right
             && y == bottom
-            && style.border_bottom == BorderStyle::ChunkyRounded
-            && style.border_right == BorderStyle::ChunkyRounded)
+            && shaped(style.border_bottom)
+            && shaped(style.border_right))
 }
 
 #[derive(Clone, Copy)]
@@ -1163,6 +1199,14 @@ fn border_glyphs(style: BorderStyle) -> BorderGlyphs {
             bottom_left: '🭒',
             bottom_right: '🭝',
         },
+        BorderStyle::Chunky | BorderStyle::ChunkyBestEffort => BorderGlyphs {
+            horizontal: '█',
+            vertical: '█',
+            top_left: '\u{e0ba}',
+            top_right: '\u{e0b8}',
+            bottom_left: '\u{e0be}',
+            bottom_right: '\u{e0bc}',
+        },
         BorderStyle::Ascii => BorderGlyphs {
             horizontal: '-',
             vertical: '|',
@@ -1180,6 +1224,7 @@ fn border_char_at(
     at_right: bool,
     at_top: bool,
     at_bottom: bool,
+    legacy_symbols: bool,
 ) -> char {
     let border_top = at_top && style.border_top != BorderStyle::None;
     let border_right = at_right && style.border_right != BorderStyle::None;
@@ -1196,7 +1241,13 @@ fn border_char_at(
     } else {
         BorderStyle::None
     };
-    let glyphs = border_glyphs(corner_style);
+    let glyphs = border_glyphs(
+        if corner_style == BorderStyle::ChunkyBestEffort && legacy_symbols {
+            BorderStyle::ChunkyRounded
+        } else {
+            corner_style
+        },
+    );
 
     match (border_top, border_right, border_bottom, border_left) {
         (true, true, _, _) => glyphs.top_right,
@@ -1547,8 +1598,30 @@ mod tests {
     }
 
     #[test]
+    fn unknown_legacy_support_uses_filled_square_corners() {
+        let mut frame = Frame::new(4, 3, false);
+        let style = DivStyle {
+            border_top: BorderStyle::ChunkyRounded,
+            border_right: BorderStyle::ChunkyRounded,
+            border_bottom: BorderStyle::ChunkyRounded,
+            border_left: BorderStyle::ChunkyRounded,
+            ..DivStyle::default()
+        };
+        let rect = ClipRect::new(0, 0, 4, 3);
+        let clip = ClipBounds::unbounded();
+        frame.fill_rect(rect, Background::Blue, None, clip);
+        frame.fill_box_background(rect, &style, Background::Red, None, clip);
+        frame.stroke_border(rect, &style, Background::Green, None, clip);
+        for (x, y) in [(0, 0), (3, 0), (0, 2), (3, 2)] {
+            assert_eq!(frame.cell(x, y).unwrap().character, '█');
+            assert_eq!(frame.cell(x, y).unwrap().background, Background::Red);
+        }
+    }
+
+    #[test]
     fn chunky_rounded_box_background_preserves_underlying_corner_cells() {
         let mut frame = Frame::new(4, 3, false);
+        frame.legacy_symbols = true;
         let style = DivStyle {
             border_top: BorderStyle::ChunkyRounded,
             border_right: BorderStyle::ChunkyRounded,
@@ -1585,6 +1658,134 @@ mod tests {
         assert_eq!(frame.cell(0, 0).unwrap().background, Background::Blue);
         assert_eq!(frame.cell(1, 0).unwrap().background, Background::Red);
         assert_eq!(frame.cell(1, 1).unwrap().background, Background::Red);
+    }
+
+    #[test]
+    fn chunky_best_effort_prefers_legacy_then_powerline_then_squares() {
+        let border = crate::style::parse_border_style("chunky-best-effort").unwrap();
+        for (legacy, powerline, corners) in [
+            (true, true, ['🭁', '🭌', '🭒', '🭝']),
+            (true, false, ['🭁', '🭌', '🭒', '🭝']),
+            (
+                false,
+                true,
+                ['\u{e0ba}', '\u{e0b8}', '\u{e0be}', '\u{e0bc}'],
+            ),
+            (false, false, ['█'; 4]),
+        ] {
+            let mut frame = Frame::new(4, 3, false);
+            frame.legacy_symbols = legacy;
+            frame.powerline_extended = powerline;
+            let style = DivStyle {
+                border_top: border,
+                border_right: border,
+                border_bottom: border,
+                border_left: border,
+                ..DivStyle::default()
+            };
+            let rect = ClipRect::new(0, 0, 4, 3);
+            let clip = ClipBounds::unbounded();
+            frame.fill_rect(rect, Background::Blue, None, clip);
+            frame.fill_box_background(rect, &style, Background::Red, None, clip);
+            frame.stroke_border(rect, &style, Background::Green, None, clip);
+            for ((x, y), expected) in [(0, 0), (3, 0), (0, 2), (3, 2)].into_iter().zip(corners) {
+                let cell = frame.cell(x, y).unwrap();
+                assert_eq!(cell.character, expected);
+                assert_eq!(
+                    cell.background,
+                    if legacy || powerline {
+                        Background::Blue
+                    } else {
+                        Background::Red
+                    }
+                );
+            }
+            assert_eq!(frame.cell(1, 0).unwrap().character, '█');
+            assert_eq!(frame.cell(0, 1).unwrap().character, '█');
+        }
+    }
+
+    #[test]
+    fn chunky_border_uses_inward_facing_powerline_corners() {
+        let glyphs = border_glyphs(BorderStyle::Chunky);
+        assert_eq!(glyphs.top_left, '\u{e0ba}');
+        assert_eq!(glyphs.top_right, '\u{e0b8}');
+        assert_eq!(glyphs.bottom_left, '\u{e0be}');
+        assert_eq!(glyphs.bottom_right, '\u{e0bc}');
+    }
+
+    #[test]
+    fn supported_chunky_corners_preserve_underlying_background() {
+        let mut frame = Frame::new(4, 3, false);
+        frame.powerline_extended = true;
+        let style = DivStyle {
+            border_top: BorderStyle::Chunky,
+            border_right: BorderStyle::Chunky,
+            border_bottom: BorderStyle::Chunky,
+            border_left: BorderStyle::Chunky,
+            ..DivStyle::default()
+        };
+        let rect = ClipRect::new(0, 0, 4, 3);
+        let clip = ClipBounds::unbounded();
+        frame.fill_rect(rect, Background::Blue, None, clip);
+        frame.fill_box_background(rect, &style, Background::Red, None, clip);
+        frame.stroke_border(rect, &style, Background::Green, None, clip);
+        for ((x, y), expected) in [(0, 0), (3, 0), (0, 2), (3, 2)]
+            .into_iter()
+            .zip(['\u{e0ba}', '\u{e0b8}', '\u{e0be}', '\u{e0bc}'])
+        {
+            let cell = frame.cell(x, y).unwrap();
+            assert_eq!(cell.character, expected);
+            assert_eq!(cell.background, Background::Blue);
+        }
+        assert_eq!(frame.cell(1, 0).unwrap().character, '█');
+        assert_eq!(frame.cell(1, 1).unwrap().background, Background::Red);
+        assert!(frame.layer().powerline_extended);
+    }
+
+    #[test]
+    fn chunky_border_has_filled_edges_and_square_corners() {
+        let mut frame = Frame::new(4, 3, false);
+        let style = DivStyle {
+            border_top: BorderStyle::Chunky,
+            border_right: BorderStyle::Chunky,
+            border_bottom: BorderStyle::Chunky,
+            border_left: BorderStyle::Chunky,
+            ..DivStyle::default()
+        };
+        let rect = ClipRect::new(0, 0, 4, 3);
+        let clip = ClipBounds::unbounded();
+        frame.fill_rect(rect, Background::Blue, None, clip);
+        frame.fill_box_background(rect, &style, Background::Red, None, clip);
+        frame.stroke_border(rect, &style, Background::Green, None, clip);
+        for (y, row) in ["████", "█  █", "████"].iter().enumerate() {
+            for (x, character) in row.chars().enumerate() {
+                let cell = frame.cell(x, y).unwrap();
+                assert_eq!(cell.character, character);
+                assert_eq!(cell.background, Background::Red);
+            }
+        }
+    }
+
+    #[test]
+    fn chunky_border_respects_individual_border_sides() {
+        let mut frame = Frame::new(4, 3, false);
+        let style = DivStyle {
+            border_left: BorderStyle::Chunky,
+            border_bottom: BorderStyle::Chunky,
+            ..DivStyle::default()
+        };
+        frame.stroke_border(
+            ClipRect::new(0, 0, 4, 3),
+            &style,
+            Background::Green,
+            None,
+            ClipBounds::unbounded(),
+        );
+        assert_eq!(frame.cell(0, 0).unwrap().character, '█');
+        assert_eq!(frame.cell(0, 2).unwrap().character, '█');
+        assert_eq!(frame.cell(3, 2).unwrap().character, '█');
+        assert_eq!(frame.cell(3, 0).unwrap().character, ' ');
     }
 
     #[test]
