@@ -41,6 +41,7 @@ impl FontMonitor {
         let thread = thread::spawn(move || {
             let mut published = Published {
                 report: ProbeReport::default(),
+                osc8: false,
                 commands,
                 events,
                 notifier,
@@ -49,7 +50,10 @@ impl FontMonitor {
             loop {
                 let deadline = Instant::now() + POLL_INTERVAL;
                 let detection = shared.read().unwrap().clone();
-                detection.environment.get_or_init(&mut environment);
+                let snapshot = detection.environment.get_or_init(&mut environment);
+                if !published.update_osc8(snapshot.capabilities().osc8) {
+                    break;
+                }
                 // Known sets needn't wait for unrelated, unrecognized sets. Keep
                 // the previous result for those until this pass's probe completes.
                 let known = ProbeReport {
@@ -111,6 +115,7 @@ impl Drop for FontMonitor {
 
 struct Published {
     report: ProbeReport,
+    osc8: bool,
     commands: Sender<EngineCommand>,
     events: Arc<NativeEventQueue>,
     notifier: Arc<dyn EventNotification>,
@@ -118,6 +123,18 @@ struct Published {
 }
 
 impl Published {
+    fn update_osc8(&mut self, supported: bool) -> bool {
+        if self.osc8 != supported {
+            select! {
+                recv(self.stopping) -> _ => return false,
+                send(self.commands, EngineCommand::SetHyperlinksSupported { supported }) -> result =>
+                    if result.is_err() { return false; },
+            }
+            self.osc8 = supported;
+        }
+        true
+    }
+
     fn update(&mut self, report: ProbeReport) -> bool {
         if self.stopping.try_recv() == Err(TryRecvError::Disconnected) {
             return false;
@@ -178,12 +195,42 @@ mod tests {
     }
 
     #[test]
+    fn osc8_changes_update_the_engine_without_becoming_font_events() {
+        let (commands, rx) = unbounded();
+        let (wake, wakes) = unbounded();
+        let events = Arc::new(NativeEventQueue::default());
+        let mut published = Published {
+            report: ProbeReport::default(),
+            osc8: false,
+            commands,
+            events: events.clone(),
+            notifier: Arc::new(Notify(wake)),
+            stopping: never(),
+        };
+        assert!(published.update_osc8(true));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            EngineCommand::SetHyperlinksSupported { supported: true }
+        ));
+        assert!(published.update_osc8(true));
+        assert!(rx.is_empty());
+        assert!(published.update_osc8(false));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            EngineCommand::SetHyperlinksSupported { supported: false }
+        ));
+        assert!(events.drain().is_empty());
+        assert!(wakes.is_empty());
+    }
+
+    #[test]
     fn publishes_only_changes_including_downgrades_and_border_commands() {
         let (commands, rx) = unbounded();
         let (wake, wakes) = unbounded();
         let events = Arc::new(NativeEventQueue::default());
         let mut published = Published {
             report: ProbeReport::default(),
+            osc8: false,
             commands,
             events: events.clone(),
             notifier: Arc::new(Notify(wake)),

@@ -280,6 +280,14 @@ impl PaintCannon {
     }
 
     #[napi]
+    pub fn set_anchor_href(&self, id: u32, href: String) -> Result<()> {
+        self.send(EngineCommand::SetAnchorHref {
+            node: DomId(id),
+            href,
+        })
+    }
+
+    #[napi]
     pub fn set_image_source(&self, id: u32, src: String) -> Result<()> {
         self.send(EngineCommand::SetImageSource {
             node: DomId(id),
@@ -546,6 +554,14 @@ impl PaintCannon {
                     render_commands.push(EngineCommand::SetText {
                         node: DomId(id),
                         text,
+                    });
+                }
+                "setAnchorHref" => {
+                    let id = resolve_batch_id(command.id, "id", "setAnchorHref", &id_map)?;
+                    let href = required_string(command.text, "text", "setAnchorHref")?;
+                    render_commands.push(EngineCommand::SetAnchorHref {
+                        node: DomId(id),
+                        href,
                     });
                 }
                 "setImageSource" => {

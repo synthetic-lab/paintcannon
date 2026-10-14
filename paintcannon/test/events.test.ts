@@ -1638,6 +1638,32 @@ function createPaintTree(options: { captureMouse?: boolean } = {}): {
   };
 }
 
+describe("anchors", () => {
+  it("creates anchors, batches href changes and keeps generated fallback out of the DOM", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const anchor = paintCannon.createElement("a");
+    root.appendChild(anchor);
+    const label = paintCannon.createTextNode("docs");
+    anchor.appendChild(label);
+    anchor.href = "https://example.com";
+    expect(anchor.href).toBe("https://example.com");
+    expect(mockNative.anchorHrefs.get(anchor.id)).toBe(anchor.href);
+    expect(mockNative.appendedChildren.filter(entry => entry.parent === anchor.id)).toEqual([
+      { parent: anchor.id, child: label.id },
+    ]);
+    paintCannon.transaction(() => {
+      const next = paintCannon.createElement("a");
+      next.href = "https://example.com/next";
+      next.appendChild(paintCannon.createTextNode("next"));
+      root.appendChild(next);
+      anchor.href = "";
+    });
+    expect(mockNative.anchorHrefs.get(anchor.id)).toBe("");
+    expect([...mockNative.anchorHrefs.values()]).toContain("https://example.com/next");
+    paintCannon.stop();
+  });
+});
+
 function currentMockNative(): MockNativePaintCannon {
   const mockNative = mockNativeInstances[mockNativeInstances.length - 1];
   if (mockNative === undefined) {

@@ -12,6 +12,7 @@ const MARKERS: &[&str] = &[
     "GNOME_TERMINAL_SCREEN",
     "TERMINATOR_UUID",
     "COLORTERM",
+    "WT_SESSION",
 ];
 
 fn client_format() -> String {
@@ -28,6 +29,7 @@ fn client_format() -> String {
         // https://man.openbsd.org/tmux#FORMATS
         format.push_str(&format!("\t#{{I/e:{marker}}}"));
     }
+    format.push_str("\t#{client_termfeatures}");
     format
 }
 
@@ -44,7 +46,7 @@ fn parse_clients(output: &str, pane: &str) -> Option<Vec<Capabilities>> {
     let mut clients = Vec::new();
     for line in output.lines() {
         let fields: Vec<_> = line.split('\t').collect();
-        if fields.len() != 4 + MARKERS.len()
+        if fields.len() != 5 + MARKERS.len()
             || fields
                 .iter()
                 .any(|field| field.chars().any(char::is_control))
@@ -55,7 +57,12 @@ fn parse_clients(output: &str, pane: &str) -> Option<Vec<Capabilities>> {
             continue;
         }
         let mut pairs = vec![("TERM", fields[2])];
-        pairs.extend(MARKERS.iter().copied().zip(fields[4..].iter().copied()));
+        pairs.extend(
+            MARKERS
+                .iter()
+                .copied()
+                .zip(fields[4..4 + MARKERS.len()].iter().copied()),
+        );
         if fields[4].is_empty() {
             // tmux records XTVERSION replies such as "WezTerm 20240203-..." and
             // "foot(1.18.0)". Match the product through the same terminal table.
@@ -64,7 +71,14 @@ fn parse_clients(output: &str, pane: &str) -> Option<Vec<Capabilities>> {
             let program = fields[3].split([' ', '(']).next().unwrap_or("");
             pairs.push(("TERM_PROGRAM", program));
         }
-        clients.push(Environment::from_pairs(&pairs).capabilities());
+        let mut capabilities = Environment::from_pairs(&pairs).capabilities();
+        // OSC 8 belongs to tmux's cell metadata, not DCS passthrough (which loses
+        // links on pane redraw). Require native forwarding as well as outer support.
+        // https://github.com/Alhadis/OSC8-Adoption/#terminal-multiplexers
+        capabilities.osc8 &= fields[4 + MARKERS.len()]
+            .split(',')
+            .any(|feature| feature == "hyperlinks");
+        clients.push(capabilities);
     }
     Some(clients)
 }
@@ -111,7 +125,31 @@ mod tests {
     use super::*;
 
     fn client(panes: &str, term: &str, program: &str) -> String {
-        format!("0\t{panes}\t{term}\t\t{program}\t\t\t\t\t\t\n")
+        format!("0\t{panes}\t{term}\t\t{program}\t\t\t\t\t\t\t\thyperlinks\n")
+    }
+
+    #[test]
+    fn osc8_requires_both_outer_support_and_tmux_forwarding_for_every_client() {
+        let supported = client("%1 ", "xterm-ghostty", "");
+        assert!(parse_clients(&supported, "%1").unwrap()[0].osc8);
+        let disabled = supported.replace("hyperlinks", "RGB,clipboard");
+        assert!(!parse_clients(&disabled, "%1").unwrap()[0].osc8);
+        let unknown = client("%1 ", "xterm-256color", "");
+        assert!(!parse_clients(&unknown, "%1").unwrap()[0].osc8);
+        let mixed = parse_clients(&(supported.clone() + &disabled), "%1").unwrap();
+        assert!(
+            !Environment::from_pairs(&[])
+                .with_clients(mixed)
+                .capabilities()
+                .osc8
+        );
+        let modern = parse_clients(&(supported.clone() + &supported), "%1").unwrap();
+        assert!(
+            Environment::from_pairs(&[])
+                .with_clients(modern)
+                .capabilities()
+                .osc8
+        );
     }
 
     #[test]
@@ -123,10 +161,12 @@ mod tests {
             parse_clients(&output, "%1"),
             Some(vec![
                 Capabilities {
+                    osc8: true,
                     nerd_font: true,
                     symbols_for_legacy_computing: true
                 },
                 Capabilities {
+                    osc8: true,
                     nerd_font: true,
                     symbols_for_legacy_computing: false
                 },
@@ -148,10 +188,11 @@ mod tests {
 
     #[test]
     fn unidentified_clients_use_their_own_markers() {
-        let output = "0\t%1 \txterm-256color\t\t\t\t\t7600\t\t\t\n";
+        let output = "0\t%1 \txterm-256color\t\t\t\t\t7600\t\t\t\t\thyperlinks\n";
         assert_eq!(
             parse_clients(output, "%1"),
             Some(vec![Capabilities {
+                osc8: true,
                 nerd_font: false,
                 symbols_for_legacy_computing: true,
             }])
@@ -167,10 +208,11 @@ mod tests {
             ("unknown 1.0", false, false),
             ("NotWezTerm 1.0", false, false),
         ] {
-            let output = format!("0\t%1 \txterm-256color\t{report}\t\t\t\t\t\t\t\n");
+            let output = format!("0\t%1 \txterm-256color\t{report}\t\t\t\t\t\t\t\t\thyperlinks\n");
             assert_eq!(
                 parse_clients(&output, "%1"),
                 Some(vec![Capabilities {
+                    osc8: legacy || nerd,
                     nerd_font: nerd,
                     symbols_for_legacy_computing: legacy,
                 }]),

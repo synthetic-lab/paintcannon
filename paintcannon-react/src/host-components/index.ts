@@ -12,3 +12,5 @@ export * as reconcileSpan from "./span/reconcile-span.ts";
 export * as reconcileTextarea from "./textarea/reconcile-textarea.ts";
 export * as span from "./span/span.ts";
 export * as textarea from "./textarea/textarea.ts";
+export * as a from "./a/a.ts";
+export * as reconcileA from "./a/reconcile-a.ts";

@@ -57,6 +57,7 @@ impl Environment {
             // Never use the pane's inherited terminal identifiers or markers:
             // they describe the terminal that started it, not today's clients.
             return Capabilities {
+                osc8: !clients.is_empty() && clients.iter().all(|client| client.osc8),
                 nerd_font: !clients.is_empty() && clients.iter().all(|client| client.nerd_font),
                 symbols_for_legacy_computing: !clients.is_empty()
                     && clients
@@ -72,6 +73,13 @@ impl Environment {
             return terminal.capabilities;
         }
 
+        let osc8 = !self.get("KITTY_WINDOW_ID").is_empty()
+            || !self.get("WT_SESSION").is_empty()
+            || self
+                .get("VTE_VERSION")
+                .parse::<u32>()
+                .is_ok_and(|version| version >= 5000);
+
         // These markers establish legacy glyph support without claiming a product identity.
         if !self.get("KITTY_WINDOW_ID").is_empty()
             || !self.get("KONSOLE_DBUS_SESSION").is_empty()
@@ -81,17 +89,62 @@ impl Environment {
             || self.get("COLORTERM") == "xfce4-terminal"
         {
             return Capabilities {
+                osc8,
                 nerd_font: false,
                 symbols_for_legacy_computing: true,
             };
         }
-        Capabilities::default()
+        Capabilities {
+            osc8,
+            ..Capabilities::default()
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn osc8_support_uses_known_terminals_then_markers_not_nerd_font_overrides() {
+        for (program, supported) in [
+            ("ghostty", true),
+            ("WezTerm", true),
+            ("alacritty", true),
+            ("kitty", true),
+            ("foot", true),
+            ("iTerm.app", true),
+            ("vscode", true),
+            ("gnome-terminal", true),
+            ("Hyper", true),
+            ("Apple_Terminal", false),
+            ("konsole", false),
+            ("unrecognized", false),
+        ] {
+            for override_value in ["0", "1"] {
+                let env = Environment::from_pairs(&[
+                    ("TERM_PROGRAM", program),
+                    ("NERD_FONT", override_value),
+                ]);
+                assert_eq!(env.capabilities().osc8, supported, "{program}");
+            }
+        }
+        assert!(
+            !Environment::from_pairs(&[("VTE_VERSION", "4900")])
+                .capabilities()
+                .osc8
+        );
+        assert!(
+            Environment::from_pairs(&[("VTE_VERSION", "5004")])
+                .capabilities()
+                .osc8
+        );
+        assert!(
+            Environment::from_pairs(&[("WT_SESSION", "session")])
+                .capabilities()
+                .osc8
+        );
+    }
 
     #[test]
     fn ssh_uses_term_without_a_recognized_term_program() {
@@ -116,7 +169,8 @@ mod tests {
                     Environment::from_pairs(&pairs).capabilities(),
                     Capabilities {
                         nerd_font,
-                        symbols_for_legacy_computing
+                        symbols_for_legacy_computing,
+                        osc8: !matches!(term, "rio" | "rxvt-unicode-256color"),
                     },
                     "{term}, {program:?}"
                 );
@@ -148,6 +202,7 @@ mod tests {
                 Capabilities {
                     nerd_font: true,
                     symbols_for_legacy_computing: true,
+                    osc8: true,
                 }
             );
         }
@@ -170,6 +225,7 @@ mod tests {
                     Capabilities {
                         nerd_font: false,
                         symbols_for_legacy_computing: true,
+                        osc8: matches!(marker.0, "KITTY_WINDOW_ID" | "VTE_VERSION"),
                     },
                     "{term}, {marker:?}"
                 );
@@ -216,6 +272,7 @@ mod tests {
                 Capabilities {
                     nerd_font,
                     symbols_for_legacy_computing,
+                    osc8: term != "rio",
                 },
                 "{term}"
             );
@@ -243,6 +300,7 @@ mod tests {
                 Capabilities {
                     nerd_font,
                     symbols_for_legacy_computing,
+                    osc8: matches!(program, "WezTerm" | "ghostty" | "unrecognized"),
                 },
                 "{program}, {term}"
             );
@@ -273,6 +331,7 @@ mod tests {
                 Capabilities {
                     nerd_font,
                     symbols_for_legacy_computing,
+                    osc8: program != "Apple_Terminal",
                 }
             );
         }

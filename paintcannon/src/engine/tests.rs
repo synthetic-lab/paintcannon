@@ -2045,3 +2045,199 @@ fn clicking_textarea_uses_soft_wrapped_visual_position() {
     let frame = engine.render_frame(6, 3).unwrap();
     assert!(frame.cell(2, 1).unwrap().reversed);
 }
+
+#[test]
+fn hyperlinks_switch_between_metadata_and_wrapped_fallback_with_nested_spans() {
+    let mut engine = PaintEngine::new();
+    let root = engine.create_element(block_style(CssDimension::Length(12.0), CssDimension::Auto));
+    let anchor = engine.create_element(DivStyle {
+        display: LayoutDisplay::Inline,
+        ..Default::default()
+    });
+    engine.set_anchor_href(anchor, "https://a.co".into());
+    let span = engine.create_element(DivStyle {
+        display: LayoutDisplay::Inline,
+        color: Background::Red,
+        ..Default::default()
+    });
+    let text = engine.create_text("hello");
+    engine.append_child(span, text);
+    engine.append_child(anchor, span);
+    engine.append_child(root, anchor);
+    engine.set_root(root);
+    let fallback = engine.render_frame(12, 6).unwrap();
+    let rendered: String = (0..6)
+        .flat_map(|y| (0..12).map(move |x| (x, y)))
+        .map(|(x, y)| fallback.cell(x, y).unwrap().character)
+        .filter(|c| *c != ' ')
+        .collect();
+    assert_eq!(rendered, "[hello](https://a.co)");
+    assert!(fallback.hyperlinks.is_empty());
+    assert!(
+        engine
+            .arena
+            .layout(engine.node_for(root).unwrap())
+            .size
+            .height
+            > 1.0
+    );
+
+    engine.set_hyperlinks_supported(true);
+    let linked = engine.render_frame(12, 6).unwrap();
+    let id = engine.node_for(anchor).unwrap();
+    for x in 0..5 {
+        let cell = linked.cell(x, 0).unwrap();
+        assert_eq!(cell.hyperlink, Some(id));
+        assert_eq!(cell.foreground, Background::Red);
+    }
+    assert_eq!(linked.cell(5, 0).unwrap().hyperlink, None);
+    assert_eq!(&*linked.hyperlinks[&id], "https://a.co");
+    assert_eq!(
+        engine
+            .arena
+            .layout(engine.node_for(root).unwrap())
+            .size
+            .height,
+        1.0
+    );
+
+    let passes = engine.layout_passes();
+    engine.set_anchor_href(anchor, "https://b.co".into());
+    let changed = engine.render_frame(12, 6).unwrap();
+    assert_eq!(
+        engine.layout_passes(),
+        passes,
+        "native href-only updates are paint-only"
+    );
+    let mut bytes = Vec::new();
+    changed
+        .write_diff_to(
+            &mut bytes,
+            Some(&linked),
+            termprofile::TermProfile::NoColor,
+            false,
+        )
+        .unwrap();
+    let output = String::from_utf8(bytes).unwrap();
+    assert!(output.contains("https://b.co"), "{output:?}");
+    assert!(output.contains("\x1b]8;;\x1b\\"), "{output:?}");
+
+    engine.set_hyperlinks_supported(false);
+    let downgraded = engine.render_frame(12, 6).unwrap();
+    assert_eq!(downgraded.cell(0, 0).unwrap().character, '[');
+    engine.set_anchor_href(anchor, String::new());
+    let plain = engine.render_frame(12, 6).unwrap();
+    assert_eq!(plain.cell(0, 0).unwrap().character, 'h');
+    assert!(plain.hyperlinks.is_empty());
+    assert!(engine.destroy_node(anchor));
+    let empty = engine.render_frame(12, 6).unwrap();
+    assert_eq!(empty.cell(0, 0).unwrap().character, ' ');
+}
+
+#[test]
+fn hyperlink_fallback_tracks_append_insert_detach_and_href_updates() {
+    let mut engine = PaintEngine::new();
+    let anchor = engine.create_element(DivStyle::default());
+    engine.set_root(anchor);
+    engine.set_anchor_href(anchor, "url".into());
+    let b = engine.create_text("b");
+    let a = engine.create_text("a");
+    engine.append_child(anchor, b);
+    engine.insert_child_before(anchor, a, b);
+    let row = |frame: &Frame| {
+        (0..20)
+            .map(|x| frame.cell(x, 0).unwrap().character)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    };
+    assert_eq!(row(&engine.render_frame(20, 2).unwrap()), "[ab](url)");
+    engine.detach_node(a);
+    assert_eq!(row(&engine.render_frame(20, 2).unwrap()), "[b](url)");
+    engine.set_anchor_href(anchor, "next".into());
+    assert_eq!(row(&engine.render_frame(20, 2).unwrap()), "[b](next)");
+}
+
+#[test]
+fn hyperlinks_in_block_flex_and_grid_layouts_keep_metadata_through_scroll_clipping() {
+    for display in [
+        LayoutDisplay::Block,
+        LayoutDisplay::Flex,
+        LayoutDisplay::Grid,
+    ] {
+        let mut engine = PaintEngine::new();
+        engine.set_hyperlinks_supported(true);
+        let root = engine.create_element(DivStyle {
+            width: CssDimension::Length(5.0),
+            height: CssDimension::Length(2.0),
+            overflow_y: LayoutOverflow::Scroll,
+            ..Default::default()
+        });
+        let content = engine.create_element(DivStyle {
+            display,
+            flex_direction: LayoutFlexDirection::Column,
+            ..Default::default()
+        });
+        engine.append_child(root, content);
+        let mut links = Vec::new();
+        for row in 0..4 {
+            let link = engine.create_element(DivStyle {
+                min_height: CssDimension::Length(1.0),
+                ..Default::default()
+            });
+            engine.set_anchor_href(link, format!("https://example.com/{row}"));
+            let text = engine.create_text(format!("row{row}"));
+            engine.append_child(link, text);
+            engine.append_child(content, link);
+            links.push(link);
+        }
+        engine.set_root(root);
+        let initial = engine.render_frame(5, 2).unwrap();
+        assert_eq!(
+            initial.cell(0, 0).unwrap().hyperlink,
+            engine.node_for(links[0])
+        );
+        let passes = engine.layout_passes();
+        engine.set_scroll_offset(root, 0, 2);
+        let scrolled = engine.render_frame(5, 2).unwrap();
+        assert_eq!(
+            scrolled.cell(0, 0).unwrap().hyperlink,
+            engine.node_for(links[2]),
+            "scrolled link metadata"
+        );
+        assert_eq!(
+            scrolled.cell(4, 0).unwrap().hyperlink,
+            None,
+            "scroll rail is not a link"
+        );
+        assert_eq!(engine.layout_passes(), passes, "scrolling is paint-only");
+    }
+}
+
+#[test]
+fn removing_last_inline_child_clears_old_fragments_without_an_anchor() {
+    let mut engine = PaintEngine::new();
+    let root = engine.create_element(DivStyle::default());
+    let child = engine.create_text("old");
+    engine.append_child(root, child);
+    engine.set_root(root);
+    assert_eq!(
+        engine
+            .render_frame(8, 2)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .character,
+        'o'
+    );
+    engine.destroy_node(child);
+    assert_eq!(
+        engine
+            .render_frame(8, 2)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .character,
+        ' '
+    );
+}

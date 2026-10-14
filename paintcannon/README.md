@@ -74,6 +74,7 @@ The core DOM subset supports:
 
 - `div`
 - `span`
+- `a` with `href`
 - `input` with `type: "text"`
 - `textarea`
 - `button`
@@ -87,6 +88,55 @@ not available. The row is relative to the complete textarea value, not its curre
 viewport. Pass that row to `getVisualLineRange(row)` to get its `{start, end}` character offsets;
 `end` is exclusive, explicit newline characters are excluded, and both offsets use the same units
 as `cursorPosition`.
+
+## Links
+
+Create an inline anchor with a destination and ordinary child nodes:
+
+```ts
+const link = pc.createElement("a");
+link.href = "https://example.com/docs";
+link.style.textDecorationLine = "underline";
+link.appendChild(pc.createTextNode("Documentation"));
+root.appendChild(link);
+```
+
+`AnchorElement.href` is readable and writable. Setting it to `""` removes the
+link and leaves its children as ordinary content. Anchors inherit text styling,
+support the same style and event APIs as spans, and can use block, flex, or grid
+display too. Use absolute URLs: PaintCannon has no document base URL to resolve
+relative destinations against.
+
+In supported terminals, the label is a native OSC 8 hyperlink. Otherwise,
+PaintCannon renders `[Documentation](https://example.com/docs)`. This fallback is
+part of layout, so it wraps, clips, scrolls and copies like other text; it does
+not add children to your DOM. Redirected output also uses the text fallback.
+Spaces, Unicode and control characters in destinations are percent-encoded in
+the rendered URL.
+
+Support is based on the [OSC 8 adoption list](https://github.com/Alhadis/OSC8-Adoption/).
+Unknown terminals use the fallback, as do terminals whose hyperlinks are disabled
+by default (such as Konsole). There is no universal OSC 8 capability query;
+terminal identity cannot reveal every user setting or older emulator version.
+`NERD_FONT` does not affect hyperlinks.
+
+Inside tmux, **every attached client viewing the pane's session** must have a
+supported outer terminal and tmux's `hyperlinks` terminal feature enabled.
+tmux 3.4 or newer is required. If tmux has not enabled the feature automatically,
+add `set -as terminal-features 'xterm-ghostty:hyperlinks'` to your tmux configuration
+for Ghostty (use the matching terminal pattern for other emulators). Detach and
+reattach existing clients if the feature is not applied immediately. PaintCannon uses tmux's native
+hyperlink handling, not passthrough, so links survive pane redraws.
+Capabilities are checked every two seconds; changing attached clients updates
+both link rendering and fallback layout automatically.
+
+Opening a link uses your terminal's gesture, commonly Ctrl-click or Cmd-click.
+This also applies with mouse capture enabled. PaintCannon does not launch a
+browser process itself. Its ordinary click events still bubble, but
+`preventDefault()` cannot cancel a gesture handled by the terminal emulator.
+
+Run `npm run demo:links --workspace paintcannon` from the repository root.
+Press `q` or Ctrl-C to exit.
 
 ## Events
 

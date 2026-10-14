@@ -128,6 +128,10 @@ export class MockNativePaintCannon implements NativePaintCannon {
   }
 
   setTextNodeValue(_id: number, _text: string): void {}
+  readonly anchorHrefs = new Map<number, string>();
+  setAnchorHref(id: number, href: string): void {
+    this.anchorHrefs.set(id, href);
+  }
   setImageSource(_id: number, _src: string): void {}
 
   setInputValue(id: number, value: string, cursor: number): void {
@@ -197,7 +201,7 @@ export class MockNativePaintCannon implements NativePaintCannon {
   applyBatch(commands: NativeBatchCommand[]): NativeBatchIdMapping[] {
     const mappings: NativeBatchIdMapping[] = [];
     for (const command of commands) {
-      if (command.id !== undefined && command.id < 0) {
+      if (command.type.startsWith("create") && command.id !== undefined && command.id < 0) {
         mappings.push({ temporaryId: command.id, id: this.allocateId() });
       }
     }
@@ -211,6 +215,13 @@ export class MockNativePaintCannon implements NativePaintCannon {
           resolveBatchId(command.parent, mappings),
           resolveBatchId(command.child, mappings),
         );
+      }
+      if (
+        command.type === "setAnchorHref" &&
+        command.id !== undefined &&
+        command.text !== undefined
+      ) {
+        this.setAnchorHref(resolveBatchId(command.id, mappings), command.text);
       }
       if (command.type === "destroyNode" && command.id !== undefined) {
         this.destroyNode(resolveBatchId(command.id, mappings));

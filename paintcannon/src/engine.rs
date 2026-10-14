@@ -364,6 +364,13 @@ pub(crate) enum EngineCommand {
         node: DomId,
         transitions: Vec<TransitionSpec>,
     },
+    SetAnchorHref {
+        node: DomId,
+        href: String,
+    },
+    SetHyperlinksSupported {
+        supported: bool,
+    },
     SetText {
         node: DomId,
         text: String,
@@ -1078,6 +1085,22 @@ impl PaintEngine {
         }
         self.truecolor_enabled = enabled;
         self.mark_paint_dirty();
+    }
+
+    pub(crate) fn set_anchor_href(&mut self, id: DomId, href: String) {
+        if let Some(node) = self.node_for(id) {
+            if self.arena.set_anchor_href(node, href) {
+                self.mark_layout_dirty();
+            } else {
+                self.mark_paint_dirty();
+            }
+        }
+    }
+
+    pub(crate) fn set_hyperlinks_supported(&mut self, supported: bool) {
+        if self.arena.set_hyperlinks_supported(supported) {
+            self.mark_layout_dirty();
+        }
     }
 
     pub(crate) fn set_legacy_symbols(&mut self, supported: bool) {

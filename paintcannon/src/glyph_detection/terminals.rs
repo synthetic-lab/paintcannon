@@ -2,6 +2,8 @@
 //! about the installed font. Legacy support includes the smooth mosaic corners
 //! U+1FB41/U+1FB4C/U+1FB52/U+1FB5D; sextants alone are insufficient.
 
+// OSC 8 support; Konsole remains unconfirmed because it is disabled by default:
+// https://github.com/Alhadis/OSC8-Adoption/
 use super::capabilities::Capabilities;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -12,6 +14,25 @@ pub(super) struct Terminal {
 }
 
 const TERMINALS: &[Terminal] = &[
+    Terminal {
+        term: &["domterm"],
+        term_program: &[
+            "domterm",
+            "hterm",
+            "hyper",
+            "mintty",
+            "terminology",
+            "windows_terminal",
+            "windowsterminal",
+            "secure shellfish",
+            "absolutetelnet",
+        ],
+        capabilities: Capabilities {
+            osc8: true,
+            nerd_font: false,
+            symbols_for_legacy_computing: false,
+        },
+    },
     // Bundled Nerd Font + built-in smooth mosaics, including all four corners:
     // https://github.com/ghostty-org/ghostty/blob/v1.0.0/src/font/sprite/Box.zig
     // https://ghostty.org/docs/features
@@ -19,6 +40,7 @@ const TERMINALS: &[Terminal] = &[
         term: &["xterm-ghostty"],
         term_program: &["ghostty"],
         capabilities: Capabilities {
+            osc8: true,
             nerd_font: true,
             symbols_for_legacy_computing: true,
         },
@@ -30,6 +52,7 @@ const TERMINALS: &[Terminal] = &[
         term: &["wezterm"],
         term_program: &["wezterm"],
         capabilities: Capabilities {
+            osc8: true,
             nerd_font: true,
             symbols_for_legacy_computing: false,
         },
@@ -41,6 +64,7 @@ const TERMINALS: &[Terminal] = &[
         term: &["rio"],
         term_program: &["rio"],
         capabilities: Capabilities {
+            osc8: false,
             nerd_font: true,
             symbols_for_legacy_computing: false,
         },
@@ -50,6 +74,7 @@ const TERMINALS: &[Terminal] = &[
         term: &["xterm-kitty"],
         term_program: &["kitty"],
         capabilities: Capabilities {
+            osc8: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -60,6 +85,7 @@ const TERMINALS: &[Terminal] = &[
         term: &["alacritty", "alacritty-direct"],
         term_program: &["alacritty"],
         capabilities: Capabilities {
+            osc8: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -70,6 +96,7 @@ const TERMINALS: &[Terminal] = &[
         term: &["foot", "foot-extra", "foot-direct"],
         term_program: &["foot"],
         capabilities: Capabilities {
+            osc8: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -80,6 +107,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["konsole"],
         capabilities: Capabilities {
+            osc8: false,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -94,8 +122,13 @@ const TERMINALS: &[Terminal] = &[
             "terminator",
             "gnome-console",
             "tilix",
+            "ptyxis",
+            "guake",
+            "mate-terminal",
+            "roxterm",
         ],
         capabilities: Capabilities {
+            osc8: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -108,6 +141,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["xterm.js", "xtermjs", "vscode"],
         capabilities: Capabilities {
+            osc8: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -117,14 +151,16 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["apple_terminal"],
         capabilities: Capabilities {
+            osc8: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
     },
     Terminal {
         term: &[],
-        term_program: &["iterm.app"],
+        term_program: &["iterm.app", "iterm2"],
         capabilities: Capabilities {
+            osc8: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -134,6 +170,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["xterm"],
         capabilities: Capabilities {
+            osc8: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -148,6 +185,7 @@ const TERMINALS: &[Terminal] = &[
         ],
         term_program: &["rxvt"],
         capabilities: Capabilities {
+            osc8: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },

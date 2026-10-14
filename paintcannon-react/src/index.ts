@@ -33,3 +33,7 @@ export const Input = hostComponents.input.Component;
 export type TextareaProps = hostComponents.textarea.Props;
 export type TextareaElement = hostComponents.textarea.Element;
 export const Textarea = hostComponents.textarea.Component;
+
+export type AProps = hostComponents.a.Props;
+export type AnchorElement = hostComponents.a.Element;
+export const A = hostComponents.a.Component;

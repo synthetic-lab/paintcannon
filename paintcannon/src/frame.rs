@@ -44,6 +44,7 @@ pub(crate) struct Frame {
     background_painted: Vec<bool>,
     selection_units: Vec<SelectionUnit>,
     grapheme_suffixes: HashMap<usize, String>,
+    pub(crate) hyperlinks: HashMap<taffy::NodeId, std::sync::Arc<str>>,
     next_selection_order: usize,
     capture_hidden_selection_units: bool,
     pub(crate) powerline_extended: bool,
@@ -62,6 +63,7 @@ pub(crate) struct Cell {
     pub(crate) italic: bool,
     pub(crate) underline: bool,
     pub(crate) strikethrough: bool,
+    pub(crate) hyperlink: Option<taffy::NodeId>,
     pub(crate) wide_continuation: bool,
 }
 
@@ -163,6 +165,7 @@ impl Frame {
             background_painted: vec![false; width.saturating_mul(height)],
             selection_units: Vec::new(),
             grapheme_suffixes: HashMap::new(),
+            hyperlinks: HashMap::new(),
             next_selection_order: 0,
             capture_hidden_selection_units,
             powerline_extended: false,
@@ -225,6 +228,7 @@ impl Frame {
             self.painted[index] |= foreground_painted || background_painted;
         }
 
+        self.hyperlinks.extend(layer.hyperlinks);
         self.selection_units = layer.selection_units;
         self.next_selection_order = layer.next_selection_order;
     }
@@ -302,6 +306,7 @@ impl Frame {
                     italic: false,
                     underline: false,
                     strikethrough: false,
+                    hyperlink: None,
                     wide_continuation: false,
                 };
                 self.painted[start + col] = true;
@@ -380,6 +385,7 @@ impl Frame {
         self.cells[index].italic = style.italic;
         self.cells[index].underline = style.underline;
         self.cells[index].strikethrough = style.strikethrough;
+        self.cells[index].hyperlink = style.hyperlink;
         self.cells[index].wide_continuation = false;
         self.painted[index] = true;
         self.foreground_painted[index] = true;
@@ -408,6 +414,7 @@ impl Frame {
             self.cells[continuation_index].italic = style.italic;
             self.cells[continuation_index].underline = style.underline;
             self.cells[continuation_index].strikethrough = style.strikethrough;
+            self.cells[continuation_index].hyperlink = style.hyperlink;
             self.cells[continuation_index].wide_continuation = true;
             self.painted[continuation_index] = true;
             self.foreground_painted[continuation_index] = true;
@@ -444,6 +451,7 @@ impl Frame {
         self.cells[index].italic = style.italic;
         self.cells[index].underline = style.underline;
         self.cells[index].strikethrough = style.strikethrough;
+        self.cells[index].hyperlink = style.hyperlink;
         self.cells[index].wide_continuation = false;
         self.painted[index] = true;
         self.foreground_painted[index] = true;
@@ -710,6 +718,11 @@ impl Frame {
             Ok(())
         })();
 
+        let link_result = if result.is_err() && !self.hyperlinks.is_empty() {
+            write!(out, "\x1b]8;;\x1b\\")
+        } else {
+            Ok(())
+        };
         let wrap_result = write!(out, "\x1b[?7h");
         let end_result = if synchronized {
             write_synchronized_output_end(out)
@@ -717,6 +730,7 @@ impl Frame {
             Ok(())
         };
         result?;
+        link_result?;
         wrap_result?;
         end_result
     }
@@ -749,6 +763,7 @@ impl Frame {
 
         write!(out, "\x1b[{};{}H", row + 1, start_col + 1)?;
 
+        let mut current_hyperlink = None;
         let mut current_background = Background::Default;
         let mut current_foreground = Background::Default;
         let mut current_reversed = false;
@@ -767,6 +782,20 @@ impl Frame {
                 write!(out, "\x1b[{};{}H", row + 1, col + 1)?;
             }
             next_glyph_needs_positioning = self.cell_uses_complex_grapheme(row * self.width + col);
+            if cell.hyperlink != current_hyperlink {
+                if let Some(id) = cell.hyperlink {
+                    let href = &self.hyperlinks[&id];
+                    write!(
+                        out,
+                        "\x1b]8;id=pc-{}-{};{href}\x1b\\",
+                        std::process::id(),
+                        usize::from(id)
+                    )?;
+                } else {
+                    write!(out, "\x1b]8;;\x1b\\")?;
+                }
+                current_hyperlink = cell.hyperlink;
+            }
             if cell.reversed != current_reversed {
                 if cell.reversed {
                     write!(out, "\x1b[7m")?;
@@ -833,6 +862,9 @@ impl Frame {
             }
         }
 
+        if current_hyperlink.is_some() {
+            write!(out, "\x1b]8;;\x1b\\")?;
+        }
         write!(
             out,
             "\x1b[27m\x1b[22m\x1b[23m\x1b[24m\x1b[29m\x1b[39m\x1b[49m"
@@ -887,6 +919,7 @@ impl Frame {
         self.cells[index].italic = false;
         self.cells[index].underline = false;
         self.cells[index].strikethrough = false;
+        self.cells[index].hyperlink = None;
         self.cells[index].wide_continuation = false;
         self.painted[index] = true;
         self.foreground_painted[index] = true;
@@ -915,6 +948,12 @@ impl Frame {
 
     fn cell_matches(&self, other: &Self, index: usize) -> bool {
         self.cells[index] == other.cells[index]
+            && self.cells[index]
+                .hyperlink
+                .and_then(|id| self.hyperlinks.get(&id))
+                == other.cells[index]
+                    .hyperlink
+                    .and_then(|id| other.hyperlinks.get(&id))
             && self.grapheme_suffixes.get(&index) == other.grapheme_suffixes.get(&index)
     }
 
@@ -1041,6 +1080,7 @@ pub(crate) struct GlyphStyle {
     pub(crate) italic: bool,
     pub(crate) underline: bool,
     pub(crate) strikethrough: bool,
+    pub(crate) hyperlink: Option<taffy::NodeId>,
 }
 
 impl Default for GlyphStyle {
@@ -1053,6 +1093,7 @@ impl Default for GlyphStyle {
             italic: false,
             underline: false,
             strikethrough: false,
+            hyperlink: None,
         }
     }
 }
@@ -1070,6 +1111,7 @@ impl Default for Cell {
             italic: false,
             underline: false,
             strikethrough: false,
+            hyperlink: None,
             wide_continuation: false,
         }
     }
@@ -1819,6 +1861,105 @@ mod tests {
         };
 
         assert_eq!(frame.selected_text(&selection).as_deref(), Some("bc\nde"));
+    }
+
+    #[test]
+    fn hyperlinks_close_at_row_boundaries_and_dont_leak_to_plain_cells() {
+        let mut frame = Frame::new(3, 2, false);
+        let id = taffy::NodeId::from(7usize);
+        frame
+            .hyperlinks
+            .insert(id, crate::hyperlink::encode_href("https://example.com"));
+        let style = GlyphStyle {
+            hyperlink: Some(id),
+            ..Default::default()
+        };
+        frame.write_grapheme(
+            0,
+            0,
+            GraphemeGlyph {
+                character: '\u{26a0}',
+                suffix: Some("\u{fe0f}"),
+                width: 2,
+            },
+            style,
+            ClipBounds::unbounded(),
+        );
+        frame.write_glyph(0, 1, 'x', 1, style, ClipBounds::unbounded());
+        let mut bytes = Vec::new();
+        frame
+            .write_full_to(&mut bytes, TermProfile::NoColor)
+            .unwrap();
+        let output = String::from_utf8(bytes).unwrap();
+        assert_eq!(output.matches("https://example.com").count(), 2);
+        assert_eq!(output.matches("\x1b]8;;\x1b\\").count(), 2);
+        assert!(output.contains("x\x1b]8;;\x1b\\ "), "{output:?}");
+        assert_eq!(frame.cell(1, 0).unwrap().hyperlink, Some(id));
+        assert_eq!(frame.cell(2, 0).unwrap().hyperlink, None);
+    }
+
+    #[test]
+    fn hyperlink_metadata_follows_visible_glyphs_through_opacity_and_overpainting() {
+        let mut frame = Frame::new(2, 1, false);
+        let id = taffy::NodeId::from(7usize);
+        frame
+            .hyperlinks
+            .insert(id, crate::hyperlink::encode_href("https://example.com"));
+        frame.write_glyph(
+            0,
+            0,
+            'a',
+            1,
+            GlyphStyle {
+                hyperlink: Some(id),
+                ..Default::default()
+            },
+            ClipBounds::unbounded(),
+        );
+        let mut layer = frame.layer();
+        layer.write_glyph(0, 0, 'b', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        frame.composite_layer(layer, 0.5, Background::White, Background::Black);
+        assert_eq!(frame.cell(0, 0).unwrap().character, 'b');
+        assert_eq!(frame.cell(0, 0).unwrap().hyperlink, None);
+
+        let mut layer = frame.layer();
+        layer.write_glyph(
+            0,
+            0,
+            'c',
+            1,
+            GlyphStyle {
+                hyperlink: Some(id),
+                ..Default::default()
+            },
+            ClipBounds::unbounded(),
+        );
+        frame.composite_layer(layer, 0.5, Background::White, Background::Black);
+        assert_eq!(frame.cell(0, 0).unwrap().hyperlink, Some(id));
+        frame.write_border_cell(0, 0, '|', Background::White, None, ClipBounds::unbounded());
+        assert_eq!(
+            frame.cell(0, 0).unwrap().hyperlink,
+            None,
+            "an unrelated border owns its cell"
+        );
+        frame.write_glyph(
+            0,
+            0,
+            'c',
+            1,
+            GlyphStyle {
+                hyperlink: Some(id),
+                ..Default::default()
+            },
+            ClipBounds::unbounded(),
+        );
+        frame.fill_rect(
+            ClipRect::new(0, 0, 1, 1),
+            Background::Red,
+            None,
+            ClipBounds::unbounded(),
+        );
+        assert_eq!(frame.cell(0, 0).unwrap().hyperlink, None);
     }
 
     #[test]

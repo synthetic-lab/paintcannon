@@ -222,6 +222,11 @@ fn apply_command_inner(
         EngineCommand::SetTransition { node, transitions } => {
             engine.set_transition(node, transitions);
         }
+        EngineCommand::SetAnchorHref { node, href } => engine.set_anchor_href(node, href),
+        EngineCommand::SetHyperlinksSupported { supported } => {
+            use std::io::IsTerminal;
+            engine.set_hyperlinks_supported(supported && io::stdout().is_terminal());
+        }
         EngineCommand::SetText { node, text } => {
             engine.set_text(node, text);
         }

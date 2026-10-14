@@ -81,6 +81,22 @@ PaintCannon is also somewhat less restrictive thank Ink: you aren't required to
 wrap text content in `<Text>` nodes. Text content Just Works inside PaintCannon
 components, just like with a regular browser.
 
+## Links
+
+```tsx
+import { A } from "paintcannon-react";
+
+<A href="https://example.com/docs" style={{ textDecorationLine: "underline" }}>
+  Documentation
+</A>;
+```
+
+The terminal opens native OSC 8 links using its usual gesture (often Ctrl-click
+or Cmd-click). Unsupported terminals display `[Documentation](https://example.com/docs)`
+instead. The core renderer owns capability detection, wrapping and live tmux
+client changes; React needs no special handling. See [core link support](../paintcannon/README.md#links)
+for tmux setup and limitations.
+
 ## Host Components
 
 PaintCannon exposes the following host components that mirror a subset of the
@@ -88,6 +104,7 @@ DOM API:
 
 - `Div`
 - `Span`
+- `A`
 - `Input`
 - `Textarea`
 - `Button`
@@ -236,6 +253,9 @@ both supported:
 
 - `Div`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
 - `Span`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
+- `A`: shared props, `scrollLeft?: number`, `scrollTop?: number`, and `href?: string`.
+  Its ref is a PaintCannon `AnchorElement`. Omitting `href` or setting it to `""`
+  leaves ordinary content.
 - `Form`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
 - `Button`: shared props, plus `type?: "submit" | "button"`,
   `scrollLeft?: number`, and `scrollTop?: number`.

@@ -105,6 +105,7 @@ pub(crate) fn paint_arena_with_options(
         frame: Frame::new(width, height, capture_hidden_selection_units),
         hit_regions: Vec::new(),
     };
+    output.frame.hyperlinks = arena.hyperlinks();
     output.frame.powerline_extended = options.powerline_extended;
     output.frame.legacy_symbols = options.legacy_symbols;
     {
@@ -126,6 +127,7 @@ pub(crate) fn paint_arena_with_options(
                 italic: false,
                 underline: false,
                 strikethrough: false,
+                hyperlink: None,
                 visible: true,
                 clip: ClipBounds::unbounded(),
             },
@@ -152,6 +154,7 @@ struct PaintState {
     italic: bool,
     underline: bool,
     strikethrough: bool,
+    hyperlink: Option<NodeId>,
     visible: bool,
     clip: ClipBounds,
 }
@@ -272,6 +275,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             italic: text_state.italic,
             underline: text_state.underline,
             strikethrough: text_state.strikethrough,
+            hyperlink: self.arena.hyperlink(id).or(state.hyperlink),
             visible,
             clip: child_clip,
         };
@@ -409,6 +413,7 @@ impl<'a, 'out> Painter<'a, 'out> {
         state.selection_background = style.selection_background.or(state.selection_background);
         state = apply_text_style(style, state);
         state.visible = visible;
+        state.hyperlink = self.arena.hyperlink(id).or(state.hyperlink);
         state
     }
 
@@ -452,6 +457,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             italic: text_state.italic,
             underline: text_state.underline,
             strikethrough: text_state.strikethrough,
+            hyperlink: self.arena.hyperlink(id).or(state.hyperlink),
             visible,
             clip,
         }
@@ -511,6 +517,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                     italic: false,
                     underline: false,
                     strikethrough: false,
+                    hyperlink: None,
                 },
                 clip,
             );
@@ -571,6 +578,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                     italic: false,
                     underline: false,
                     strikethrough: false,
+                    hyperlink: None,
                 },
                 clip,
             );
@@ -611,6 +619,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             style.image_rendering,
             content,
             selection_background,
+            state.hyperlink,
             child_clip,
         );
         let border_color =
@@ -756,6 +765,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             italic: state.italic,
             underline: state.underline,
             strikethrough: state.strikethrough,
+            hyperlink: state.hyperlink,
         };
         let normalized = parse_text_for_white_space(text, CssWhiteSpace::Normal)
             .into_iter()
@@ -830,6 +840,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                         italic: fragment_state.italic,
                         underline: fragment_state.underline,
                         strikethrough: fragment_state.strikethrough,
+                        hyperlink: fragment_state.hyperlink,
                     };
                     self.output.frame.write_grapheme(
                         rect.left,
@@ -886,6 +897,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             state.selection_background = style.selection_background.or(state.selection_background);
             state = apply_text_style(style, state);
             state.visible = visible;
+            state.hyperlink = self.arena.hyperlink(node).or(state.hyperlink);
         }
 
         state
@@ -1064,6 +1076,7 @@ struct TextAttributes {
     italic: bool,
     underline: bool,
     strikethrough: bool,
+    hyperlink: Option<NodeId>,
 }
 
 #[derive(Clone, Copy)]
@@ -1084,6 +1097,7 @@ impl TextAttributes {
             italic: state.italic,
             underline: state.underline,
             strikethrough: state.strikethrough,
+            hyperlink: state.hyperlink,
         }
     }
 }
@@ -1123,6 +1137,7 @@ fn paint_image(
     rendering: ImageRendering,
     rect: ClipRect,
     selection_background: Option<Background>,
+    hyperlink: Option<NodeId>,
     clip: ClipBounds,
 ) {
     let Some(rgb) = image.rgb.as_ref() else {
@@ -1156,6 +1171,7 @@ fn paint_image(
                             background: Background::Default,
                             foreground: Background::Rgb(pixel[0], pixel[1], pixel[2]),
                             selection_background,
+                            hyperlink,
                             ..Default::default()
                         },
                         clip,
@@ -1201,6 +1217,7 @@ fn paint_image(
                                 bottom_pixel[2],
                             ),
                             selection_background,
+                            hyperlink,
                             ..Default::default()
                         },
                         clip,
@@ -1270,6 +1287,7 @@ fn paint_input(
         italic: text_attributes.italic,
         underline: text_attributes.underline,
         strikethrough: text_attributes.strikethrough,
+        hyperlink: text_attributes.hyperlink,
     };
 
     for (grapheme, col) in &glyphs {
@@ -1299,6 +1317,7 @@ fn paint_input(
                 italic: text_attributes.italic,
                 underline: text_attributes.underline,
                 strikethrough: text_attributes.strikethrough,
+                hyperlink: text_attributes.hyperlink,
             };
             if let Some((grapheme, _)) = glyphs.iter().find(|(_, col)| *col == cursor_cell) {
                 let (character, suffix) = grapheme_parts(grapheme.text);
@@ -1368,6 +1387,7 @@ fn paint_textarea(
         italic: text_attributes.italic,
         underline: text_attributes.underline,
         strikethrough: text_attributes.strikethrough,
+        hyperlink: text_attributes.hyperlink,
     };
     let cursor_position = textarea.focused.then(|| {
         WrappedText::new(&textarea.value, rect.width() as usize)
@@ -1426,6 +1446,7 @@ fn paint_textarea(
                 italic: text_attributes.italic,
                 underline: text_attributes.underline,
                 strikethrough: text_attributes.strikethrough,
+                hyperlink: text_attributes.hyperlink,
             };
             if let Some((character, suffix, width)) = cursor_glyph {
                 frame.write_grapheme(
