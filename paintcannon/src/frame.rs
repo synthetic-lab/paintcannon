@@ -295,28 +295,14 @@ impl Frame {
         let Some(bounds) = self.visible_rect(rect, clip) else {
             return;
         };
-        let shaped = |style| match style {
-            BorderStyle::Chunky => self.powerline_extended,
-            BorderStyle::ChunkyRounded => self.legacy_symbols,
-            BorderStyle::ChunkyBestEffort => self.legacy_symbols || self.powerline_extended,
-            _ => false,
-        };
-        let chunky_style = box_style.filter(|style| has_shaped_corner(style, shaped));
+        let borders = box_style
+            .map(|style| ResolvedBorders::new(style, self.powerline_extended, self.legacy_symbols));
 
         for row in bounds.top as usize..bounds.bottom as usize {
             let start = row * self.width;
             for col in bounds.left as usize..bounds.right as usize {
-                if self.powerline_extended
-                    && box_style.is_some_and(|style| {
-                        (col as i32 == rect.left && style.border_left == BorderStyle::Pill)
-                            || (col as i32 == rect.right - 1
-                                && style.border_right == BorderStyle::Pill)
-                    })
-                {
-                    continue;
-                }
-                if chunky_style.is_some_and(|style| {
-                    is_shaped_corner(rect, style, col as i32, row as i32, shaped)
+                if borders.as_ref().is_some_and(|borders| {
+                    borders.preserves_background_at(rect, col as i32, row as i32)
                 }) {
                     continue;
                 }
@@ -503,24 +489,18 @@ impl Frame {
             return;
         }
 
+        let borders = ResolvedBorders::new(style, self.powerline_extended, self.legacy_symbols);
         let left = rect.left;
         let right = rect.right - 1;
         let top = rect.top;
         let bottom = rect.bottom - 1;
 
-        if style.border_top.height() > 0.0 {
+        if borders.top.is_some() {
             for x in left..=right {
                 self.write_border_cell(
                     x,
                     top,
-                    border_char_at(
-                        style,
-                        x == left,
-                        x == right,
-                        true,
-                        false,
-                        self.legacy_symbols,
-                    ),
+                    borders.character_at(x == left, x == right, true, false),
                     border_color,
                     selection_background,
                     clip,
@@ -528,19 +508,12 @@ impl Frame {
             }
         }
 
-        if style.border_bottom.height() > 0.0 && bottom != top {
+        if borders.bottom.is_some() && bottom != top {
             for x in left..=right {
                 self.write_border_cell(
                     x,
                     bottom,
-                    border_char_at(
-                        style,
-                        x == left,
-                        x == right,
-                        false,
-                        true,
-                        self.legacy_symbols,
-                    ),
+                    borders.character_at(x == left, x == right, false, true),
                     border_color,
                     selection_background,
                     clip,
@@ -548,13 +521,9 @@ impl Frame {
             }
         }
 
-        if style.border_left != BorderStyle::None {
-            let start = if style.border_top.height() == 0.0 {
-                top
-            } else {
-                top + 1
-            };
-            let end = if style.border_bottom.height() == 0.0 {
+        if let Some(glyphs) = borders.left {
+            let start = if borders.top.is_none() { top } else { top + 1 };
+            let end = if borders.bottom.is_none() {
                 bottom
             } else {
                 bottom - 1
@@ -563,11 +532,7 @@ impl Frame {
                 self.write_border_cell(
                     left,
                     y,
-                    if style.border_left == BorderStyle::Pill {
-                        '\u{e0b6}'
-                    } else {
-                        border_glyphs(style.border_left).vertical
-                    },
+                    glyphs.left,
                     border_color,
                     selection_background,
                     clip,
@@ -575,13 +540,9 @@ impl Frame {
             }
         }
 
-        if style.border_right != BorderStyle::None && right != left {
-            let start = if style.border_top.height() == 0.0 {
-                top
-            } else {
-                top + 1
-            };
-            let end = if style.border_bottom.height() == 0.0 {
+        if let Some(glyphs) = borders.right.filter(|_| right != left) {
+            let start = if borders.top.is_none() { top } else { top + 1 };
+            let end = if borders.bottom.is_none() {
                 bottom
             } else {
                 bottom - 1
@@ -590,11 +551,7 @@ impl Frame {
                 self.write_border_cell(
                     right,
                     y,
-                    if style.border_right == BorderStyle::Pill {
-                        '\u{e0b4}'
-                    } else {
-                        border_glyphs(style.border_right).vertical
-                    },
+                    glyphs.right,
                     border_color,
                     selection_background,
                     clip,
@@ -931,17 +888,6 @@ impl Frame {
         selection_background: Option<Background>,
         clip: ClipBounds,
     ) {
-        let character = if (!self.powerline_extended
-            && matches!(
-                character,
-                '\u{e0b4}' | '\u{e0b6}' | '\u{e0b8}' | '\u{e0ba}' | '\u{e0bc}' | '\u{e0be}'
-            ))
-            || (!self.legacy_symbols && matches!(character, '🭁' | '🭌' | '🭒' | '🭝'))
-        {
-            '█'
-        } else {
-            character
-        };
         let Some(index) = self.cell_index(x, y) else {
             return;
         };
@@ -1061,19 +1007,7 @@ fn composite_cell(
 }
 
 fn foreground_glyph_fills_cell(character: char) -> bool {
-    matches!(
-        character,
-        '█' | '🭁'
-            | '🭌'
-            | '🭒'
-            | '🭝'
-            | '\u{e0b4}'
-            | '\u{e0b6}'
-            | '\u{e0b8}'
-            | '\u{e0ba}'
-            | '\u{e0bc}'
-            | '\u{e0be}'
-    )
+    character == '█' || is_shaped_block(character)
 }
 
 fn visual_background(cell: Cell) -> Background {
@@ -1199,60 +1133,182 @@ fn has_border(style: &DivStyle) -> bool {
         || style.border_left != BorderStyle::None
 }
 
-fn has_shaped_corner(style: &DivStyle, shaped: impl Fn(BorderStyle) -> bool) -> bool {
-    (shaped(style.border_top) || shaped(style.border_bottom))
-        && (shaped(style.border_left) || shaped(style.border_right))
+struct ResolvedBorders {
+    top: Option<BorderGlyphs>,
+    right: Option<BorderGlyphs>,
+    bottom: Option<BorderGlyphs>,
+    left: Option<BorderGlyphs>,
 }
 
-fn is_shaped_corner(
-    rect: ClipRect,
-    style: &DivStyle,
-    x: i32,
-    y: i32,
-    shaped: impl Fn(BorderStyle) -> bool,
-) -> bool {
-    let left = rect.left;
-    let right = rect.right - 1;
-    let top = rect.top;
-    let bottom = rect.bottom - 1;
-    if left > right || top > bottom {
-        return false;
+impl ResolvedBorders {
+    fn new(style: &DivStyle, powerline_extended: bool, legacy_symbols: bool) -> Self {
+        let resolve = |side| border_glyphs(side, powerline_extended, legacy_symbols);
+        Self {
+            top: (style.border_top.height() > 0.0).then(|| resolve(style.border_top)),
+            right: (style.border_right.width() > 0.0).then(|| resolve(style.border_right)),
+            bottom: (style.border_bottom.height() > 0.0).then(|| resolve(style.border_bottom)),
+            left: (style.border_left.width() > 0.0).then(|| resolve(style.border_left)),
+        }
     }
 
-    (x == left && y == top && shaped(style.border_top) && shaped(style.border_left))
-        || (right != left
-            && x == right
-            && y == top
-            && shaped(style.border_top)
-            && shaped(style.border_right))
-        || (bottom != top
-            && x == left
-            && y == bottom
-            && shaped(style.border_bottom)
-            && shaped(style.border_left))
-        || (right != left
-            && bottom != top
-            && x == right
-            && y == bottom
-            && shaped(style.border_bottom)
-            && shaped(style.border_right))
+    fn preserves_background_at(&self, rect: ClipRect, x: i32, y: i32) -> bool {
+        let left = rect.left;
+        let right = rect.right - 1;
+        let top = rect.top;
+        let bottom = rect.bottom - 1;
+        if x != left && x != right {
+            return false;
+        }
+
+        // Pill caps expose the backdrop along the whole side. Other shaped
+        // corners require both adjacent border sides to support that shape.
+        (x == left && self.left.is_some_and(|glyphs| is_shaped_block(glyphs.left)))
+            || (x == right
+                && self
+                    .right
+                    .is_some_and(|glyphs| is_shaped_block(glyphs.right)))
+            || (x == left
+                && y == top
+                && self
+                    .top
+                    .is_some_and(|glyphs| is_shaped_block(glyphs.top_left))
+                && self
+                    .left
+                    .is_some_and(|glyphs| is_shaped_block(glyphs.top_left)))
+            || (right != left
+                && x == right
+                && y == top
+                && self
+                    .top
+                    .is_some_and(|glyphs| is_shaped_block(glyphs.top_right))
+                && self
+                    .right
+                    .is_some_and(|glyphs| is_shaped_block(glyphs.top_right)))
+            || (bottom != top
+                && x == left
+                && y == bottom
+                && self
+                    .bottom
+                    .is_some_and(|glyphs| is_shaped_block(glyphs.bottom_left))
+                && self
+                    .left
+                    .is_some_and(|glyphs| is_shaped_block(glyphs.bottom_left)))
+            || (right != left
+                && bottom != top
+                && x == right
+                && y == bottom
+                && self
+                    .bottom
+                    .is_some_and(|glyphs| is_shaped_block(glyphs.bottom_right))
+                && self
+                    .right
+                    .is_some_and(|glyphs| is_shaped_block(glyphs.bottom_right)))
+    }
+
+    fn character_at(&self, at_left: bool, at_right: bool, at_top: bool, at_bottom: bool) -> char {
+        let top = self.top.filter(|_| at_top);
+        let right = self.right.filter(|_| at_right);
+        let bottom = self.bottom.filter(|_| at_bottom);
+        let left = self.left.filter(|_| at_left);
+        let Some(glyphs) = top.or(bottom).or(left).or(right) else {
+            return ' ';
+        };
+        match (
+            top.is_some(),
+            right.is_some(),
+            bottom.is_some(),
+            left.is_some(),
+        ) {
+            (true, true, _, _) => glyphs.top_right,
+            (true, _, _, true) => glyphs.top_left,
+            (_, true, true, _) => glyphs.bottom_right,
+            (_, _, true, true) => glyphs.bottom_left,
+            (true, _, _, _) | (_, _, true, _) => glyphs.horizontal,
+            (_, _, _, true) => glyphs.left,
+            (_, true, _, _) => glyphs.right,
+            _ => ' ',
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
 struct BorderGlyphs {
     horizontal: char,
-    vertical: char,
+    left: char,
+    right: char,
     top_left: char,
     top_right: char,
     bottom_left: char,
     bottom_right: char,
 }
 
-fn border_glyphs(style: BorderStyle) -> BorderGlyphs {
+impl BorderGlyphs {
+    fn corners(self) -> [char; 4] {
+        [
+            self.top_left,
+            self.top_right,
+            self.bottom_left,
+            self.bottom_right,
+        ]
+    }
+}
+
+const CHUNKY_GLYPHS: BorderGlyphs = BorderGlyphs {
+    horizontal: '█',
+    left: '█',
+    right: '█',
+    top_left: '\u{e0ba}',
+    top_right: '\u{e0b8}',
+    bottom_left: '\u{e0be}',
+    bottom_right: '\u{e0bc}',
+};
+
+const CHUNKY_ROUNDED_GLYPHS: BorderGlyphs = BorderGlyphs {
+    horizontal: '█',
+    left: '█',
+    right: '█',
+    top_left: '🭁',
+    top_right: '🭌',
+    bottom_left: '🭒',
+    bottom_right: '🭝',
+};
+
+const PILL_GLYPHS: BorderGlyphs = BorderGlyphs {
+    horizontal: '█',
+    left: '\u{e0b6}',
+    right: '\u{e0b4}',
+    top_left: '\u{e0b6}',
+    top_right: '\u{e0b4}',
+    bottom_left: '\u{e0b6}',
+    bottom_right: '\u{e0b4}',
+};
+
+const SQUARE_GLYPHS: BorderGlyphs = BorderGlyphs {
+    horizontal: '█',
+    left: '█',
+    right: '█',
+    top_left: '█',
+    top_right: '█',
+    bottom_left: '█',
+    bottom_right: '█',
+};
+
+fn is_shaped_block(character: char) -> bool {
+    CHUNKY_GLYPHS.corners().contains(&character)
+        || CHUNKY_ROUNDED_GLYPHS.corners().contains(&character)
+        || PILL_GLYPHS.corners().contains(&character)
+}
+
+fn border_glyphs(
+    style: BorderStyle,
+    powerline_extended: bool,
+    legacy_symbols: bool,
+) -> BorderGlyphs {
     match style {
         BorderStyle::None | BorderStyle::Solid => BorderGlyphs {
             horizontal: '─',
-            vertical: '│',
+            left: '│',
+            right: '│',
             top_left: '┌',
             top_right: '┐',
             bottom_left: '└',
@@ -1260,7 +1316,8 @@ fn border_glyphs(style: BorderStyle) -> BorderGlyphs {
         },
         BorderStyle::Double => BorderGlyphs {
             horizontal: '═',
-            vertical: '║',
+            left: '║',
+            right: '║',
             top_left: '╔',
             top_right: '╗',
             bottom_left: '╚',
@@ -1268,7 +1325,8 @@ fn border_glyphs(style: BorderStyle) -> BorderGlyphs {
         },
         BorderStyle::Heavy => BorderGlyphs {
             horizontal: '━',
-            vertical: '┃',
+            left: '┃',
+            right: '┃',
             top_left: '┏',
             top_right: '┓',
             bottom_left: '┗',
@@ -1276,86 +1334,31 @@ fn border_glyphs(style: BorderStyle) -> BorderGlyphs {
         },
         BorderStyle::Rounded => BorderGlyphs {
             horizontal: '─',
-            vertical: '│',
+            left: '│',
+            right: '│',
             top_left: '╭',
             top_right: '╮',
             bottom_left: '╰',
             bottom_right: '╯',
         },
-        BorderStyle::ChunkyRounded => BorderGlyphs {
-            horizontal: '█',
-            vertical: '█',
-            top_left: '🭁',
-            top_right: '🭌',
-            bottom_left: '🭒',
-            bottom_right: '🭝',
-        },
-        BorderStyle::Chunky | BorderStyle::ChunkyBestEffort => BorderGlyphs {
-            horizontal: '█',
-            vertical: '█',
-            top_left: '\u{e0ba}',
-            top_right: '\u{e0b8}',
-            bottom_left: '\u{e0be}',
-            bottom_right: '\u{e0bc}',
-        },
-        BorderStyle::Pill => BorderGlyphs {
-            horizontal: '█',
-            vertical: '█',
-            top_left: '\u{e0b6}',
-            top_right: '\u{e0b4}',
-            bottom_left: '\u{e0b6}',
-            bottom_right: '\u{e0b4}',
-        },
+        BorderStyle::ChunkyRounded | BorderStyle::ChunkyBestEffort if legacy_symbols => {
+            CHUNKY_ROUNDED_GLYPHS
+        }
+        BorderStyle::Chunky | BorderStyle::ChunkyBestEffort if powerline_extended => CHUNKY_GLYPHS,
+        BorderStyle::Pill if powerline_extended => PILL_GLYPHS,
+        BorderStyle::Chunky
+        | BorderStyle::ChunkyRounded
+        | BorderStyle::ChunkyBestEffort
+        | BorderStyle::Pill => SQUARE_GLYPHS,
         BorderStyle::Ascii => BorderGlyphs {
             horizontal: '-',
-            vertical: '|',
+            left: '|',
+            right: '|',
             top_left: '+',
             top_right: '+',
             bottom_left: '+',
             bottom_right: '+',
         },
-    }
-}
-
-fn border_char_at(
-    style: &DivStyle,
-    at_left: bool,
-    at_right: bool,
-    at_top: bool,
-    at_bottom: bool,
-    legacy_symbols: bool,
-) -> char {
-    let border_top = at_top && style.border_top.height() > 0.0;
-    let border_right = at_right && style.border_right != BorderStyle::None;
-    let border_bottom = at_bottom && style.border_bottom.height() > 0.0;
-    let border_left = at_left && style.border_left != BorderStyle::None;
-    let corner_style = if border_top {
-        style.border_top
-    } else if border_bottom {
-        style.border_bottom
-    } else if border_left {
-        style.border_left
-    } else if border_right {
-        style.border_right
-    } else {
-        BorderStyle::None
-    };
-    let glyphs = border_glyphs(
-        if corner_style == BorderStyle::ChunkyBestEffort && legacy_symbols {
-            BorderStyle::ChunkyRounded
-        } else {
-            corner_style
-        },
-    );
-
-    match (border_top, border_right, border_bottom, border_left) {
-        (true, true, _, _) => glyphs.top_right,
-        (true, _, _, true) => glyphs.top_left,
-        (_, true, true, _) => glyphs.bottom_right,
-        (_, _, true, true) => glyphs.bottom_left,
-        (true, _, _, _) | (_, _, true, _) => glyphs.horizontal,
-        (_, true, _, _) | (_, _, _, true) => glyphs.vertical,
-        _ => ' ',
     }
 }
 
@@ -1501,7 +1504,7 @@ mod tests {
     }
 
     #[test]
-    fn translucent_text_treats_all_chunky_corners_as_full_cell_coverage() {
+    fn translucent_text_treats_shaped_border_glyphs_as_full_cell_coverage() {
         let source = Cell {
             character: 't',
             foreground: Background::Rgb(255, 255, 255),
@@ -1509,7 +1512,10 @@ mod tests {
             ..Cell::default()
         };
 
-        for character in ['🭁', '🭌', '🭒', '🭝'] {
+        for character in [
+            '🭁', '🭌', '🭒', '🭝', '\u{e0b4}', '\u{e0b6}', '\u{e0b8}', '\u{e0ba}', '\u{e0bc}',
+            '\u{e0be}',
+        ] {
             let backdrop = Cell {
                 character,
                 foreground: Background::Rgb(0, 200, 0),
@@ -1530,6 +1536,39 @@ mod tests {
             assert_eq!(cell.character, 't');
             assert_eq!(cell.foreground, Background::Rgb(128, 228, 128));
             assert_eq!(cell.background, Background::Rgb(0, 100, 100));
+        }
+    }
+
+    #[test]
+    fn translucent_text_does_not_treat_partial_blocks_as_full_cell_coverage() {
+        for character in ['▀', '▄', '▌', '▐', '▖', '─', 'A'] {
+            let backdrop = Cell {
+                character,
+                foreground: Background::Rgb(0, 200, 0),
+                background: Background::Rgb(200, 0, 0),
+                ..Cell::default()
+            };
+            let source = Cell {
+                character: 't',
+                foreground: Background::Rgb(255, 255, 255),
+                ..Cell::default()
+            };
+            let cell = composite_cell(
+                backdrop,
+                source,
+                true,
+                false,
+                0.5,
+                Background::White,
+                Background::Black,
+            )
+            .0;
+            assert_eq!(
+                cell.foreground,
+                Background::Rgb(228, 128, 128),
+                "{character}"
+            );
+            assert_eq!(cell.background, backdrop.background, "{character}");
         }
     }
 
@@ -1838,8 +1877,154 @@ mod tests {
     }
 
     #[test]
+    fn border_fallbacks_and_backgrounds_agree_for_all_capability_combinations() {
+        for (legacy, powerline) in [(false, false), (false, true), (true, false), (true, true)] {
+            for border in [
+                BorderStyle::Chunky,
+                BorderStyle::ChunkyRounded,
+                BorderStyle::ChunkyBestEffort,
+                BorderStyle::Pill,
+            ] {
+                let expected = match border {
+                    BorderStyle::ChunkyRounded if legacy => ['🭁', '🭌', '🭒', '🭝'],
+                    BorderStyle::ChunkyBestEffort if legacy => ['🭁', '🭌', '🭒', '🭝'],
+                    BorderStyle::Chunky | BorderStyle::ChunkyBestEffort if powerline => {
+                        ['\u{e0ba}', '\u{e0b8}', '\u{e0be}', '\u{e0bc}']
+                    }
+                    BorderStyle::Pill if powerline => {
+                        ['\u{e0b6}', '\u{e0b4}', '\u{e0b6}', '\u{e0b4}']
+                    }
+                    _ => ['█'; 4],
+                };
+                let style = DivStyle {
+                    border_top: border,
+                    border_bottom: border,
+                    border_left: border,
+                    border_right: border,
+                    ..Default::default()
+                };
+                for clip in [
+                    ClipBounds::unbounded(),
+                    ClipBounds::from_rect_axes(ClipRect::new(2, 0, 3, 4), true, true),
+                ] {
+                    let mut frame = Frame::new(6, 5, false);
+                    frame.legacy_symbols = legacy;
+                    frame.powerline_extended = powerline;
+                    frame.fill_rect(
+                        ClipRect::new(0, 0, 6, 5),
+                        Background::Blue,
+                        None,
+                        ClipBounds::unbounded(),
+                    );
+                    let rect = ClipRect::new(1, 1, 4, 3);
+                    frame.fill_box_background(rect, &style, Background::Red, None, clip);
+                    frame.stroke_border(rect, &style, Background::Green, None, clip);
+                    for ((x, y), character) in
+                        [(1, 1), (4, 1), (1, 3), (4, 3)].into_iter().zip(expected)
+                    {
+                        let cell = frame.cell(x, y).unwrap();
+                        let visible = clip.contains(x as i32, y as i32);
+                        assert_eq!(cell.character, if visible { character } else { ' ' });
+                        assert_eq!(
+                            cell.background,
+                            if visible && character == '█' {
+                                Background::Red
+                            } else {
+                                Background::Blue
+                            },
+                            "glyph={character}, legacy={legacy}, powerline={powerline}, ({x},{y})"
+                        );
+                    }
+                    assert_eq!(frame.cell(2, 2).unwrap().background, Background::Red);
+                    assert_eq!(frame.cell(0, 0).unwrap().background, Background::Blue);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_borders_preserve_corner_and_pill_precedence() {
+        for (border, width, rows) in [
+            (BorderStyle::Pill, 1, &["\u{e0b6}"][..]),
+            (BorderStyle::Chunky, 1, &["\u{e0b8}", "█", "\u{e0bc}"][..]),
+            (BorderStyle::ChunkyRounded, 4, &["🭁██🭌"][..]),
+        ] {
+            for supported in [false, true] {
+                let mut frame = Frame::new(width, rows.len(), false);
+                frame.powerline_extended = supported;
+                frame.legacy_symbols = supported;
+                let style = DivStyle {
+                    border_top: border,
+                    border_right: border,
+                    border_bottom: border,
+                    border_left: border,
+                    ..Default::default()
+                };
+                let rect = ClipRect::new(0, 0, width as i32, rows.len() as i32);
+                let clip = ClipBounds::unbounded();
+                frame.fill_rect(rect, Background::Blue, None, clip);
+                frame.fill_box_background(rect, &style, Background::Red, None, clip);
+                frame.stroke_border(rect, &style, Background::Green, None, clip);
+                for (y, row) in rows.iter().enumerate() {
+                    for (x, character) in row.chars().enumerate() {
+                        let cell = frame.cell(x, y).unwrap();
+                        assert_eq!(cell.character, if supported { character } else { '█' });
+                        assert_eq!(
+                            cell.background,
+                            if supported && character != '█' {
+                                Background::Blue
+                            } else {
+                                Background::Red
+                            }
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_border_sides_keep_their_own_glyphs_and_fallbacks() {
+        for supported in [false, true] {
+            let mut frame = Frame::new(4, 3, false);
+            frame.legacy_symbols = supported;
+            frame.powerline_extended = supported;
+            let style = DivStyle {
+                border_top: BorderStyle::ChunkyBestEffort,
+                border_left: BorderStyle::Pill,
+                border_bottom: BorderStyle::Double,
+                ..Default::default()
+            };
+            let rect = ClipRect::new(0, 0, 4, 3);
+            let clip = ClipBounds::unbounded();
+            frame.fill_rect(rect, Background::Blue, None, clip);
+            frame.fill_box_background(rect, &style, Background::Red, None, clip);
+            frame.stroke_border(rect, &style, Background::Green, None, clip);
+            let expected = if supported {
+                ["🭁███", "\u{e0b6}   ", "╚═══"]
+            } else {
+                ["████", "█   ", "╚═══"]
+            };
+            for (y, row) in expected.iter().enumerate() {
+                for (x, character) in row.chars().enumerate() {
+                    let cell = frame.cell(x, y).unwrap();
+                    assert_eq!(cell.character, character);
+                    assert_eq!(
+                        cell.background,
+                        if supported && x == 0 {
+                            Background::Blue
+                        } else {
+                            Background::Red
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn chunky_border_uses_inward_facing_powerline_corners() {
-        let glyphs = border_glyphs(BorderStyle::Chunky);
+        let glyphs = border_glyphs(BorderStyle::Chunky, true, false);
         assert_eq!(glyphs.top_left, '\u{e0ba}');
         assert_eq!(glyphs.top_right, '\u{e0b8}');
         assert_eq!(glyphs.bottom_left, '\u{e0be}');
