@@ -67,25 +67,19 @@ And the following DOM events and event handlers, with bubbling,
 - Text and image paste events
 - Input change events
 - Form submit events
-- Focus and blur events
+- Focus and blur events (if inside tmux, requires the tmux `focus-events`
+  setting to be enabled)
 - Transition start and end events
 - Scroll events
 
-PaintCannon's Rust renderer wakes at the configured `fps` (60 by default), but
-only lays out and paints dirty state and only writes non-empty frame diffs.
-`requestAnimationFrame` schedules JS updates at that cadence, and `renderSync`
-provides an explicit presentation barrier when one is needed before shutdown.
+PaintCannon also supports the `requestAnimationFrame` DOM function to run
+animations on a loop synced with paints.
 
-Terminal focus detection uses xterm focus reporting under the hood. PaintCannon
-enables the terminal protocol from Rust and exposes it as app-level
-`focus`/`blur` events plus `pc.hasFocus`. Inside tmux, focus events work when
-tmux has `focus-events` enabled:
+Much like browsers are ways to paper over sticky platform differences between
+different operating systems, PaintCannon provides a single application format
+that papers over differences in underlying terminal emulators, like:
 
-```tmux
-set -g focus-events on
-```
-
-## Glyph progressive enhancement
+#### Glyph progressive enhancement
 
 Paintcannon ships a few terminal-specific progressive enhancement queries for
 font support:
@@ -121,6 +115,12 @@ the results aren't false negatives simply due to using tmux or SSH.
 
 Treat these as progressive enhancement hints, and make sure that the
 non-enhanced version of your app still is reasonable!
+
+#### OSC 8 clickable link progressive enhancement
+
+PaintCannon will automatically render `<a>` tags in supported terminals using
+the OSC 8 clickable link standard, and will fall back to Markdown-style
+`[label](url)` rendering in unsupported terminals.
 
 ## React support
 
