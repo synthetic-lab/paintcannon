@@ -156,12 +156,14 @@ impl Detection {
 
     fn probe(&self, queries: Option<&Sender<Request>>) -> &ProbeReport {
         self.probed.get_or_init(|| {
+            let known_nerd_fonts = self.known_nerd_fonts();
+            let known_legacy_symbols = self.known_legacy_symbols();
             let mut characters = Vec::new();
-            if self.known_nerd_fonts().is_none() {
+            if known_nerd_fonts.is_none() {
                 characters.extend(sample_characters());
             }
             let nerd_count = characters.len();
-            if self.known_legacy_symbols().is_none() {
+            if known_legacy_symbols.is_none() {
                 characters.extend_from_slice(legacy::SAMPLES);
             }
             let count = characters.len();
@@ -187,8 +189,9 @@ impl Detection {
             }
             .unwrap_or_else(|| vec![None; count]);
             ProbeReport {
-                nerd_fonts: resolve(&reported[..nerd_count], self.environment()),
-                legacy_symbols: self.known_legacy_symbols().unwrap_or_else(|| {
+                nerd_fonts: known_nerd_fonts
+                    .unwrap_or_else(|| nerd_fonts_from_replies(&reported[..nerd_count])),
+                legacy_symbols: known_legacy_symbols.unwrap_or_else(|| {
                     reported[nerd_count..]
                         .iter()
                         .all(|reply| *reply == Some(true))
@@ -233,14 +236,7 @@ impl Task for HasNerdFontSet {
     }
 }
 
-fn resolve(reported: &[Option<bool>], env: &environment::Environment) -> NerdFontSupport {
-    if let Some(enabled) = env.nerd_font_override() {
-        return NerdFontSupport::uniform(enabled);
-    }
-    let bundled = env.capabilities().nerd_font;
-    if bundled {
-        return NerdFontSupport::uniform(true);
-    }
+fn nerd_fonts_from_replies(reported: &[Option<bool>]) -> NerdFontSupport {
     let mut offset = 0;
     let mut result = NerdFontSupport::default();
     for (set, samples) in SAMPLES {
@@ -409,13 +405,8 @@ mod tests {
     }
 
     #[test]
-    fn override_precedes_even_negative_protocol_replies() {
+    fn present_override_enables_nerd_fonts_without_queries() {
         let env = Environment::from_pairs(&[("NERD_FONT", "")]);
-        assert_eq!(resolve(&[], &env), NerdFontSupport::uniform(true));
-        assert_eq!(
-            resolve(&[Some(false)], &env),
-            NerdFontSupport::uniform(true)
-        );
         let (tx, rx) = bounded(1);
         assert_eq!(
             Detection::default().report(|| env, Some(&tx)),
@@ -428,7 +419,6 @@ mod tests {
     fn zero_override_disables_even_bundled_fonts_without_queries() {
         let env = Environment::from_pairs(&[("NERD_FONT", "0"), ("TERM_PROGRAM", "ghostty")]);
         let (tx, rx) = bounded(1);
-        assert_eq!(resolve(&[Some(true)], &env), NerdFontSupport::default());
         assert_eq!(
             Detection::default().report(|| env, Some(&tx)),
             NerdFontSupport::default()
@@ -548,32 +538,36 @@ mod tests {
     }
 
     #[test]
-    fn disabling_nerd_fonts_does_not_disable_legacy_protocol_detection() {
-        for reply in [Some(true), Some(false), None] {
-            let detection = Detection::default();
-            detection
-                .environment
-                .set(Environment::from_pairs(&[("NERD_FONT", "0")]))
-                .ok()
-                .unwrap();
-            let (tx, rx) = bounded::<Request>(1);
-            std::thread::scope(|scope| {
-                let worker = scope.spawn(|| detection.detect_legacy(Some(&tx)));
-                let request = rx.recv_timeout(QUERY_TIMEOUT).unwrap();
-                assert_eq!(request.characters, legacy::SAMPLES);
-                let mut replies = vec![Some(true); legacy::SAMPLES.len()];
-                replies[1] = reply;
-                request.reply.send(replies).unwrap();
-                assert_eq!(worker.join().unwrap(), reply == Some(true));
-            });
-            assert_eq!(detection.detect(Some(&tx)), NerdFontSupport::default());
-            assert!(rx.is_empty());
+    fn nerd_font_overrides_are_preserved_while_legacy_symbols_are_probed() {
+        for override_value in ["0", "1", ""] {
+            for reply in [Some(true), Some(false), None] {
+                let detection = Detection::default();
+                detection
+                    .environment
+                    .set(Environment::from_pairs(&[("NERD_FONT", override_value)]))
+                    .ok()
+                    .unwrap();
+                let expected = NerdFontSupport::uniform(override_value != "0");
+                let (tx, rx) = bounded::<Request>(1);
+                std::thread::scope(|scope| {
+                    let worker = scope.spawn(|| detection.detect_legacy(Some(&tx)));
+                    let request = rx.recv_timeout(QUERY_TIMEOUT).unwrap();
+                    assert_eq!(request.characters, legacy::SAMPLES);
+                    assert_eq!(detection.detect(Some(&tx)), expected);
+                    let mut replies = vec![Some(true); legacy::SAMPLES.len()];
+                    replies[1] = reply;
+                    request.reply.send(replies).unwrap();
+                    assert_eq!(worker.join().unwrap(), reply == Some(true));
+                });
+                assert_eq!(detection.probe(Some(&tx)).nerd_fonts, expected);
+                assert_eq!(detection.detect(Some(&tx)), expected);
+                assert!(rx.is_empty());
+            }
         }
     }
 
     #[test]
     fn missing_sample_only_disables_its_own_set() {
-        let env = Environment::from_pairs(&[]);
         for reply in [Some(false), None] {
             let replies: Vec<_> = sample_characters()
                 .map(|character| {
@@ -585,7 +579,7 @@ mod tests {
                 })
                 .collect();
             assert_eq!(
-                resolve(&replies, &env),
+                nerd_fonts_from_replies(&replies),
                 NerdFontSupport {
                     powerline: true,
                     powerline_extended: false,
@@ -600,8 +594,10 @@ mod tests {
     #[test]
     fn remote_unknown_terminal_never_inspects_server_fonts() {
         let env = Environment::from_pairs(&[("SSH_TTY", "/dev/pts/1")]);
-        let replies = vec![None; sample_characters().count()];
-        assert_eq!(resolve(&replies, &env), NerdFontSupport::default());
+        assert_eq!(
+            Detection::default().report(|| env, None),
+            NerdFontSupport::default()
+        );
     }
 
     #[test]
@@ -616,10 +612,12 @@ mod tests {
             "ghostty",
         )])
         .capabilities()]);
-        let mut replies = vec![None; sample_characters().count()];
-        assert_eq!(resolve(&replies, &env), NerdFontSupport::uniform(true));
-        replies.fill(Some(false));
-        assert!(resolve(&replies, &env).powerline_extended);
+        let (tx, rx) = bounded(1);
+        assert_eq!(
+            Detection::default().report(|| env, Some(&tx)),
+            NerdFontSupport::uniform(true)
+        );
+        assert!(rx.is_empty());
     }
 
     #[test]
@@ -629,7 +627,9 @@ mod tests {
             ("TERM", "tmux-256color"),
             ("TMUX", "/tmp/tmux-1000/default,10681,0"),
         ]);
-        let replies = vec![None; sample_characters().count()];
-        assert_eq!(resolve(&replies, &env), NerdFontSupport::default());
+        assert_eq!(
+            Detection::default().report(|| env, None),
+            NerdFontSupport::default()
+        );
     }
 }
