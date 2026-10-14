@@ -136,13 +136,28 @@ With mouse capture enabled, Shift may also be required to let the terminal
 handle the click. PaintCannon does not launch a browser process itself. Its ordinary click events still bubble, but
 `preventDefault()` cannot cancel a gesture handled by the terminal emulator.
 
-With `captureMouse: true`, hovering a native link automatically shows
-`Ctrl-Shift-Click to open`. The tooltip appears above the link, or below it when
+With `captureMouse: true`, hovering a native link automatically shows opening
+instructions for the detected terminal's default link-opening bindings. For example,
+Ghostty uses `Ctrl-Shift-Click to open` on Linux and `Cmd-Shift-Click to open` on
+macOS; WezTerm uses `Shift-Click to open` with mouse capture enabled. VTE terminals
+use `Ctrl-Click to open`; foot uses `Ctrl-Shift-O` followed by the link's jump label.
+Custom terminal bindings may differ.
+
+Local clients use the host OS. When the client OS cannot be determined (for
+example, over SSH), hints remain terminal-specific: Ghostty shows
+`Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)`. Terminals with the same
+gesture across platforms keep that gesture.
+
+In tmux, client processes are checked only for SSH, including on versions without
+live client-environment queries. Multiple attached clients keep native links but
+do not show a hint. Each supported terminal has its own opening instructions.
+Capability checks refresh every two seconds, updating an already-visible hint
+without requiring pointer movement or application event handlers.
+
+The tooltip appears above the link, or below it when
 there is no room above, and wraps in narrow terminals. It lives in a private
 PaintCannon layer, above every application `zIndex` and outside application
 clipping. It does not participate in app hit testing or text selection.
-Opening gestures remain terminal-specific; for example, macOS terminals often
-use Cmd instead of Ctrl.
 
 Tooltips use the `pill` border style: Powerline Extended rounded caps when
 supported, filled square ends otherwise. Both styles take the same space, and
@@ -151,6 +166,12 @@ this native-link hint.
 
 Run `npm run demo:links --workspace paintcannon` from the repository root.
 Press `q` or Ctrl-C to exit.
+
+`npm run demo:links-edges` places links at every corner, edge midpoint, and the center
+of the terminal. Hover the links and resize the terminal to inspect tooltip placement
+and wrapping. `npm run demo:links-edges:fallback` runs the same demo with square caps
+instead of Nerd Font pill caps. Neither demo overrides terminal hyperlink detection;
+in tmux, use a single attached client to see the hover hints. Press `q` or Ctrl-C to exit.
 
 ## Events
 
@@ -415,7 +436,10 @@ const supported = await pc.font.hasSymbolsForLegacyComputing();
 
 This `Promise<boolean>` reads the current detection pass, checking known terminal built-in support first,
 including the smooth mosaic corners used by `chunky-rounded`. It is independent
-of `NERD_FONT`: Nerd Fonts do not guarantee those characters. If the table does
+of `NERD_FONT`: Nerd Fonts do not guarantee those characters. Windows Terminal
+1.25.2733.0 and newer includes these corners in its
+[built-in glyph renderer](https://github.com/microsoft/terminal/discussions/20758);
+both its terminal identity and `WT_SESSION` are recognized. If the table does
 not recognize the terminal, environment markers such as `VTE_VERSION` can
 establish legacy glyph support without identifying a particular application.
 Recognized terminals use their table entry; these fallback markers do not

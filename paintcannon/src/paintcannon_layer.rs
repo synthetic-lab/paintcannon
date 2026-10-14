@@ -8,8 +8,6 @@ use crate::style::{
     DivStyle, LayoutOverflow,
 };
 
-const LINK_HINT: &str = "Ctrl-Shift-Click to open";
-
 /// Renderer-owned UI has a separate layout tree and is painted after the app's
 /// entire stacking tree. App z-index, clipping, selection and transitions cannot
 /// affect it. Its nodes never enter the public DOM or app hit testing.
@@ -17,6 +15,8 @@ pub(crate) struct PaintCannonLayer {
     arena: LayoutArena,
     root: NodeId,
     link_tooltip: NodeId,
+    link_text: NodeId,
+    open_hint: Option<&'static str>,
     hovered_link: Option<ClipRect>,
     geometry: Option<(ClipRect, usize, usize)>,
     visible: bool,
@@ -44,17 +44,31 @@ impl PaintCannonLayer {
             overflow_y: LayoutOverflow::Hidden,
             ..Default::default()
         });
-        let text = arena.create_text(LINK_HINT);
-        arena.append_child(link_tooltip, text);
+        let link_text = arena.create_text("");
+        arena.append_child(link_tooltip, link_text);
         arena.append_child(root, link_tooltip);
         Self {
             arena,
             root,
             link_tooltip,
+            link_text,
+            open_hint: None,
             hovered_link: None,
             geometry: None,
             visible: false,
         }
+    }
+
+    pub(crate) fn set_link_hint(&mut self, open_hint: Option<&'static str>) -> bool {
+        if self.open_hint == open_hint {
+            return false;
+        }
+        self.open_hint = open_hint;
+        self.arena.set_text(self.link_text, open_hint.unwrap_or(""));
+        // Text and pill width can change without any pointer or viewport motion.
+        self.geometry = None;
+        self.visible = false;
+        true
     }
 
     pub(crate) fn set_hovered_link(&mut self, link: Option<ClipRect>) -> bool {
@@ -72,6 +86,9 @@ impl PaintCannonLayer {
         }
         self.geometry = geometry;
         self.visible = false;
+        let Some(open_hint) = self.open_hint else {
+            return;
+        };
         let Some((link, width, height)) = geometry else {
             return;
         };
@@ -87,7 +104,7 @@ impl PaintCannonLayer {
         root_style.width = CssDimension::Length(width as f32);
         root_style.height = CssDimension::Length(height as f32);
         self.arena.set_style(self.root, root_style);
-        let tooltip_width = (LINK_HINT.len() + 2).min(width);
+        let tooltip_width = (unicode_width::UnicodeWidthStr::width(open_hint) + 2).min(width);
         let mut style = self.arena.style(self.link_tooltip).clone();
         style.width = CssDimension::Length(tooltip_width as f32);
         style.left = CssLengthPercentageAuto::Length(

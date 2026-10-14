@@ -2082,7 +2082,9 @@ fn hyperlinks_switch_between_metadata_and_wrapped_fallback_with_nested_spans() {
             > 1.0
     );
 
-    engine.set_hyperlinks_supported(true);
+    engine.set_hyperlink_support(HyperlinkCapability::Confirmed {
+        open_hint: "Ctrl-Shift-Click to open",
+    });
     let linked = engine.render_frame(12, 6).unwrap();
     let id = engine.node_for(anchor).unwrap();
     for x in 0..5 {
@@ -2122,7 +2124,7 @@ fn hyperlinks_switch_between_metadata_and_wrapped_fallback_with_nested_spans() {
     assert!(output.contains("https://b.co"), "{output:?}");
     assert!(output.contains("\x1b]8;;\x1b\\"), "{output:?}");
 
-    engine.set_hyperlinks_supported(false);
+    engine.set_hyperlink_support(HyperlinkCapability::Unconfirmed);
     let downgraded = engine.render_frame(12, 6).unwrap();
     assert_eq!(downgraded.cell(0, 0).unwrap().character, '[');
     engine.set_anchor_href(anchor, String::new());
@@ -2166,7 +2168,9 @@ fn hyperlinks_in_block_flex_and_grid_layouts_keep_metadata_through_scroll_clippi
         LayoutDisplay::Grid,
     ] {
         let mut engine = PaintEngine::new();
-        engine.set_hyperlinks_supported(true);
+        engine.set_hyperlink_support(HyperlinkCapability::Confirmed {
+            open_hint: "Ctrl-Shift-Click to open",
+        });
         let root = engine.create_element(DivStyle {
             width: CssDimension::Length(5.0),
             height: CssDimension::Length(2.0),
@@ -2244,7 +2248,9 @@ fn removing_last_inline_child_clears_old_fragments_without_an_anchor() {
 
 fn link_tooltip_scene() -> (PaintEngine, DomId) {
     let mut engine = PaintEngine::new();
-    engine.set_hyperlinks_supported(true);
+    engine.set_hyperlink_support(HyperlinkCapability::Confirmed {
+        open_hint: "Ctrl-Shift-Click to open",
+    });
     // Avoid terminal pointer-shape writes from these frame-only tests.
     engine.current_pointer_shape = Some("default");
     let root = engine.create_element(block_style(
@@ -2291,6 +2297,101 @@ fn frame_row(frame: &Frame, row: usize) -> String {
     (0..frame.width())
         .map(|x| frame.cell(x, row).unwrap().character)
         .collect()
+}
+
+#[test]
+fn unhintable_hyperlinks_keep_osc8_and_remove_an_existing_tooltip() {
+    let (mut engine, anchor) = link_tooltip_scene();
+    engine.handle_pointer_move(4, 2);
+    engine
+        .flush_frame_to(40, 8, &mut Vec::new(), TermProfile::TrueColor, false)
+        .unwrap();
+    assert!(
+        frame_row(engine.previous_frame.as_ref().unwrap(), 1).contains("Ctrl-Shift-Click to open")
+    );
+    let app_frame = engine.current_frame.clone().unwrap();
+    let passes = engine.layout_passes();
+
+    engine.set_hyperlink_support(HyperlinkCapability::ConfirmedButUnhintable);
+    assert_eq!(engine.dirtiness, Dirtiness::Paint);
+    let mut bytes = Vec::new();
+    engine
+        .flush_frame_to(40, 8, &mut bytes, TermProfile::TrueColor, false)
+        .unwrap();
+    assert!(!bytes.is_empty(), "the visible hint must be erased");
+    let frame = engine.previous_frame.as_ref().unwrap();
+    assert_eq!(frame, &app_frame);
+    assert_eq!(frame.cell(4, 2).unwrap().hyperlink, engine.node_for(anchor));
+    assert_eq!(engine.layout_passes(), passes);
+
+    engine.set_hyperlink_support(HyperlinkCapability::Confirmed {
+        open_hint: "Shift-Click to open",
+    });
+    engine
+        .flush_frame_to(40, 8, &mut Vec::new(), TermProfile::TrueColor, false)
+        .unwrap();
+    assert!(frame_row(engine.previous_frame.as_ref().unwrap(), 1).contains("Shift-Click to open"));
+    assert_eq!(engine.layout_passes(), passes);
+}
+
+#[test]
+fn ghostty_unknown_os_hint_renders_both_platform_gestures() {
+    let (mut engine, _) = link_tooltip_scene();
+    engine.set_hyperlink_support(HyperlinkCapability::Confirmed {
+        open_hint: "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)",
+    });
+    engine.handle_pointer_move(4, 2);
+    let frame = engine.render_frame(80, 8).unwrap();
+    assert!(frame_row(&frame, 1).contains("Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)"));
+}
+
+#[test]
+fn link_tooltip_uses_updated_capability_hint_without_pointer_movement_or_app_layout() {
+    let (mut engine, _) = link_tooltip_scene();
+    engine.set_powerline_extended(true);
+    engine
+        .flush_frame_to(40, 8, &mut Vec::new(), TermProfile::TrueColor, false)
+        .unwrap();
+    engine.handle_pointer_move(4, 2);
+    engine
+        .flush_frame_to(40, 8, &mut Vec::new(), TermProfile::TrueColor, false)
+        .unwrap();
+    let passes = engine.layout_passes();
+    let app_frame = engine.current_frame.clone().unwrap();
+
+    for hint in [
+        "Shift-Click to open",
+        "Cmd-Option-Click to open",
+        "Cmd-Shift-Click to open",
+    ] {
+        engine.set_hyperlink_support(HyperlinkCapability::Confirmed { open_hint: hint });
+        assert_eq!(engine.dirtiness, Dirtiness::Paint);
+        let mut bytes = Vec::new();
+        engine
+            .flush_frame_to(40, 8, &mut bytes, TermProfile::TrueColor, false)
+            .unwrap();
+        assert!(!bytes.is_empty(), "changed hint must reach the terminal");
+        let frame = engine.previous_frame.as_ref().unwrap();
+        assert!(frame_row(frame, 1).contains(hint));
+        let left = 4.min(40 - hint.len() - 2);
+        let right = left + hint.len() + 1;
+        assert_eq!(frame.cell(left, 1).unwrap().character, '\u{e0b6}');
+        assert_eq!(frame.cell(right, 1).unwrap().character, '\u{e0b4}');
+        for x in 0..40 {
+            if x < left || x > right {
+                assert_eq!(
+                    frame.cell(x, 1),
+                    app_frame.cell(x, 1),
+                    "old pill must be erased"
+                );
+            }
+        }
+        assert_eq!(engine.current_frame.as_ref().unwrap(), &app_frame);
+        assert_eq!(engine.layout_passes(), passes);
+
+        engine.set_hyperlink_support(HyperlinkCapability::Confirmed { open_hint: hint });
+        assert_eq!(engine.dirtiness, Dirtiness::Clean);
+    }
 }
 
 #[test]
@@ -2527,7 +2628,7 @@ fn link_tooltip_uses_visible_link_cells_not_covered_or_fallback_links() {
     engine.destroy_node(cover);
     assert!(frame_row(&engine.render_frame(40, 8).unwrap(), 1).contains("Ctrl-Shift-Click"));
 
-    engine.set_hyperlinks_supported(false);
+    engine.set_hyperlink_support(HyperlinkCapability::Unconfirmed);
     assert_eq!(
         engine
             .render_frame(40, 8)
@@ -2537,7 +2638,9 @@ fn link_tooltip_uses_visible_link_cells_not_covered_or_fallback_links() {
             .character,
         '!'
     );
-    engine.set_hyperlinks_supported(true);
+    engine.set_hyperlink_support(HyperlinkCapability::Confirmed {
+        open_hint: "Ctrl-Shift-Click to open",
+    });
     assert!(frame_row(&engine.render_frame(40, 8).unwrap(), 1).contains("Ctrl-Shift-Click"));
     engine.destroy_node(anchor);
     assert_eq!(
@@ -2555,7 +2658,9 @@ fn link_tooltip_uses_visible_link_cells_not_covered_or_fallback_links() {
 fn link_tooltip_reacts_to_scrolling_under_a_stationary_pointer_without_relayout() {
     let mut engine = PaintEngine::new();
     engine.current_pointer_shape = Some("default");
-    engine.set_hyperlinks_supported(true);
+    engine.set_hyperlink_support(HyperlinkCapability::Confirmed {
+        open_hint: "Ctrl-Shift-Click to open",
+    });
     let root = engine.create_element(DivStyle {
         width: CssDimension::Length(40.0),
         height: CssDimension::Length(3.0),
@@ -2590,7 +2695,9 @@ fn link_tooltip_fits_viewport_edges_and_wraps_without_covering_its_link() {
     for (width, height, x, y) in [(40, 8, 39, 2), (12, 8, 0, 0), (12, 8, 11, 7)] {
         let mut engine = PaintEngine::new();
         engine.current_pointer_shape = Some("default");
-        engine.set_hyperlinks_supported(true);
+        engine.set_hyperlink_support(HyperlinkCapability::Confirmed {
+            open_hint: "Ctrl-Shift-Click to open",
+        });
         let root = engine.create_element(block_style(
             CssDimension::Percent(1.0),
             CssDimension::Percent(1.0),

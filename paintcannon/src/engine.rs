@@ -8,6 +8,7 @@ use taffy::{AvailableSpace, NodeId, Size};
 use termprofile::TermProfile;
 
 use crate::frame::Frame;
+use crate::glyph_detection::HyperlinkCapability;
 use crate::image::load_png_image;
 use crate::layout::{
     AbsoluteRect, ArenaScrollAdjustment, ArenaScrollMetrics, ArenaScrollbarHit,
@@ -369,8 +370,8 @@ pub(crate) enum EngineCommand {
         node: DomId,
         href: String,
     },
-    SetHyperlinksSupported {
-        supported: bool,
+    SetHyperlinkSupport {
+        support: HyperlinkCapability,
     },
     SetText {
         node: DomId,
@@ -1100,9 +1101,19 @@ impl PaintEngine {
         }
     }
 
-    pub(crate) fn set_hyperlinks_supported(&mut self, supported: bool) {
-        if self.arena.set_hyperlinks_supported(supported) {
+    pub(crate) fn set_hyperlink_support(&mut self, support: HyperlinkCapability) {
+        let open_hint = match support {
+            HyperlinkCapability::Unconfirmed | HyperlinkCapability::ConfirmedButUnhintable => None,
+            HyperlinkCapability::Confirmed { open_hint } => Some(open_hint),
+        };
+        if self
+            .arena
+            .set_hyperlinks_supported(support != HyperlinkCapability::Unconfirmed)
+        {
             self.mark_layout_dirty();
+        }
+        if self.paintcannon_layer.set_link_hint(open_hint) {
+            self.mark_paint_dirty();
         }
     }
 

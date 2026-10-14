@@ -49,20 +49,14 @@ PaintCannon supports the following HTML elements:
 
 - `<div>`
 - `<span>`
-- `<a>` with `href`
+- `<a>` with `href`, using native OSC 8 hyperlinks in supported terminals
+  (for unsupported terminals, links are rendered Markdown-style as
+  `[label](url)`)
 - `<input type="text">`
 - `<textarea>`
 - `<button>`
 - `<form>`
 - `<img>` (via ANSI/ASCII rendering)
-
-Links use native OSC 8 hyperlinks in supported terminals and render as
-`[label](URL)` otherwise. Detection checks the outer terminal, including every
-attached tmux client, and updates live as clients change. React exposes the same
-behavior through `<A href="https://example.com">label</A>`.
-With mouse capture enabled, hovering a native link shows a built-in opening hint
-above all application layers. See [link tooltips](paintcannon/README.md#links).
-See [links](paintcannon/README.md#links) for terminal gestures and tmux setup.
 
 And the following DOM events and event handlers, with bubbling,
 `stopPropagation`, and `preventDefault` support:

@@ -99,6 +99,11 @@ for tmux setup and limitations.
 
 With mouse capture enabled, native links also get Rust-rendered hover tooltips
 above all application layers, without React event handlers. The hint uses the
+detected terminal's default opening gesture and updates with live capability
+changes. Unknown client operating systems use terminal-specific alternatives;
+Ghostty shows `Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)`.
+With multiple attached tmux clients, native links remain enabled but no hint is
+shown. The tooltip uses the
 same `border: "pill"` style available on any component: rounded Nerd Font caps
 when supported, square ends otherwise. Pill borders reserve only left/right
 cells; match `borderColor` to `backgroundColor` for a filled pill.

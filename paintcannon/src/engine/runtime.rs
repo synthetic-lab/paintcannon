@@ -9,6 +9,7 @@ use super::{
     profile_log, scrollbar_suppresses_selection, EngineCommand, PaintEngine, SelectionAction,
 };
 use crate::event_notification::EventNotification;
+use crate::glyph_detection::HyperlinkCapability;
 use crate::native_event::{NativeEvent, NativeEventQueue};
 use crate::style::Background;
 use crate::terminal::copy_text_to_clipboard;
@@ -223,9 +224,13 @@ fn apply_command_inner(
             engine.set_transition(node, transitions);
         }
         EngineCommand::SetAnchorHref { node, href } => engine.set_anchor_href(node, href),
-        EngineCommand::SetHyperlinksSupported { supported } => {
+        EngineCommand::SetHyperlinkSupport { support } => {
             use std::io::IsTerminal;
-            engine.set_hyperlinks_supported(supported && io::stdout().is_terminal());
+            engine.set_hyperlink_support(if io::stdout().is_terminal() {
+                support
+            } else {
+                HyperlinkCapability::Unconfirmed
+            });
         }
         EngineCommand::SetText { node, text } => {
             engine.set_text(node, text);

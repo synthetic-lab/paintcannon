@@ -3,10 +3,13 @@
 //! of every Nerd Fonts version or shaping sequence.
 mod capabilities;
 mod environment;
+mod environment_markers;
 mod legacy;
 mod monitor;
+mod ssh;
 mod terminals;
 mod tmux;
+pub(crate) use capabilities::HyperlinkCapability;
 pub(crate) use legacy::HasSymbolsForLegacyComputing;
 pub(crate) use monitor::FontMonitor;
 pub(crate) mod protocol;

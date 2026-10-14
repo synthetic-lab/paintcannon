@@ -1,19 +1,13 @@
 //! Live client capabilities, not tmux's saved global/session environment.
-use super::{capabilities::Capabilities, environment::Environment};
+use super::{
+    capabilities::{Capabilities, HyperlinkCapability},
+    environment::{ClientPlatform, Environment},
+    environment_markers::MARKERS,
+    ssh,
+};
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-
-const MARKERS: &[&str] = &[
-    "TERM_PROGRAM",
-    "KITTY_WINDOW_ID",
-    "KONSOLE_DBUS_SESSION",
-    "VTE_VERSION",
-    "GNOME_TERMINAL_SCREEN",
-    "TERMINATOR_UUID",
-    "COLORTERM",
-    "WT_SESSION",
-];
 
 fn client_format() -> String {
     // W/P loops include linked windows: every client whose session contains this
@@ -21,15 +15,15 @@ fn client_format() -> String {
     let mut format =
         "#{client_control_mode}\t#{W:#{P:#{pane_id} }}\t#{client_termname}\t#{client_termtype}"
             .to_string();
-    for marker in MARKERS {
+    for name in std::iter::once("TERM_PROGRAM").chain(MARKERS.iter().map(|marker| marker.name)) {
         // I/e reads the attached client's environment (added after tmux 3.7), unlike a bare
         // #{TERM_PROGRAM}, which reads the stale session/global environment.
         // Older tmux leaves these fields empty; client_termname and client_termtype
         // still provide live identity, not stale server environment values.
         // https://man.openbsd.org/tmux#FORMATS
-        format.push_str(&format!("\t#{{I/e:{marker}}}"));
+        format.push_str(&format!("\t#{{I/e:{name}}}"));
     }
-    format.push_str("\t#{client_termfeatures}");
+    format.push_str("\t#{client_termfeatures}\t#{client_pid}");
     format
 }
 
@@ -37,16 +31,23 @@ pub(super) fn client_capabilities(pane: &str) -> Vec<Capabilities> {
     if pane.is_empty() {
         return Vec::new();
     }
+    // Inspect attached processes, not tmux's saved session environment. This
+    // also works on tmux releases without the I/e format modifier.
     client_output()
-        .and_then(|output| parse_clients(&output, pane))
+        .and_then(|output| parse_clients(&output, pane, ssh::for_process))
         .unwrap_or_default()
 }
 
-fn parse_clients(output: &str, pane: &str) -> Option<Vec<Capabilities>> {
+fn parse_clients(
+    output: &str,
+    pane: &str,
+    mut uses_ssh: impl FnMut(u32) -> Option<bool>,
+) -> Option<Vec<Capabilities>> {
     let mut clients = Vec::new();
+    let features_index = 5 + MARKERS.len();
     for line in output.lines() {
         let fields: Vec<_> = line.split('\t').collect();
-        if fields.len() != 5 + MARKERS.len()
+        if fields.len() != features_index + 2
             || fields
                 .iter()
                 .any(|field| field.chars().any(char::is_control))
@@ -56,28 +57,40 @@ fn parse_clients(output: &str, pane: &str) -> Option<Vec<Capabilities>> {
         if fields[0] == "1" || !fields[1].split_whitespace().any(|id| id == pane) {
             continue;
         }
-        let mut pairs = vec![("TERM", fields[2])];
-        pairs.extend(
-            MARKERS
-                .iter()
-                .copied()
-                .zip(fields[4..4 + MARKERS.len()].iter().copied()),
-        );
-        if fields[4].is_empty() {
+        let program = if fields[4].is_empty() {
             // tmux records XTVERSION replies such as "WezTerm 20240203-..." and
             // "foot(1.18.0)". Match the product through the same terminal table.
             // Unknown product names remain unknown, even if a version is present.
             // https://github.com/tmux/tmux/blob/3.7/tty-keys.c#L1607-L1669
-            let program = fields[3].split([' ', '(']).next().unwrap_or("");
-            pairs.push(("TERM_PROGRAM", program));
-        }
-        let mut capabilities = Environment::from_pairs(&pairs).capabilities();
+            fields[3].split([' ', '(']).next().unwrap_or("")
+        } else {
+            fields[4]
+        };
+        let mut pairs = vec![("TERM", fields[2]), ("TERM_PROGRAM", program)];
+        let client_environment = MARKERS
+            .iter()
+            .map(|marker| marker.name)
+            .zip(fields[5..features_index].iter().copied());
+        pairs.extend(client_environment);
+        // tmux only tells us which clients to check for SSH. Local clients use
+        // the host OS; neither TERM nor a terminal version report identifies it.
+        let pid = fields[features_index + 1].parse().ok()?;
+        let platform = match uses_ssh(pid) {
+            Some(false) => ClientPlatform::local(),
+            Some(true) | None => ClientPlatform::Unknown,
+        };
+        let mut capabilities = Environment::from_pairs(&pairs)
+            .with_platform(platform)
+            .capabilities();
         // OSC 8 belongs to tmux's cell metadata, not DCS passthrough (which loses
         // links on pane redraw). Require native forwarding as well as outer support.
         // https://github.com/Alhadis/OSC8-Adoption/#terminal-multiplexers
-        capabilities.osc8 &= fields[4 + MARKERS.len()]
+        if !fields[features_index]
             .split(',')
-            .any(|feature| feature == "hyperlinks");
+            .any(|feature| feature == "hyperlinks")
+        {
+            capabilities.osc8 = HyperlinkCapability::Unconfirmed;
+        }
         clients.push(capabilities);
     }
     Some(clients)
@@ -124,31 +137,133 @@ fn client_output() -> Option<String> {
 mod tests {
     use super::*;
 
+    const LOCAL_GHOSTTY_HINT: &str = if cfg!(target_os = "macos") {
+        "Cmd-Shift-Click to open"
+    } else if cfg!(target_os = "linux") {
+        "Ctrl-Shift-Click to open"
+    } else {
+        "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)"
+    };
+
+    fn parse_clients(output: &str, pane: &str) -> Option<Vec<Capabilities>> {
+        super::parse_clients(output, pane, |_| Some(false))
+    }
+
     fn client(panes: &str, term: &str, program: &str) -> String {
-        format!("0\t{panes}\t{term}\t\t{program}\t\t\t\t\t\t\t\thyperlinks\n")
+        client_with_environment(panes, term, &[("TERM_PROGRAM", program)])
+    }
+
+    fn client_with_environment(panes: &str, term: &str, environment: &[(&str, &str)]) -> String {
+        let mut fields = vec!["0", panes, term, ""];
+        for name in std::iter::once("TERM_PROGRAM").chain(MARKERS.iter().map(|marker| marker.name))
+        {
+            fields.push(
+                environment
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map_or("", |(_, value)| *value),
+            );
+        }
+        fields.push("hyperlinks");
+        fields.push("42");
+        fields.join("\t") + "\n"
+    }
+
+    #[test]
+    fn local_ghostty_uses_host_platform_without_tmux_environment_support() {
+        let local = client("%1 ", "xterm-ghostty", "");
+        let expected = match ClientPlatform::local() {
+            ClientPlatform::MacOs => "Cmd-Shift-Click to open",
+            ClientPlatform::Linux => "Ctrl-Shift-Click to open",
+            ClientPlatform::Unknown => "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)",
+        };
+        assert_eq!(
+            parse_clients(&local, "%1").unwrap()[0].osc8,
+            HyperlinkCapability::Confirmed {
+                open_hint: expected
+            }
+        );
+    }
+
+    #[test]
+    fn multiple_clients_hide_the_hint_only_for_sessions_containing_the_pane() {
+        let local = client("%1 ", "xterm-ghostty", "");
+        let remote = local.replace("\t42\n", "\t43\n");
+        for output in [local.clone() + &remote, remote.clone() + &local] {
+            let clients = super::parse_clients(&output, "%1", |pid| Some(pid == 43)).unwrap();
+            assert_eq!(
+                Environment::from_pairs(&[])
+                    .with_clients(clients)
+                    .capabilities()
+                    .osc8,
+                HyperlinkCapability::ConfirmedButUnhintable
+            );
+        }
+        // A remote client in a different session must not affect this pane.
+        let output = local + &remote.replace("%1 ", "%2 ");
+        let clients = super::parse_clients(&output, "%1", |pid| {
+            assert_eq!(pid, 42);
+            Some(false)
+        })
+        .unwrap();
+        assert_eq!(
+            Environment::from_pairs(&[])
+                .with_clients(clients)
+                .capabilities()
+                .osc8,
+            HyperlinkCapability::Confirmed {
+                open_hint: LOCAL_GHOSTTY_HINT
+            }
+        );
+    }
+
+    #[test]
+    fn unreadable_client_environment_cannot_establish_a_local_platform() {
+        let local = client("%1 ", "xterm-ghostty", "");
+        let clients = super::parse_clients(&local, "%1", |_| None).unwrap();
+        assert_eq!(
+            Environment::from_pairs(&[])
+                .with_clients(clients)
+                .capabilities()
+                .osc8,
+            HyperlinkCapability::Confirmed {
+                open_hint: "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)"
+            }
+        );
     }
 
     #[test]
     fn osc8_requires_both_outer_support_and_tmux_forwarding_for_every_client() {
         let supported = client("%1 ", "xterm-ghostty", "");
-        assert!(parse_clients(&supported, "%1").unwrap()[0].osc8);
+        assert!(matches!(
+            parse_clients(&supported, "%1").unwrap()[0].osc8,
+            HyperlinkCapability::Confirmed { .. }
+        ));
         let disabled = supported.replace("hyperlinks", "RGB,clipboard");
-        assert!(!parse_clients(&disabled, "%1").unwrap()[0].osc8);
+        assert_eq!(
+            parse_clients(&disabled, "%1").unwrap()[0].osc8,
+            HyperlinkCapability::Unconfirmed
+        );
         let unknown = client("%1 ", "xterm-256color", "");
-        assert!(!parse_clients(&unknown, "%1").unwrap()[0].osc8);
+        assert_eq!(
+            parse_clients(&unknown, "%1").unwrap()[0].osc8,
+            HyperlinkCapability::Unconfirmed
+        );
         let mixed = parse_clients(&(supported.clone() + &disabled), "%1").unwrap();
-        assert!(
-            !Environment::from_pairs(&[])
+        assert_eq!(
+            Environment::from_pairs(&[])
                 .with_clients(mixed)
                 .capabilities()
-                .osc8
+                .osc8,
+            HyperlinkCapability::Unconfirmed
         );
         let modern = parse_clients(&(supported.clone() + &supported), "%1").unwrap();
-        assert!(
+        assert_eq!(
             Environment::from_pairs(&[])
                 .with_clients(modern)
                 .capabilities()
-                .osc8
+                .osc8,
+            HyperlinkCapability::ConfirmedButUnhintable
         );
     }
 
@@ -161,12 +276,16 @@ mod tests {
             parse_clients(&output, "%1"),
             Some(vec![
                 Capabilities {
-                    osc8: true,
+                    osc8: HyperlinkCapability::Confirmed {
+                        open_hint: LOCAL_GHOSTTY_HINT
+                    },
                     nerd_font: true,
                     symbols_for_legacy_computing: true
                 },
                 Capabilities {
-                    osc8: true,
+                    osc8: HyperlinkCapability::Confirmed {
+                        open_hint: "Shift-Click to open"
+                    },
                     nerd_font: true,
                     symbols_for_legacy_computing: false
                 },
@@ -188,31 +307,85 @@ mod tests {
 
     #[test]
     fn unidentified_clients_use_their_own_markers() {
-        let output = "0\t%1 \txterm-256color\t\t\t\t\t7600\t\t\t\t\thyperlinks\n";
-        assert_eq!(
-            parse_clients(output, "%1"),
-            Some(vec![Capabilities {
-                osc8: true,
+        for (name, value, hint, legacy) in [
+            (
+                "KITTY_WINDOW_ID",
+                "1",
+                Some("Ctrl-Shift-Click to open"),
+                true,
+            ),
+            ("WT_SESSION", "session", Some("Ctrl-Click to open"), true),
+            ("VTE_VERSION", "7600", Some("Ctrl-Click to open"), true),
+            ("VTE_VERSION", "4999", None, true),
+            ("KONSOLE_DBUS_SESSION", "/Sessions/1", None, true),
+            ("GNOME_TERMINAL_SCREEN", "/screen/1", None, true),
+            ("TERMINATOR_UUID", "session", None, true),
+            ("COLORTERM", "xfce4-terminal", None, true),
+            ("COLORTERM", "truecolor", None, false),
+        ] {
+            let expected = Capabilities {
+                osc8: hint.map_or(HyperlinkCapability::Unconfirmed, |open_hint| {
+                    HyperlinkCapability::Confirmed { open_hint }
+                }),
                 nerd_font: false,
-                symbols_for_legacy_computing: true,
-            }])
-        );
+                symbols_for_legacy_computing: legacy,
+            };
+            let environment = [(name, value)];
+            let output = client_with_environment("%1 ", "xterm-256color", &environment);
+            assert_eq!(parse_clients(&output, "%1"), Some(vec![expected]), "{name}");
+            assert_eq!(
+                Environment::from_pairs(&environment).capabilities(),
+                expected,
+                "local: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn client_format_queries_shared_markers_in_parser_order() {
+        let format = client_format();
+        let fields: Vec<_> = format.split('\t').collect();
+        assert_eq!(fields.len(), 7 + MARKERS.len());
+        assert_eq!(fields[4], "#{I/e:TERM_PROGRAM}");
+        for (index, marker) in MARKERS.iter().enumerate() {
+            assert_eq!(fields[5 + index], format!("#{{I/e:{}}}", marker.name));
+        }
+        assert_eq!(fields[5 + MARKERS.len()], "#{client_termfeatures}");
+        assert_eq!(fields[6 + MARKERS.len()], "#{client_pid}");
     }
 
     #[test]
     fn version_reports_identify_live_clients_without_client_environment_support() {
-        for (report, nerd, legacy) in [
-            ("WezTerm 20240203-110809-5046fc22", true, false),
-            ("ghostty 1.0.1", true, true),
-            ("foot(1.18.0)", false, true),
-            ("unknown 1.0", false, false),
-            ("NotWezTerm 1.0", false, false),
+        for (report, nerd, legacy, hint) in [
+            (
+                "WezTerm 20240203-110809-5046fc22",
+                true,
+                false,
+                "Shift-Click to open",
+            ),
+            ("ghostty 1.0.1", true, true, LOCAL_GHOSTTY_HINT),
+            (
+                "foot(1.18.0)",
+                false,
+                true,
+                "Ctrl-Shift-O, then type the link label to open",
+            ),
+            ("unknown 1.0", false, false, ""),
+            ("NotWezTerm 1.0", false, false, ""),
         ] {
-            let output = format!("0\t%1 \txterm-256color\t{report}\t\t\t\t\t\t\t\t\thyperlinks\n");
+            let output = client("%1 ", "xterm-256color", "").replacen(
+                "xterm-256color\t",
+                &format!("xterm-256color\t{report}"),
+                1,
+            );
             assert_eq!(
                 parse_clients(&output, "%1"),
                 Some(vec![Capabilities {
-                    osc8: legacy || nerd,
+                    osc8: if legacy || nerd {
+                        HyperlinkCapability::Confirmed { open_hint: hint }
+                    } else {
+                        HyperlinkCapability::Unconfirmed
+                    },
                     nerd_font: nerd,
                     symbols_for_legacy_computing: legacy,
                 }]),

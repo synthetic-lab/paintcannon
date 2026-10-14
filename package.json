@@ -33,6 +33,8 @@
     "demo:emoji-chat": "npm run demo:emoji-width --workspace paintcannon-react --",
     "demo:detach": "npm run demo:detach --workspace paintcannon",
     "demo:keyboard": "npm run demo:keyboard --workspace paintcannon",
+    "demo:links-edges": "npm run demo:links-edges --workspace paintcannon",
+    "demo:links-edges:fallback": "npm run demo:links-edges:fallback --workspace paintcannon",
     "demo:images": "npm run demo:images --workspace paintcannon",
     "demo:intersection-observer": "npm run demo:intersection-observer --workspace paintcannon",
     "demo:input": "npm run demo:input --workspace paintcannon",
