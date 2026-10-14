@@ -108,32 +108,47 @@ pub(crate) fn paint_arena_with_options(
     output.frame.hyperlinks = arena.hyperlinks();
     output.frame.powerline_extended = options.powerline_extended;
     output.frame.legacy_symbols = options.legacy_symbols;
-    {
-        let mut painter = Painter {
-            arena,
-            options,
-            capture_hidden_selection_units,
-            output: &mut output,
-        };
-        painter.paint_stacking_context(
-            root,
-            PaintState {
-                parent_x: 0,
-                parent_y: 0,
-                background: Background::Default,
-                selection_background: None,
-                foreground: Background::Default,
-                bold: false,
-                italic: false,
-                underline: false,
-                strikethrough: false,
-                hyperlink: None,
-                visible: true,
-                clip: ClipBounds::unbounded(),
-            },
-        );
-    }
+    paint_arena_into(
+        arena,
+        root,
+        &mut output,
+        capture_hidden_selection_units,
+        options,
+    );
     output
+}
+
+/// Paint another layout tree over an existing frame, without changing its backdrop.
+pub(crate) fn paint_arena_into(
+    arena: &LayoutArena,
+    root: NodeId,
+    output: &mut PaintOutput,
+    capture_hidden_selection_units: bool,
+    options: PaintOptions<'_>,
+) {
+    let mut painter = Painter {
+        arena,
+        options,
+        capture_hidden_selection_units,
+        output,
+    };
+    painter.paint_stacking_context(
+        root,
+        PaintState {
+            parent_x: 0,
+            parent_y: 0,
+            background: Background::Default,
+            selection_background: None,
+            foreground: Background::Default,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikethrough: false,
+            hyperlink: None,
+            visible: true,
+            clip: ClipBounds::unbounded(),
+        },
+    );
 }
 
 struct Painter<'a, 'out> {

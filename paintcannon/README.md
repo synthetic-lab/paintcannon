@@ -43,6 +43,7 @@ PaintCannon also exposes terminal-specific border styles:
 - `chunky-rounded`
 - `chunky`
 - `chunky-best-effort`
+- `pill`
 - `ascii`
 
 Positioned elements support `position: static | relative | absolute`, the `top`, `right`,
@@ -131,9 +132,22 @@ Capabilities are checked every two seconds; changing attached clients updates
 both link rendering and fallback layout automatically.
 
 Opening a link uses your terminal's gesture, commonly Ctrl-click or Cmd-click.
-This also applies with mouse capture enabled. PaintCannon does not launch a
-browser process itself. Its ordinary click events still bubble, but
+With mouse capture enabled, Shift may also be required to let the terminal
+handle the click. PaintCannon does not launch a browser process itself. Its ordinary click events still bubble, but
 `preventDefault()` cannot cancel a gesture handled by the terminal emulator.
+
+With `captureMouse: true`, hovering a native link automatically shows
+`Ctrl-Shift-Click to open`. The tooltip appears above the link, or below it when
+there is no room above, and wraps in narrow terminals. It lives in a private
+PaintCannon layer, above every application `zIndex` and outside application
+clipping. It does not participate in app hit testing or text selection.
+Opening gestures remain terminal-specific; for example, macOS terminals often
+use Cmd instead of Ctrl.
+
+Tooltips use the `pill` border style: Powerline Extended rounded caps when
+supported, filled square ends otherwise. Both styles take the same space, and
+font capability changes repaint automatically. Text-fallback links do not show
+this native-link hint.
 
 Run `npm run demo:links --workspace paintcannon` from the repository root.
 Press `q` or Ctrl-C to exit.
@@ -376,6 +390,22 @@ it does not change layout. `npm run demo:borders` shows both styles.
 `chunky-best-effort` chooses rounded legacy corners first, Powerline Extended
 triangles second, and filled square corners last. It uses the same one-cell
 border layout in all three cases. The borders demo also shows this style.
+
+`pill` adds only a one-cell left and right border, so a one-line label stays one
+row tall. It uses the Powerline Extended left/right semicircles (U+E0B6/U+E0B4),
+or filled square cells when unsupported. For a solid pill, set `borderColor`
+to match `backgroundColor`:
+
+```ts
+button.style.border = "pill";
+button.style.borderColor = "#38bdf8";
+button.style.backgroundColor = "#38bdf8";
+button.style.color = "black";
+```
+
+`borderLeft` and `borderRight` can also use `pill` independently. `pill` on
+`borderTop` or `borderBottom` reserves no space and draws no border. Wrapped
+content keeps the same side caps on each row.
 
 ### Symbols for Legacy Computing
 

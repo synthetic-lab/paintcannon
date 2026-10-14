@@ -10,8 +10,8 @@ use taffy::{
 
 use crate::line_break::LineBreakPlan;
 use crate::style::{
-    BorderStyle, CssDimension, CssLengthPercentageAuto, CssOverflowAnchor, CssOverflowWrap,
-    CssPosition, CssWhiteSpace, CssWordBreak, CssZIndex, DivStyle, LayoutDisplay, LayoutOverflow,
+    CssDimension, CssLengthPercentageAuto, CssOverflowAnchor, CssOverflowWrap, CssPosition,
+    CssWhiteSpace, CssWordBreak, CssZIndex, DivStyle, LayoutDisplay, LayoutOverflow,
     ScrollbarGutter,
 };
 use crate::text::{
@@ -3732,16 +3732,8 @@ fn explicit_content_width_cells(style: &DivStyle) -> Option<u32> {
 
 fn border_size_cells(style: &DivStyle) -> Size<f32> {
     Size {
-        width: border_edge_cells(style.border_left) + border_edge_cells(style.border_right),
-        height: border_edge_cells(style.border_top) + border_edge_cells(style.border_bottom),
-    }
-}
-
-fn border_edge_cells(style: BorderStyle) -> f32 {
-    if style == BorderStyle::None {
-        0.0
-    } else {
-        1.0
+        width: style.border_left.width() + style.border_right.width(),
+        height: style.border_top.height() + style.border_bottom.height(),
     }
 }
 

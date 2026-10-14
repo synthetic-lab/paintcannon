@@ -181,6 +181,24 @@ impl Frame {
         self.height
     }
 
+    /// The visible fragment under the pointer, not the link's unclipped layout box.
+    pub(crate) fn hyperlink_region_at(&self, x: u32, y: u32) -> Option<ClipRect> {
+        let x = i32::try_from(x).ok()?;
+        let y = i32::try_from(y).ok()?;
+        let index = self.cell_index(x, y)?;
+        let link = self.cells[index].hyperlink?;
+        let row = &self.cells[y as usize * self.width..(y as usize + 1) * self.width];
+        let mut left = x as usize;
+        let mut right = left + 1;
+        while left > 0 && row[left - 1].hyperlink == Some(link) {
+            left -= 1;
+        }
+        while right < row.len() && row[right].hyperlink == Some(link) {
+            right += 1;
+        }
+        Some(ClipRect::new(left as i32, y, (right - left) as i32, 1))
+    }
+
     pub(crate) fn layer(&self) -> Self {
         let mut layer = self.clone();
         layer.painted.fill(false);
@@ -288,6 +306,15 @@ impl Frame {
         for row in bounds.top as usize..bounds.bottom as usize {
             let start = row * self.width;
             for col in bounds.left as usize..bounds.right as usize {
+                if self.powerline_extended
+                    && box_style.is_some_and(|style| {
+                        (col as i32 == rect.left && style.border_left == BorderStyle::Pill)
+                            || (col as i32 == rect.right - 1
+                                && style.border_right == BorderStyle::Pill)
+                    })
+                {
+                    continue;
+                }
                 if chunky_style.is_some_and(|style| {
                     is_shaped_corner(rect, style, col as i32, row as i32, shaped)
                 }) {
@@ -481,7 +508,7 @@ impl Frame {
         let top = rect.top;
         let bottom = rect.bottom - 1;
 
-        if style.border_top != BorderStyle::None {
+        if style.border_top.height() > 0.0 {
             for x in left..=right {
                 self.write_border_cell(
                     x,
@@ -501,7 +528,7 @@ impl Frame {
             }
         }
 
-        if style.border_bottom != BorderStyle::None && bottom != top {
+        if style.border_bottom.height() > 0.0 && bottom != top {
             for x in left..=right {
                 self.write_border_cell(
                     x,
@@ -522,12 +549,12 @@ impl Frame {
         }
 
         if style.border_left != BorderStyle::None {
-            let start = if style.border_top == BorderStyle::None {
+            let start = if style.border_top.height() == 0.0 {
                 top
             } else {
                 top + 1
             };
-            let end = if style.border_bottom == BorderStyle::None {
+            let end = if style.border_bottom.height() == 0.0 {
                 bottom
             } else {
                 bottom - 1
@@ -536,7 +563,11 @@ impl Frame {
                 self.write_border_cell(
                     left,
                     y,
-                    border_glyphs(style.border_left).vertical,
+                    if style.border_left == BorderStyle::Pill {
+                        '\u{e0b6}'
+                    } else {
+                        border_glyphs(style.border_left).vertical
+                    },
                     border_color,
                     selection_background,
                     clip,
@@ -545,12 +576,12 @@ impl Frame {
         }
 
         if style.border_right != BorderStyle::None && right != left {
-            let start = if style.border_top == BorderStyle::None {
+            let start = if style.border_top.height() == 0.0 {
                 top
             } else {
                 top + 1
             };
-            let end = if style.border_bottom == BorderStyle::None {
+            let end = if style.border_bottom.height() == 0.0 {
                 bottom
             } else {
                 bottom - 1
@@ -559,7 +590,11 @@ impl Frame {
                 self.write_border_cell(
                     right,
                     y,
-                    border_glyphs(style.border_right).vertical,
+                    if style.border_right == BorderStyle::Pill {
+                        '\u{e0b4}'
+                    } else {
+                        border_glyphs(style.border_right).vertical
+                    },
                     border_color,
                     selection_background,
                     clip,
@@ -897,7 +932,10 @@ impl Frame {
         clip: ClipBounds,
     ) {
         let character = if (!self.powerline_extended
-            && matches!(character, '\u{e0b8}' | '\u{e0ba}' | '\u{e0bc}' | '\u{e0be}'))
+            && matches!(
+                character,
+                '\u{e0b4}' | '\u{e0b6}' | '\u{e0b8}' | '\u{e0ba}' | '\u{e0bc}' | '\u{e0be}'
+            ))
             || (!self.legacy_symbols && matches!(character, '🭁' | '🭌' | '🭒' | '🭝'))
         {
             '█'
@@ -912,6 +950,8 @@ impl Frame {
         }
 
         self.grapheme_suffixes.remove(&index);
+        self.cells[index].background = visual_background(self.cells[index]);
+        self.cells[index].reversed = false;
         self.cells[index].character = character;
         self.cells[index].foreground = foreground;
         self.cells[index].selection_order = None;
@@ -1023,7 +1063,16 @@ fn composite_cell(
 fn foreground_glyph_fills_cell(character: char) -> bool {
     matches!(
         character,
-        '█' | '🭁' | '🭌' | '🭒' | '🭝' | '\u{e0b8}' | '\u{e0ba}' | '\u{e0bc}' | '\u{e0be}'
+        '█' | '🭁'
+            | '🭌'
+            | '🭒'
+            | '🭝'
+            | '\u{e0b4}'
+            | '\u{e0b6}'
+            | '\u{e0b8}'
+            | '\u{e0ba}'
+            | '\u{e0bc}'
+            | '\u{e0be}'
     )
 }
 
@@ -1144,9 +1193,9 @@ fn min_option(a: Option<i32>, b: Option<i32>) -> Option<i32> {
 }
 
 fn has_border(style: &DivStyle) -> bool {
-    style.border_top != BorderStyle::None
+    style.border_top.height() > 0.0
         || style.border_right != BorderStyle::None
-        || style.border_bottom != BorderStyle::None
+        || style.border_bottom.height() > 0.0
         || style.border_left != BorderStyle::None
 }
 
@@ -1249,6 +1298,14 @@ fn border_glyphs(style: BorderStyle) -> BorderGlyphs {
             bottom_left: '\u{e0be}',
             bottom_right: '\u{e0bc}',
         },
+        BorderStyle::Pill => BorderGlyphs {
+            horizontal: '█',
+            vertical: '█',
+            top_left: '\u{e0b6}',
+            top_right: '\u{e0b4}',
+            bottom_left: '\u{e0b6}',
+            bottom_right: '\u{e0b4}',
+        },
         BorderStyle::Ascii => BorderGlyphs {
             horizontal: '-',
             vertical: '|',
@@ -1268,9 +1325,9 @@ fn border_char_at(
     at_bottom: bool,
     legacy_symbols: bool,
 ) -> char {
-    let border_top = at_top && style.border_top != BorderStyle::None;
+    let border_top = at_top && style.border_top.height() > 0.0;
     let border_right = at_right && style.border_right != BorderStyle::None;
-    let border_bottom = at_bottom && style.border_bottom != BorderStyle::None;
+    let border_bottom = at_bottom && style.border_bottom.height() > 0.0;
     let border_left = at_left && style.border_left != BorderStyle::None;
     let corner_style = if border_top {
         style.border_top
@@ -1618,6 +1675,39 @@ mod tests {
         assert_eq!(frame.cell(3, 2).unwrap().character, '┘');
         assert_eq!(frame.cell(1, 0).unwrap().character, '─');
         assert_eq!(frame.cell(0, 1).unwrap().character, '│');
+    }
+
+    #[test]
+    fn pill_caps_use_the_visible_backdrop_even_over_selected_text() {
+        let mut frame = Frame::new(5, 1, false);
+        frame.powerline_extended = true;
+        let clip = ClipBounds::unbounded();
+        frame.write_glyph(
+            0,
+            0,
+            'x',
+            1,
+            GlyphStyle {
+                foreground: Background::White,
+                background: Background::Blue,
+                ..Default::default()
+            },
+            clip,
+        );
+        frame.set_reversed(0, 0, true, clip);
+        let style = DivStyle {
+            border_left: BorderStyle::Pill,
+            border_right: BorderStyle::Pill,
+            ..Default::default()
+        };
+        let rect = ClipRect::new(0, 0, 5, 1);
+        frame.fill_box_background(rect, &style, Background::Green, None, clip);
+        frame.stroke_border(rect, &style, Background::Green, None, clip);
+        let cap = frame.cell(0, 0).unwrap();
+        assert_eq!(cap.character, '\u{e0b6}');
+        assert_eq!(cap.foreground, Background::Green);
+        assert_eq!(cap.background, Background::White);
+        assert!(!cap.reversed);
     }
 
     #[test]

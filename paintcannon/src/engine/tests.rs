@@ -2241,3 +2241,392 @@ fn removing_last_inline_child_clears_old_fragments_without_an_anchor() {
         ' '
     );
 }
+
+fn link_tooltip_scene() -> (PaintEngine, DomId) {
+    let mut engine = PaintEngine::new();
+    engine.set_hyperlinks_supported(true);
+    // Avoid terminal pointer-shape writes from these frame-only tests.
+    engine.current_pointer_shape = Some("default");
+    let root = engine.create_element(block_style(
+        CssDimension::Length(40.0),
+        CssDimension::Length(8.0),
+    ));
+    engine.set_root(root);
+    let banner = engine.create_element(DivStyle {
+        position: CssPosition::Absolute,
+        top: CssLengthPercentageAuto::Length(1.0),
+        left: CssLengthPercentageAuto::Length(0.0),
+        width: CssDimension::Length(40.0),
+        height: CssDimension::Length(1.0),
+        z_index: CssZIndex::Integer(i32::MAX),
+        background: Background::Red,
+        ..Default::default()
+    });
+    let banner_text = engine.create_text("!".repeat(40));
+    engine.append_child(banner, banner_text);
+    engine.append_child(root, banner);
+    let clipped = engine.create_element(DivStyle {
+        position: CssPosition::Absolute,
+        top: CssLengthPercentageAuto::Length(2.0),
+        left: CssLengthPercentageAuto::Length(4.0),
+        width: CssDimension::Length(12.0),
+        height: CssDimension::Length(1.0),
+        overflow_x: LayoutOverflow::Hidden,
+        overflow_y: LayoutOverflow::Hidden,
+        ..Default::default()
+    });
+    let anchor = engine.create_element(DivStyle {
+        display: LayoutDisplay::Inline,
+        ..Default::default()
+    });
+    engine.set_anchor_href(anchor, "https://example.com".into());
+    let text = engine.create_text("example");
+    engine.append_child(anchor, text);
+    engine.append_child(clipped, anchor);
+    engine.append_child(root, clipped);
+    (engine, anchor)
+}
+
+fn frame_row(frame: &Frame, row: usize) -> String {
+    (0..frame.width())
+        .map(|x| frame.cell(x, row).unwrap().character)
+        .collect()
+}
+
+#[test]
+fn link_tooltip_is_above_app_stacking_and_clipping_without_app_relayout() {
+    let (mut engine, anchor) = link_tooltip_scene();
+    engine
+        .flush_frame_to(40, 8, &mut Vec::new(), TermProfile::TrueColor, false)
+        .unwrap();
+    let initial = engine.previous_frame.clone().unwrap();
+    assert_eq!(initial.cell(4, 2).unwrap().character, 'e');
+    assert_eq!(initial.cell(5, 1).unwrap().character, '!');
+    let banner_target = engine.target_at(5, 1);
+    let passes = engine.layout_passes();
+
+    engine.handle_pointer_move(4, 2);
+    let hovered = engine.render_frame(40, 8).unwrap();
+    assert!(frame_row(&hovered, 1).contains("Ctrl-Shift-Click to open"));
+    assert_eq!(engine.dirtiness, Dirtiness::Paint);
+    assert_eq!(engine.layout_passes(), passes);
+    assert_eq!(hovered.cell(5, 1).unwrap().hyperlink, None);
+    assert_eq!(
+        hovered.cell(4, 2).unwrap().hyperlink,
+        engine.node_for(anchor)
+    );
+    // The renderer-owned layer must not enter app selection or hit testing.
+    assert_eq!(engine.current_frame.as_ref().unwrap(), &initial);
+    assert_eq!(engine.target_at(5, 1), banner_target);
+
+    engine.handle_pointer_move(35, 7);
+    let unhovered = engine.render_frame(40, 8).unwrap();
+    assert_eq!(unhovered, initial);
+    assert_eq!(engine.layout_passes(), passes);
+}
+
+#[test]
+fn link_tooltip_caps_follow_live_font_support_and_preserve_the_backdrop() {
+    let (mut engine, _) = link_tooltip_scene();
+    engine.render_frame(40, 8).unwrap();
+    engine.handle_pointer_move(4, 2);
+    let square = engine.render_frame(40, 8).unwrap();
+    assert!(frame_row(&square, 1).contains("Ctrl-Shift-Click to open"));
+    assert_eq!(square.cell(4, 1).unwrap().character, '\u{2588}');
+    assert_eq!(
+        square.cell(4, 1).unwrap().background,
+        square.cell(5, 1).unwrap().background
+    );
+
+    let passes = engine.layout_passes();
+    engine.set_powerline_extended(true);
+    let pill = engine.render_frame(40, 8).unwrap();
+    let left = pill.cell(4, 1).unwrap();
+    let right = pill.cell(29, 1).unwrap();
+    assert_eq!(left.character, '\u{e0b6}');
+    assert_eq!(right.character, '\u{e0b4}');
+    assert_eq!(left.foreground, pill.cell(5, 1).unwrap().background);
+    assert_eq!(left.background, Background::Red);
+    assert_eq!(right.background, Background::Red);
+    assert_eq!(engine.layout_passes(), passes);
+
+    engine.set_powerline_extended(false);
+    assert_eq!(engine.render_frame(40, 8).unwrap(), square);
+}
+
+#[test]
+fn link_tooltip_hides_on_blur_and_href_removal() {
+    let (mut engine, anchor) = link_tooltip_scene();
+    engine.render_frame(40, 8).unwrap();
+    engine.handle_pointer_move(4, 2);
+    assert!(frame_row(&engine.render_frame(40, 8).unwrap(), 1).contains("Ctrl-Shift-Click"));
+    engine.set_terminal_focused(false);
+    assert_eq!(
+        engine
+            .render_frame(40, 8)
+            .unwrap()
+            .cell(5, 1)
+            .unwrap()
+            .character,
+        '!'
+    );
+    engine.set_terminal_focused(true);
+    assert!(frame_row(&engine.render_frame(40, 8).unwrap(), 1).contains("Ctrl-Shift-Click"));
+    engine.set_anchor_href(anchor, String::new());
+    assert_eq!(
+        engine
+            .render_frame(40, 8)
+            .unwrap()
+            .cell(5, 1)
+            .unwrap()
+            .character,
+        '!'
+    );
+}
+
+#[test]
+fn pill_border_reserves_only_side_cells_and_updates_without_relayout() {
+    let mut engine = PaintEngine::new();
+    let mut style = DivStyle {
+        width: CssDimension::Length(7.0),
+        color: Background::White,
+        background: Background::Green,
+        border_color: Background::Green,
+        ..Default::default()
+    };
+    apply_style_mutation(
+        &mut style,
+        StyleMutation::Border(crate::style::parse_border_style("pill").unwrap()),
+    );
+    let pill = engine.create_element(style);
+    let label = engine.create_text("hello");
+    engine.append_child(pill, label);
+    engine.set_root(pill);
+    let square = engine.render_frame(7, 3).unwrap();
+    assert_eq!(frame_row(&square, 0), "\u{2588}hello\u{2588}");
+    assert_eq!(frame_row(&square, 1), "       ");
+    let layout = engine.arena.layout(engine.node_for(pill).unwrap());
+    assert_eq!(layout.size.height, 1.0);
+    assert_eq!((layout.border.left, layout.border.right), (1.0, 1.0));
+    assert_eq!((layout.border.top, layout.border.bottom), (0.0, 0.0));
+    let metrics = engine.scroll_metrics(pill).unwrap();
+    assert_eq!((metrics.client_width, metrics.client_height), (5, 1));
+
+    let passes = engine.layout_passes();
+    engine.set_powerline_extended(true);
+    let rounded = engine.render_frame(7, 3).unwrap();
+    assert_eq!(frame_row(&rounded, 0), "\u{e0b6}hello\u{e0b4}");
+    assert_eq!(engine.layout_passes(), passes);
+}
+
+#[test]
+fn pill_border_supports_individual_sides_and_wrapped_content() {
+    for (left, right, expected) in [
+        (true, false, "\u{e0b6}hello"),
+        (false, true, "hello\u{e0b4}"),
+        (false, false, "hello"),
+    ] {
+        let mut engine = PaintEngine::new();
+        engine.set_powerline_extended(true);
+        let pill = engine.create_element(DivStyle {
+            border_top: BorderStyle::Pill,
+            border_bottom: BorderStyle::Pill,
+            border_left: if left {
+                BorderStyle::Pill
+            } else {
+                BorderStyle::None
+            },
+            border_right: if right {
+                BorderStyle::Pill
+            } else {
+                BorderStyle::None
+            },
+            width: CssDimension::Length(expected.chars().count() as f32),
+            ..Default::default()
+        });
+        let text = engine.create_text("hello world");
+        engine.append_child(pill, text);
+        engine.set_root(pill);
+        let frame = engine.render_frame(expected.chars().count(), 3).unwrap();
+        assert_eq!(frame_row(&frame, 0), expected);
+        assert_eq!(frame_row(&frame, 1), expected.replace("hello", "world"));
+        assert_eq!(
+            engine
+                .arena
+                .layout(engine.node_for(pill).unwrap())
+                .size
+                .height,
+            2.0
+        );
+    }
+}
+
+#[test]
+fn link_tooltip_is_scheduled_by_hover_and_restored_by_the_frame_diff() {
+    let (mut engine, _) = link_tooltip_scene();
+    let now = Instant::now();
+    engine
+        .flush_if_dirty_to(40, 8, &mut Vec::new(), TermProfile::TrueColor, false, now)
+        .unwrap();
+    let initial = engine.previous_frame.clone().unwrap();
+    engine.handle_pointer_move(4, 2);
+    let mut bytes = Vec::new();
+    assert!(engine
+        .flush_if_dirty_to(40, 8, &mut bytes, TermProfile::TrueColor, false, now)
+        .unwrap());
+    assert!(String::from_utf8(bytes)
+        .unwrap()
+        .contains("Ctrl-Shift-Click to open"));
+    engine.handle_pointer_move(6, 2);
+    assert!(
+        !engine
+            .flush_if_dirty_to(40, 8, &mut Vec::new(), TermProfile::TrueColor, false, now)
+            .unwrap(),
+        "movement inside one link fragment is not a new frame"
+    );
+
+    engine.handle_pointer_move(35, 7);
+    let mut bytes = Vec::new();
+    assert!(engine
+        .flush_if_dirty_to(40, 8, &mut bytes, TermProfile::TrueColor, false, now)
+        .unwrap());
+    assert!(
+        !bytes.is_empty(),
+        "mouse-out must erase the old tooltip via the normal diff"
+    );
+    assert_eq!(engine.previous_frame.as_ref(), Some(&initial));
+}
+
+#[test]
+fn link_tooltip_uses_visible_link_cells_not_covered_or_fallback_links() {
+    let (mut engine, anchor) = link_tooltip_scene();
+    engine.render_frame(40, 8).unwrap();
+    engine.handle_pointer_move(4, 2);
+    assert!(frame_row(&engine.render_frame(40, 8).unwrap(), 1).contains("Ctrl-Shift-Click"));
+
+    let cover = engine.create_element(DivStyle {
+        position: CssPosition::Absolute,
+        left: CssLengthPercentageAuto::Length(4.0),
+        top: CssLengthPercentageAuto::Length(2.0),
+        width: CssDimension::Length(12.0),
+        height: CssDimension::Length(1.0),
+        background: Background::Blue,
+        z_index: CssZIndex::Integer(i32::MAX),
+        ..Default::default()
+    });
+    engine.append_child(engine.root.unwrap(), cover);
+    assert_eq!(
+        engine
+            .render_frame(40, 8)
+            .unwrap()
+            .cell(5, 1)
+            .unwrap()
+            .character,
+        '!'
+    );
+    engine.destroy_node(cover);
+    assert!(frame_row(&engine.render_frame(40, 8).unwrap(), 1).contains("Ctrl-Shift-Click"));
+
+    engine.set_hyperlinks_supported(false);
+    assert_eq!(
+        engine
+            .render_frame(40, 8)
+            .unwrap()
+            .cell(5, 1)
+            .unwrap()
+            .character,
+        '!'
+    );
+    engine.set_hyperlinks_supported(true);
+    assert!(frame_row(&engine.render_frame(40, 8).unwrap(), 1).contains("Ctrl-Shift-Click"));
+    engine.destroy_node(anchor);
+    assert_eq!(
+        engine
+            .render_frame(40, 8)
+            .unwrap()
+            .cell(5, 1)
+            .unwrap()
+            .character,
+        '!'
+    );
+}
+
+#[test]
+fn link_tooltip_reacts_to_scrolling_under_a_stationary_pointer_without_relayout() {
+    let mut engine = PaintEngine::new();
+    engine.current_pointer_shape = Some("default");
+    engine.set_hyperlinks_supported(true);
+    let root = engine.create_element(DivStyle {
+        width: CssDimension::Length(40.0),
+        height: CssDimension::Length(3.0),
+        overflow_y: LayoutOverflow::Scroll,
+        ..Default::default()
+    });
+    let anchor = engine.create_element(DivStyle::default());
+    engine.set_anchor_href(anchor, "https://example.com".into());
+    let label = engine.create_text("link");
+    engine.append_child(anchor, label);
+    engine.append_child(root, anchor);
+    for _ in 0..8 {
+        let line = engine.create_element(DivStyle::default());
+        let text = engine.create_text("plain");
+        engine.append_child(line, text);
+        engine.append_child(root, line);
+    }
+    engine.set_root(root);
+    engine.render_frame(40, 6).unwrap();
+    engine.handle_pointer_move(0, 0);
+    assert!(frame_row(&engine.render_frame(40, 6).unwrap(), 1).contains("Ctrl-Shift-Click"));
+    let passes = engine.layout_passes();
+    engine.set_scroll_offset(root, 0, 1);
+    let scrolled = engine.render_frame(40, 6).unwrap();
+    assert!(frame_row(&scrolled, 1).starts_with("plain"));
+    assert!(!frame_row(&scrolled, 1).contains("Ctrl-Shift-Click"));
+    assert_eq!(engine.layout_passes(), passes);
+}
+
+#[test]
+fn link_tooltip_fits_viewport_edges_and_wraps_without_covering_its_link() {
+    for (width, height, x, y) in [(40, 8, 39, 2), (12, 8, 0, 0), (12, 8, 11, 7)] {
+        let mut engine = PaintEngine::new();
+        engine.current_pointer_shape = Some("default");
+        engine.set_hyperlinks_supported(true);
+        let root = engine.create_element(block_style(
+            CssDimension::Percent(1.0),
+            CssDimension::Percent(1.0),
+        ));
+        let link = engine.create_element(DivStyle {
+            position: CssPosition::Absolute,
+            left: CssLengthPercentageAuto::Length(x as f32),
+            top: CssLengthPercentageAuto::Length(y as f32),
+            width: CssDimension::Length(1.0),
+            ..Default::default()
+        });
+        let text = engine.create_text("x");
+        engine.set_anchor_href(link, "https://example.com".into());
+        engine.append_child(link, text);
+        engine.append_child(root, link);
+        engine.set_root(root);
+        engine.render_frame(width, height).unwrap();
+        engine.handle_pointer_move(x, y);
+        let hovered = engine.render_frame(width, height).unwrap();
+        let label: String = (0..height)
+            .flat_map(|row| frame_row(&hovered, row).chars().collect::<Vec<_>>())
+            .filter(|c| !c.is_whitespace() && *c != '\u{2588}' && *c != 'x')
+            .collect();
+        assert_eq!(
+            label, "Ctrl-Shift-Clicktoopen",
+            "viewport {width}x{height}, link {x},{y}"
+        );
+        assert_eq!(
+            hovered.cell(x as usize, y as usize).unwrap().hyperlink,
+            engine.node_for(link)
+        );
+        let tooltip_rows: Vec<_> = (0..height)
+            .filter(|&row| frame_row(&hovered, row).contains('\u{2588}'))
+            .collect();
+        assert!(tooltip_rows
+            .iter()
+            .all(|&row| if y == 0 { row > 0 } else { row < y as usize }));
+    }
+}

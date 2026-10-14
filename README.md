@@ -42,6 +42,7 @@ pixel-based borders can't be rendered in terminals:
 - `chunky-rounded`
 - `chunky`
 - `chunky-best-effort` (attempts chunky-rounded, and chunky as a fallback)
+- `pill` (left/right caps only, with Nerd Font rounding and square fallbacks)
 - `ascii`
 
 PaintCannon supports the following HTML elements:
@@ -59,6 +60,8 @@ Links use native OSC 8 hyperlinks in supported terminals and render as
 `[label](URL)` otherwise. Detection checks the outer terminal, including every
 attached tmux client, and updates live as clients change. React exposes the same
 behavior through `<A href="https://example.com">label</A>`.
+With mouse capture enabled, hovering a native link shows a built-in opening hint
+above all application layers. See [link tooltips](paintcannon/README.md#links).
 See [links](paintcannon/README.md#links) for terminal gestures and tmux setup.
 
 And the following DOM events and event handlers, with bubbling,

@@ -97,6 +97,12 @@ instead. The core renderer owns capability detection, wrapping and live tmux
 client changes; React needs no special handling. See [core link support](../paintcannon/README.md#links)
 for tmux setup and limitations.
 
+With mouse capture enabled, native links also get Rust-rendered hover tooltips
+above all application layers, without React event handlers. The hint uses the
+same `border: "pill"` style available on any component: rounded Nerd Font caps
+when supported, square ends otherwise. Pill borders reserve only left/right
+cells; match `borderColor` to `backgroundColor` for a filled pill.
+
 ## Host Components
 
 PaintCannon exposes the following host components that mirror a subset of the
