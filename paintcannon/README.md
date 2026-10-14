@@ -102,76 +102,44 @@ link.appendChild(pc.createTextNode("Documentation"));
 root.appendChild(link);
 ```
 
-`AnchorElement.href` is readable and writable. Setting it to `""` removes the
-link and leaves its children as ordinary content. Anchors inherit text styling,
-support the same style and event APIs as spans, and can use block, flex, or grid
-display too. Use absolute URLs: PaintCannon has no document base URL to resolve
-relative destinations against.
+`AnchorElement.href` is readable and writable. Use absolute URLs: PaintCannon
+has no document base URL to resolve relative destinations against.
 
 In supported terminals, the label is a native OSC 8 hyperlink. Otherwise,
-PaintCannon renders `[Documentation](https://example.com/docs)`. This fallback is
-part of layout, so it wraps, clips, scrolls and copies like other text; it does
-not add children to your DOM. Redirected output also uses the text fallback.
+PaintCannon renders `[Documentation](https://example.com/docs)`. This fallback
+is part of layout, so it wraps, clips, scrolls and copies like other text.
 Spaces, Unicode and control characters in destinations are percent-encoded in
 the rendered URL.
 
-Support is based on the [OSC 8 adoption list](https://github.com/Alhadis/OSC8-Adoption/).
-Unknown terminals use the fallback, as do terminals whose hyperlinks are disabled
-by default (such as Konsole). There is no universal OSC 8 capability query;
-terminal identity cannot reveal every user setting or older emulator version.
-`NERD_FONT` does not affect hyperlinks.
+Support is based on the [OSC 8 adoption
+list](https://github.com/Alhadis/OSC8-Adoption/). Unknown terminals use the
+fallback, as do terminals whose hyperlinks are disabled by default (such as
+Konsole). There is no universal OSC 8 capability query; terminal identity
+cannot reveal every user setting or older emulator version. PaintCannon does
+not launch a browser process itself. Its ordinary click events still bubble,
+but `preventDefault()` cannot cancel a gesture handled by the terminal
+emulator, since the gesture is handled by the emulator itself rather than
+PaintCannon.
 
 Inside tmux, **every attached client viewing the pane's session** must have a
 supported outer terminal and tmux's `hyperlinks` terminal feature enabled.
 tmux 3.4 or newer is required. If tmux has not enabled the feature automatically,
 add `set -as terminal-features 'xterm-ghostty:hyperlinks'` to your tmux configuration
 for Ghostty (use the matching terminal pattern for other emulators). Detach and
-reattach existing clients if the feature is not applied immediately. PaintCannon uses tmux's native
-hyperlink handling, not passthrough, so links survive pane redraws.
-Capabilities are checked every two seconds; changing attached clients updates
-both link rendering and fallback layout automatically.
+reattach existing clients if the feature is not applied immediately.
 
 Opening a link uses your terminal's gesture, commonly Ctrl-click or Cmd-click.
 With mouse capture enabled, Shift may also be required to let the terminal
-handle the click. PaintCannon does not launch a browser process itself. Its ordinary click events still bubble, but
-`preventDefault()` cannot cancel a gesture handled by the terminal emulator.
+handle the click. With `captureMouse: true`, hovering a native link
+automatically shows opening instructions for the detected terminal's default
+link-opening bindings.
 
-With `captureMouse: true`, hovering a native link automatically shows opening
-instructions for the detected terminal's default link-opening bindings. For example,
-Ghostty uses `Ctrl-Shift-Click to open` on Linux and `Cmd-Shift-Click to open` on
-macOS; WezTerm uses `Shift-Click to open` with mouse capture enabled. VTE terminals
-use `Ctrl-Click to open`; foot uses `Ctrl-Shift-O` followed by the link's jump label.
-Custom terminal bindings may differ.
-
-Local clients use the host OS. When the client OS cannot be determined (for
-example, over SSH), hints remain terminal-specific: Ghostty shows
-`Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)`. Terminals with the same
-gesture across platforms keep that gesture.
-
-In tmux, client processes are checked only for SSH, including on versions without
-live client-environment queries. Multiple attached clients keep native links but
-do not show a hint. Each supported terminal has its own opening instructions.
-Capability checks refresh every two seconds, updating an already-visible hint
-without requiring pointer movement or application event handlers.
-
-The tooltip appears above the link, or below it when
-there is no room above, and wraps in narrow terminals. It lives in a private
-PaintCannon layer, above every application `zIndex` and outside application
-clipping. It does not participate in app hit testing or text selection.
-
-Tooltips use the `pill` border style: Powerline Extended rounded caps when
-supported, filled square ends otherwise. Both styles take the same space, and
-font capability changes repaint automatically. Text-fallback links do not show
-this native-link hint.
-
-Run `npm run demo:links --workspace paintcannon` from the repository root.
-Press `q` or Ctrl-C to exit.
-
-`npm run demo:links-edges` places links at every corner, edge midpoint, and the center
-of the terminal. Hover the links and resize the terminal to inspect tooltip placement
-and wrapping. `npm run demo:links-edges:fallback` runs the same demo with square caps
-instead of Nerd Font pill caps. Neither demo overrides terminal hyperlink detection;
-in tmux, use a single attached client to see the hover hints. Press `q` or Ctrl-C to exit.
+Shortcuts can be OS-specific; for example, on Linux a terminal emulator may
+require Ctrl-Shift-Click and on macOS require Command-Shift-Click. Local
+clients detect the host OS and render the OS-specific shortcut. When the client
+OS cannot be determined (for example, over SSH), PaintCannon shows generic
+hints when necessary; for example, we might render: `Ctrl-Shift-Click to open
+(Cmd-Shift-Click on macOS)`.
 
 ## Events
 
