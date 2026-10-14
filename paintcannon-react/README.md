@@ -81,33 +81,6 @@ PaintCannon is also somewhat less restrictive thank Ink: you aren't required to
 wrap text content in `<Text>` nodes. Text content Just Works inside PaintCannon
 components, just like with a regular browser.
 
-## Links
-
-```tsx
-import { A } from "paintcannon-react";
-
-<A href="https://example.com/docs" style={{ textDecorationLine: "underline" }}>
-  Documentation
-</A>;
-```
-
-The terminal opens native OSC 8 links using its usual gesture (often Ctrl-click
-or Cmd-click). Unsupported terminals display `[Documentation](https://example.com/docs)`
-instead. The core renderer owns capability detection, wrapping and live tmux
-client changes; React needs no special handling. See [core link support](../paintcannon/README.md#links)
-for tmux setup and limitations.
-
-With mouse capture enabled, native links also get Rust-rendered hover tooltips
-above all application layers, without React event handlers. The hint uses the
-detected terminal's default opening gesture and updates with live capability
-changes. Unknown client operating systems use terminal-specific alternatives;
-Ghostty shows `Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)`.
-With multiple attached tmux clients, native links remain enabled but no hint is
-shown. The tooltip uses the
-same `border: "pill"` style available on any component: rounded Nerd Font caps
-when supported, square ends otherwise. Pill borders reserve only left/right
-cells; match `borderColor` to `backgroundColor` for a filled pill.
-
 ## Host Components
 
 PaintCannon exposes the following host components that mirror a subset of the
@@ -265,8 +238,6 @@ both supported:
 - `Div`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
 - `Span`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
 - `A`: shared props, `scrollLeft?: number`, `scrollTop?: number`, and `href?: string`.
-  Its ref is a PaintCannon `AnchorElement`. Omitting `href` or setting it to `""`
-  leaves ordinary content.
 - `Form`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
 - `Button`: shared props, plus `type?: "submit" | "button"`,
   `scrollLeft?: number`, and `scrollTop?: number`.
