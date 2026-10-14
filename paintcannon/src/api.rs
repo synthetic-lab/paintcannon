@@ -5,7 +5,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use crate::glyph_detection::{
-    Detection, HasNerdFontSet, HasSymbolsForLegacyComputing, NerdFontSet,
+    FontMonitor, HasNerdFontSet, HasSymbolsForLegacyComputing, NerdFontSet,
 };
 use crossbeam_channel::{bounded, Sender};
 use napi::bindgen_prelude::Function;
@@ -123,8 +123,7 @@ pub struct PaintCannon {
     events: Arc<NativeEventQueue>,
     kitty_keyboard_enabled: bool,
     next_dom_id: u32,
-    font_detection: Arc<Detection>,
-    font_thread: Option<JoinHandle<()>>,
+    fonts: FontMonitor,
 }
 
 #[napi]
@@ -134,7 +133,7 @@ impl PaintCannon {
         &self,
     ) -> napi::bindgen_prelude::AsyncTask<HasSymbolsForLegacyComputing> {
         napi::bindgen_prelude::AsyncTask::new(HasSymbolsForLegacyComputing {
-            detection: self.font_detection.clone(),
+            detection: self.fonts.detection(),
             queries: self.input.as_ref().map(TerminalInput::glyph_queries),
         })
     }
@@ -146,7 +145,7 @@ impl PaintCannon {
     ) -> napi::bindgen_prelude::AsyncTask<HasNerdFontSet> {
         napi::bindgen_prelude::AsyncTask::new(HasNerdFontSet::new(
             set,
-            self.font_detection.clone(),
+            self.fonts.detection(),
             self.input.as_ref().map(TerminalInput::glyph_queries),
         ))
     }
@@ -197,37 +196,19 @@ impl PaintCannon {
             },
             Some(tx.clone()),
             Arc::clone(&events),
-            engine_event_notifier,
+            engine_event_notifier.clone(),
         );
         let kitty_keyboard_enabled = input
             .as_ref()
             .map(TerminalInput::kitty_keyboard_enabled)
             .unwrap_or(false);
 
-        let font_detection = Arc::new(Detection::default());
-        let detection = font_detection.clone();
-        let queries = input.as_ref().map(TerminalInput::glyph_queries);
-        let font_tx = tx.clone();
-        let font_thread = thread::spawn(move || {
-            // Publish known capabilities before waiting for any unknown sets.
-            let nerd = detection.known_nerd_fonts();
-            let legacy = detection.known_legacy_symbols();
-            if let Some(report) = nerd {
-                let supported = report.powerline_extended;
-                let _ = font_tx.send(EngineCommand::SetPowerlineExtended { supported });
-            }
-            if let Some(supported) = legacy {
-                let _ = font_tx.send(EngineCommand::SetLegacySymbols { supported });
-            }
-            if nerd.is_none() {
-                let supported = detection.detect(queries.as_ref()).powerline_extended;
-                let _ = font_tx.send(EngineCommand::SetPowerlineExtended { supported });
-            }
-            if legacy.is_none() {
-                let supported = detection.detect_legacy(queries.as_ref());
-                let _ = font_tx.send(EngineCommand::SetLegacySymbols { supported });
-            }
-        });
+        let fonts = FontMonitor::start(
+            input.as_ref().map(TerminalInput::glyph_queries),
+            tx.clone(),
+            events.clone(),
+            engine_event_notifier,
+        );
 
         Ok(Self {
             tx,
@@ -236,8 +217,7 @@ impl PaintCannon {
             events,
             kitty_keyboard_enabled,
             next_dom_id: 1,
-            font_detection,
-            font_thread: Some(font_thread),
+            fonts,
         })
     }
 
@@ -1038,13 +1018,10 @@ impl PaintCannon {
     }
 
     fn shutdown(&mut self) {
+        self.fonts.shutdown();
         let _ = self.tx.send(EngineCommand::Shutdown { response: None });
 
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-
-        if let Some(thread) = self.font_thread.take() {
             let _ = thread.join();
         }
 

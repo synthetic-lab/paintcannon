@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use napi_derive::napi;
 
 use crate::engine::{EngineIntersectionEvent, EngineScrollEvent, EngineTransitionEvent};
+use crate::glyph_detection::NerdFontSet;
 use crate::layout::AbsoluteRect;
 use crate::style::TransitionProperty;
 use crate::transition::TransitionEventType;
@@ -110,6 +111,14 @@ pub struct ClipboardWritePayload {
 
 #[derive(Clone)]
 #[napi(object)]
+pub struct FontChangeEvent {
+    /// Absent for Symbols for Legacy Computing.
+    pub set: Option<NerdFontSet>,
+    pub supported: bool,
+}
+
+#[derive(Clone)]
+#[napi(object)]
 pub struct NativeEvent {
     pub kind: String,
     pub keyboard: Option<KeyboardEvent>,
@@ -121,9 +130,16 @@ pub struct NativeEvent {
     pub transition: Option<TransitionEvent>,
     pub intersection: Option<IntersectionEvent>,
     pub scroll: Option<ScrollEvent>,
+    pub font: Option<FontChangeEvent>,
 }
 
 impl NativeEvent {
+    pub(crate) fn font(set: Option<NerdFontSet>, supported: bool) -> Self {
+        Self::with_kind("font", |native| {
+            native.font = Some(FontChangeEvent { set, supported })
+        })
+    }
+
     pub(crate) fn keyboard(event: KeyboardEvent) -> Self {
         Self::with_kind("keyboard", |native| native.keyboard = Some(event))
     }
@@ -209,6 +225,7 @@ impl NativeEvent {
             transition: None,
             intersection: None,
             scroll: None,
+            font: None,
         };
         set_payload(&mut event);
         event

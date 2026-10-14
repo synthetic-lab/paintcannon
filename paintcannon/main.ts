@@ -77,6 +77,16 @@ export type ClipboardEventListener = (event: PaintClipboardEvent) => void;
 export type ClipboardWriteEventListener = (event: PaintClipboardWriteEvent) => void;
 export type PaintCannonFocusEventListener = (event: PaintCannonFocusEvent) => void;
 export type ResizeEventListener = (event: PaintResizeEvent) => void;
+export type FontChangeEventType =
+  | `nerdfont-${NerdFontSet}-change`
+  | "symbols-for-legacy-computing-change";
+export type PaintFontChangeEvent = {
+  readonly type: FontChangeEventType;
+  readonly supported: boolean;
+  readonly target: PaintCannon["font"];
+  readonly currentTarget: PaintCannon["font"];
+};
+export type FontChangeEventListener = (event: PaintFontChangeEvent) => void;
 
 export type IntersectionObserverCallback = (
   entries: IntersectionObserverEntry[],
@@ -686,6 +696,10 @@ export class PaintCannon {
     blur: new Set(),
   };
   private readonly resizeEventListeners = new Set<ResizeEventListener>();
+  private readonly fontEventListeners = new Map<
+    FontChangeEventType,
+    Set<FontChangeEventListener>
+  >();
   private readonly elements = new Map<number, PaintElement>();
   private readonly parents = new Map<number, PaintElement>();
   private readonly children = new Map<number, Set<number>>();
@@ -901,10 +915,24 @@ export class PaintCannon {
       if (this.stopped) return Promise.resolve(false);
       return this.binding.hasSymbolsForLegacyComputing();
     },
-    /** Cached, conservative detection of the current terminal's font sets. */
+    /** Conservative detection, refreshed by Rust every two seconds. */
     hasNerdFontSet: (set: NerdFontSet): Promise<boolean> => {
       if (this.stopped) return Promise.resolve(false);
       return this.binding.hasNerdFontSet(set);
+    },
+    addEventListener: (type: FontChangeEventType, listener: FontChangeEventListener): void => {
+      if (this.stopped) return;
+      let listeners = this.fontEventListeners.get(type);
+      if (listeners === undefined) {
+        listeners = new Set();
+        this.fontEventListeners.set(type, listeners);
+      }
+      listeners.add(listener);
+    },
+    removeEventListener: (type: FontChangeEventType, listener: FontChangeEventListener): void => {
+      const listeners = this.fontEventListeners.get(type);
+      listeners?.delete(listener);
+      if (listeners?.size === 0) this.fontEventListeners.delete(type);
     },
   };
 
@@ -1200,6 +1228,7 @@ export class PaintCannon {
     this.focusEventListeners.focus.clear();
     this.focusEventListeners.blur.clear();
     this.resizeEventListeners.clear();
+    this.fontEventListeners.clear();
     this.elementEventListeners.clear();
     for (const observer of this.intersectionObservers.values()) {
       observer[stopIntersectionObserver]();
@@ -1813,6 +1842,23 @@ export class PaintCannon {
           const event = new PaintCannonFocusEvent(nativeEvent.focus, this);
           const listeners = Array.from(this.focusEventListeners[event.type]);
           for (const listener of listeners) {
+            listener(event);
+          }
+          break;
+        }
+        case "font": {
+          const input = nativeEvent.font;
+          if (input === undefined) throw new Error("native font event is missing its payload");
+          const event: PaintFontChangeEvent = {
+            type:
+              input.set === undefined
+                ? "symbols-for-legacy-computing-change"
+                : `nerdfont-${input.set}-change`,
+            supported: input.supported,
+            target: this.font,
+            currentTarget: this.font,
+          };
+          for (const listener of Array.from(this.fontEventListeners.get(event.type) ?? [])) {
             listener(event);
           }
           break;

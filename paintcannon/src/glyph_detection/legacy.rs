@@ -77,15 +77,23 @@ mod tests {
 
     #[test]
     fn tmux_outer_terminal_is_used_but_server_fonts_are_not() {
-        let mut env = Environment::from_pairs(&[
+        let env = Environment::from_pairs(&[
             ("TERM_PROGRAM", "tmux"),
             ("TMUX", "session"),
             ("NERD_FONT", "0"),
         ]);
         assert!(!env.capabilities().symbols_for_legacy_computing);
-        env.apply_tmux_terminal("TERM_PROGRAM=ghostty");
+        let env = env.with_clients(vec![Environment::from_pairs(&[(
+            "TERM_PROGRAM",
+            "ghostty",
+        )])
+        .capabilities()]);
         assert!(env.capabilities().symbols_for_legacy_computing);
-        env.apply_tmux_terminal("TERM_PROGRAM=Apple_Terminal");
+        let env = env.with_clients(vec![Environment::from_pairs(&[(
+            "TERM_PROGRAM",
+            "Apple_Terminal",
+        )])
+        .capabilities()]);
         assert!(!resolve(env));
     }
 }

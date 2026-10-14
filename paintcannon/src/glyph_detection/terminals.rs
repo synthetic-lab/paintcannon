@@ -186,11 +186,11 @@ mod tests {
                 for name in names {
                     let local = Environment::from_pairs(&[(key, name)]);
                     assert_eq!(local.capabilities(), terminal.capabilities, "{key}={name}");
-                    let mut tmux = Environment::from_pairs(&[
+                    let tmux = Environment::from_pairs(&[
                         ("TERM", "tmux-256color"),
                         ("TERM_PROGRAM", "tmux"),
-                    ]);
-                    tmux.apply_tmux_terminal(&format!("{key}={name}\n"));
+                    ])
+                    .with_clients(vec![local.capabilities()]);
                     assert_eq!(
                         tmux.capabilities(),
                         terminal.capabilities,

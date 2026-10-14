@@ -40,6 +40,65 @@ afterEach(() => {
 });
 
 describe("Nerd Font detection", () => {
+  it.each([
+    "powerline",
+    "powerline-extended",
+    "font-awesome",
+    "devicons",
+    "material-design",
+  ] as const)("dispatches %s changes only to that set's listeners", set => {
+    const { paintCannon, mockNative } = createPaintTree();
+    const listener = vi.fn();
+    const legacy = vi.fn();
+    paintCannon.font.addEventListener(`nerdfont-${set}-change`, listener);
+    paintCannon.font.addEventListener("symbols-for-legacy-computing-change", legacy);
+    mockNative.events.push({ kind: "font", font: { set, supported: true } });
+    notifyNativeEvents(paintCannon);
+    expect(listener).toHaveBeenCalledExactlyOnceWith({
+      type: `nerdfont-${set}-change`,
+      supported: true,
+      target: paintCannon.font,
+      currentTarget: paintCannon.font,
+    });
+    expect(legacy).not.toHaveBeenCalled();
+    paintCannon.stop();
+  });
+
+  it("dispatches font changes in native order and supports removing listeners", () => {
+    const { paintCannon, mockNative } = createPaintTree();
+    const received: string[] = [];
+    const listener = vi.fn(event => {
+      expect(event.target).toBe(paintCannon.font);
+      expect(event.currentTarget).toBe(paintCannon.font);
+      received.push(`${event.type}:${event.supported}`);
+    });
+    paintCannon.font.addEventListener("nerdfont-powerline-extended-change", listener);
+    paintCannon.font.addEventListener("nerdfont-powerline-extended-change", listener);
+    paintCannon.font.addEventListener("symbols-for-legacy-computing-change", listener);
+    paintCannon.addEventListener("keydown", event => received.push(event.key));
+    mockNative.events.push(
+      { kind: "font", font: { set: "powerline-extended", supported: true } },
+      keyboardInput(keyDown("a")),
+      { kind: "font", font: { supported: true } },
+      { kind: "font", font: { set: "powerline-extended", supported: false } },
+    );
+    notifyNativeEvents(paintCannon);
+    expect(received).toEqual([
+      "nerdfont-powerline-extended-change:true",
+      "a",
+      "symbols-for-legacy-computing-change:true",
+      "nerdfont-powerline-extended-change:false",
+    ]);
+    paintCannon.font.removeEventListener("nerdfont-powerline-extended-change", listener);
+    mockNative.events.push({ kind: "font", font: { set: "powerline-extended", supported: true } });
+    notifyNativeEvents(paintCannon);
+    expect(listener).toHaveBeenCalledTimes(3);
+    paintCannon.stop();
+    mockNative.events.push({ kind: "font", font: { supported: false } });
+    notifyNativeEvents(paintCannon);
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
   it("exposes independent legacy symbol detection and fails closed after stop", async () => {
     const { paintCannon, mockNative } = createPaintTree();
     mockNative.supportedNerdFontSets.add("powerline");
