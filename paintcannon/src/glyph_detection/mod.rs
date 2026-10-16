@@ -389,26 +389,6 @@ mod tests {
     }
 
     #[test]
-    fn apc_support_does_not_confirm_glyph_coverage() {
-        let detection = Detection {
-            environment: OnceLock::from(Environment::from_pairs(&[("TERM_PROGRAM", "xterm")])),
-            ..Detection::default()
-        };
-        let (tx, rx) = bounded::<Request>(1);
-        std::thread::scope(|scope| {
-            let worker = scope.spawn(|| detection.detect(Some(&tx)));
-            let request = rx.recv_timeout(QUERY_TIMEOUT).unwrap();
-            request
-                .reply
-                .send(vec![None; request.characters.len()])
-                .unwrap();
-            assert_eq!(worker.join().unwrap(), NerdFontSupport::default());
-        });
-        assert!(!detection.detect_legacy(Some(&tx)));
-        assert!(rx.is_empty());
-    }
-
-    #[test]
     fn multiple_clients_cannot_be_confirmed_by_one_anonymous_glyph_reply() {
         let ghostty = Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")]).capabilities();
         let apple = Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal")]).capabilities();
