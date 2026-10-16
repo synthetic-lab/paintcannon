@@ -364,9 +364,8 @@ mod tests {
                         let client = environment.capabilities();
                         environment = environment.with_clients(vec![client]);
                     }
-                    let expected_fonts = NerdFontSupport::uniform(
-                        environment.nerd_font_override().unwrap_or(false),
-                    );
+                    let expected_fonts =
+                        NerdFontSupport::uniform(environment.nerd_font_override().unwrap_or(false));
                     let detection = Detection {
                         environment: OnceLock::from(environment),
                         ..Detection::default()

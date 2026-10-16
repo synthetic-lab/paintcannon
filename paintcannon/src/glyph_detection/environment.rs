@@ -178,9 +178,7 @@ mod tests {
         ] {
             let local = Environment::from_pairs(&[identity]);
             assert!(!local.can_probe(), "{identity:?}");
-            assert!(
-                !Environment::from_pairs(&[identity, ("SSH_TTY", "/dev/pts/1")]).can_probe()
-            );
+            assert!(!Environment::from_pairs(&[identity, ("SSH_TTY", "/dev/pts/1")]).can_probe());
             assert!(!Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")])
                 .with_clients(vec![local.capabilities()])
                 .can_probe());
@@ -188,9 +186,11 @@ mod tests {
         for program in ["iTerm.app", "rio", "unknown"] {
             let local = Environment::from_pairs(&[("TERM_PROGRAM", program)]);
             assert!(local.can_probe(), "{program}");
-            assert!(Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal")])
-                .with_clients(vec![local.capabilities()])
-                .can_probe());
+            assert!(
+                Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal")])
+                    .with_clients(vec![local.capabilities()])
+                    .can_probe()
+            );
         }
     }
 
