@@ -349,6 +349,41 @@ mod tests {
     }
 
     #[test]
+    fn blacklisted_terminal_detection_never_writes_glyph_queries() {
+        for pairs in [
+            vec![("TERM_PROGRAM", "Apple_Terminal")],
+            vec![("TERM_PROGRAM", "Apple_Terminal"), ("NERD_FONT", "1")],
+            vec![("TERM_PROGRAM", "Apple_Terminal"), ("NERD_FONT", "0")],
+            vec![("TERM_PROGRAM", "terminology")],
+            vec![("TERM", "rxvt-unicode-256color")],
+        ] {
+            for tmux in [false, true] {
+                for _ in 0..3 {
+                    let mut environment = Environment::from_pairs(&pairs);
+                    if tmux {
+                        let client = environment.capabilities();
+                        environment = environment.with_clients(vec![client]);
+                    }
+                    let expected_fonts = NerdFontSupport::uniform(
+                        environment.nerd_font_override().unwrap_or(false),
+                    );
+                    let detection = Detection {
+                        environment: OnceLock::from(environment),
+                        ..Detection::default()
+                    };
+                    let (tx, mut queries) = protocol::Queries::new();
+                    assert_eq!(detection.detect(Some(&tx)), expected_fonts);
+                    assert!(!detection.detect_legacy(Some(&tx)));
+                    assert!(!queries.has_work());
+                    let mut output = Vec::new();
+                    queries.poll(true, &mut output, tmux, Instant::now());
+                    assert!(output.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn multiple_clients_cannot_be_confirmed_by_one_anonymous_glyph_reply() {
         let ghostty = Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")]).capabilities();
         let apple = Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal")]).capabilities();

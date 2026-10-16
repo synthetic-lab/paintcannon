@@ -268,6 +268,17 @@ mod tests {
     }
 
     #[test]
+    fn blacklisted_clients_disable_glyph_passthrough() {
+        for program in ["Apple_Terminal", "terminology", "rxvt"] {
+            let output = client("%1 ", "xterm-256color", program);
+            let clients = parse_clients(&output, "%1").unwrap();
+            let pane =
+                Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")]).with_clients(clients);
+            assert!(!pane.can_probe(), "{program}");
+        }
+    }
+
+    #[test]
     fn uses_both_live_client_identifiers_and_filters_other_sessions() {
         let output = client("%1 %2 ", "xterm-256color", "ghostty")
             + &client("%1 ", "wezterm", "")
@@ -279,6 +290,7 @@ mod tests {
                     osc8: HyperlinkCapability::Confirmed {
                         open_hint: LOCAL_GHOSTTY_HINT
                     },
+                    glyph_queries_unsafe: false,
                     nerd_font: true,
                     symbols_for_legacy_computing: true
                 },
@@ -286,6 +298,7 @@ mod tests {
                     osc8: HyperlinkCapability::Confirmed {
                         open_hint: "Shift-Click to open"
                     },
+                    glyph_queries_unsafe: false,
                     nerd_font: true,
                     symbols_for_legacy_computing: false
                 },
@@ -327,6 +340,7 @@ mod tests {
                 osc8: hint.map_or(HyperlinkCapability::Unconfirmed, |open_hint| {
                     HyperlinkCapability::Confirmed { open_hint }
                 }),
+                glyph_queries_unsafe: false,
                 nerd_font: false,
                 symbols_for_legacy_computing: legacy,
             };
@@ -386,6 +400,7 @@ mod tests {
                     } else {
                         HyperlinkCapability::Unconfirmed
                     },
+                    glyph_queries_unsafe: false,
                     nerd_font: nerd,
                     symbols_for_legacy_computing: legacy,
                 }]),

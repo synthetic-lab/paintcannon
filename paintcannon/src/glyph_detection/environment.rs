@@ -100,6 +100,7 @@ impl Environment {
         self.clients
             .as_ref()
             .is_none_or(|clients| clients.len() == 1)
+            && !self.capabilities().glyph_queries_unsafe
     }
 
     fn get(&self, key: &str) -> &str {
@@ -115,6 +116,7 @@ impl Environment {
             // Never use the pane's inherited terminal identifiers or markers:
             // they describe the terminal that started it, not today's clients.
             return Capabilities {
+                glyph_queries_unsafe: clients.iter().any(|client| client.glyph_queries_unsafe),
                 osc8: match clients.as_slice() {
                     [] => HyperlinkCapability::Unconfirmed,
                     [client] => client.osc8,
@@ -141,6 +143,7 @@ impl Environment {
         {
             return Capabilities {
                 osc8: resolve_hyperlink_support(terminal.capabilities.osc8, self.client_platform()),
+                glyph_queries_unsafe: terminal.capabilities.glyph_queries_unsafe,
                 nerd_font: terminal.capabilities.nerd_font,
                 symbols_for_legacy_computing: terminal.capabilities.symbols_for_legacy_computing,
             };
@@ -156,6 +159,40 @@ impl Environment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blacklisted_terminals_disable_glyph_queries_locally_and_through_tmux() {
+        for identity in [
+            ("TERM_PROGRAM", "Apple_Terminal"),
+            ("TERM_PROGRAM", "apple_terminal"),
+            ("TERM_PROGRAM", "APPLE_TERMINAL"),
+            ("TERM_PROGRAM", "terminology"),
+            ("TERM_PROGRAM", "rxvt"),
+            ("TERM_PROGRAM", "rxvt-unicode"),
+            ("TERM_PROGRAM", "urxvt"),
+            ("TERM", "rxvt"),
+            ("TERM", "rxvt-color"),
+            ("TERM", "rxvt-256color"),
+            ("TERM", "rxvt-unicode"),
+            ("TERM", "rxvt-unicode-256color"),
+        ] {
+            let local = Environment::from_pairs(&[identity]);
+            assert!(!local.can_probe(), "{identity:?}");
+            assert!(
+                !Environment::from_pairs(&[identity, ("SSH_TTY", "/dev/pts/1")]).can_probe()
+            );
+            assert!(!Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")])
+                .with_clients(vec![local.capabilities()])
+                .can_probe());
+        }
+        for program in ["iTerm.app", "rio", "unknown"] {
+            let local = Environment::from_pairs(&[("TERM_PROGRAM", program)]);
+            assert!(local.can_probe(), "{program}");
+            assert!(Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal")])
+                .with_clients(vec![local.capabilities()])
+                .can_probe());
+        }
+    }
 
     #[test]
     fn foot_and_vte_terminals_have_opening_hints() {
@@ -449,6 +486,7 @@ mod tests {
                         .with_platform(ClientPlatform::Linux)
                         .capabilities(),
                     Capabilities {
+                        glyph_queries_unsafe: term == "rxvt-unicode-256color",
                         nerd_font,
                         symbols_for_legacy_computing,
                         osc8: match term {
@@ -499,6 +537,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    glyph_queries_unsafe: false,
                     nerd_font: true,
                     symbols_for_legacy_computing: true,
                     osc8: HyperlinkCapability::Confirmed {
@@ -532,7 +571,13 @@ mod tests {
             ("TERM_PROGRAM", "Apple_Terminal"),
             ("WT_SESSION", "inherited-session"),
         ]);
-        assert_eq!(apple.capabilities(), Capabilities::default());
+        assert_eq!(
+            apple.capabilities(),
+            Capabilities {
+                glyph_queries_unsafe: true,
+                ..Capabilities::default()
+            }
+        );
     }
 
     #[test]
@@ -550,6 +595,7 @@ mod tests {
                 assert_eq!(
                     env.capabilities(),
                     Capabilities {
+                        glyph_queries_unsafe: false,
                         nerd_font: false,
                         symbols_for_legacy_computing: true,
                         osc8: match marker.0 {
@@ -605,6 +651,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    glyph_queries_unsafe: false,
                     nerd_font,
                     symbols_for_legacy_computing,
                     osc8: match term {
@@ -649,6 +696,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    glyph_queries_unsafe: program == "Apple_Terminal",
                     nerd_font,
                     symbols_for_legacy_computing,
                     osc8: match program {
@@ -688,6 +736,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    glyph_queries_unsafe: program == "Apple_Terminal",
                     nerd_font,
                     symbols_for_legacy_computing,
                     osc8: match program {
@@ -733,7 +782,7 @@ mod tests {
                 },
                 false,
             ),
-            (vec![ghostty, apple], Capabilities::default(), false),
+            (vec![ghostty, apple], apple, false),
             (vec![], Capabilities::default(), false),
         ] {
             // A pane inherited Ghostty at startup; clients may since have changed.
