@@ -95,6 +95,14 @@ font support:
   built-in legacy glyph support independently of `NERD_FONT`. `chunky-rounded`
   uses those rounded corners when supported.
 
+Attached clients can change — for example, a `tmux` session running on a server
+might have different clients attach and detach — so Paintcannon also publishes
+events you can subscribe to when these capabilities change:
+
+- `pc.font.addEventListener("nerdfont-powerline-change", event => { /* event.supported */ })`
+  (replace `powerline` with any supported set)
+- `pc.font.addEventListener("symbols-for-legacy-computing-change")`
+
 Note that these checks are best-effort and conservative. We use standard env
 vars such as checking `NERD_FONT=1`, and also attempt to check the
 currently-connected terminal emulator against whitelists of terminal emulators

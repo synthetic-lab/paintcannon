@@ -1,13 +1,17 @@
-//! Cached font-set detection. Samples indicate a patched font, not full coverage
+//! Font-set detection. Each polling pass shares a probe across callers.
+//! Samples indicate a patched font, not full coverage
 //! of every Nerd Fonts version or shaping sequence.
 mod capabilities;
 mod environment;
 mod legacy;
+mod monitor;
 mod terminals;
+mod tmux;
 pub(crate) use legacy::HasSymbolsForLegacyComputing;
+pub(crate) use monitor::FontMonitor;
 pub(crate) mod protocol;
 
-use crossbeam_channel::{bounded, Sender};
+use crossbeam_channel::{bounded, never, select, Receiver, Sender};
 use napi::{Env, Result, Task};
 use protocol::{Request, QUERY_TIMEOUT};
 use std::sync::{Arc, OnceLock};
@@ -81,12 +85,23 @@ fn sample_characters() -> impl Iterator<Item = char> {
         .flat_map(|(_, samples)| samples.iter().copied())
 }
 
-#[derive(Default)]
 pub(crate) struct Detection {
     environment: OnceLock<environment::Environment>,
     probed: OnceLock<ProbeReport>,
+    stop: Receiver<()>,
 }
 
+impl Default for Detection {
+    fn default() -> Self {
+        Self {
+            environment: OnceLock::new(),
+            probed: OnceLock::new(),
+            stop: never(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ProbeReport {
     nerd_fonts: NerdFontSupport,
     legacy_symbols: bool,
@@ -154,13 +169,16 @@ impl Detection {
                 deadline,
                 reply,
             };
+            let queries = queries.filter(|_| self.environment().can_probe());
             let reported = match queries {
                 Some(queries) if queries.try_send(request).is_ok() => {
                     // Allow the input thread one polling cycle to deliver partial
                     // results at the safety deadline instead of discarding them.
-                    response
-                        .recv_deadline(deadline + std::time::Duration::from_millis(100))
-                        .ok()
+                    select! {
+                        recv(response) -> result => result.ok(),
+                        recv(self.stop) -> _ => None,
+                        default(deadline.saturating_duration_since(Instant::now()) + std::time::Duration::from_millis(100)) => None,
+                    }
                 }
                 _ => None,
             }
@@ -329,6 +347,62 @@ mod tests {
             "known terminal support must not trigger a glyph query"
         );
         assert_eq!(result, NerdFontSupport::uniform(true));
+    }
+
+    #[test]
+    fn multiple_clients_cannot_be_confirmed_by_one_anonymous_glyph_reply() {
+        let ghostty = Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")]).capabilities();
+        let apple = Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal")]).capabilities();
+        let env = Environment::from_pairs(&[]).with_clients(vec![ghostty, apple]);
+        let detection = Detection {
+            environment: OnceLock::from(env),
+            ..Detection::default()
+        };
+        let (tx, rx) = bounded(1);
+        assert_eq!(detection.detect(Some(&tx)), NerdFontSupport::default());
+        assert!(!detection.detect_legacy(Some(&tx)));
+        assert!(rx.is_empty());
+    }
+
+    #[test]
+    fn forced_nerd_fonts_still_win_with_multiple_or_no_clients() {
+        for clients in [vec![], vec![Default::default(), Default::default()]] {
+            for value in ["0", "1"] {
+                let env =
+                    Environment::from_pairs(&[("NERD_FONT", value)]).with_clients(clients.clone());
+                let detection = Detection {
+                    environment: OnceLock::from(env),
+                    ..Detection::default()
+                };
+                assert_eq!(
+                    detection.detect(None),
+                    NerdFontSupport::uniform(value == "1")
+                );
+                assert!(!detection.detect_legacy(None));
+            }
+        }
+    }
+
+    #[test]
+    fn refreshing_an_unknown_terminal_does_not_reuse_an_old_probe_result() {
+        let (tx, rx) = bounded::<Request>(1);
+        for reply in [true, false, true] {
+            let detection = Detection {
+                environment: OnceLock::from(Environment::from_pairs(&[])),
+                ..Detection::default()
+            };
+            std::thread::scope(|scope| {
+                let worker = scope.spawn(|| detection.detect(Some(&tx)));
+                let request = rx.recv_timeout(QUERY_TIMEOUT).unwrap();
+                request
+                    .reply
+                    .send(vec![Some(reply); request.characters.len()])
+                    .unwrap();
+                assert_eq!(worker.join().unwrap(), NerdFontSupport::uniform(reply));
+            });
+            assert_eq!(detection.detect_legacy(Some(&tx)), reply);
+            assert!(rx.is_empty());
+        }
     }
 
     #[test]
@@ -529,12 +603,16 @@ mod tests {
 
     #[test]
     fn ghostty_inside_tmux_uses_bundled_symbols_before_the_protocol() {
-        let mut env = Environment::from_pairs(&[
+        let env = Environment::from_pairs(&[
             ("TERM", "tmux-256color"),
             ("TERM_PROGRAM", "tmux"),
             ("TMUX", "/tmp/tmux-1000/default,10681,0"),
-        ]);
-        env.apply_tmux_terminal("TERM_PROGRAM=ghostty\n");
+        ])
+        .with_clients(vec![Environment::from_pairs(&[(
+            "TERM_PROGRAM",
+            "ghostty",
+        )])
+        .capabilities()]);
         let mut replies = vec![None; sample_characters().count()];
         assert_eq!(resolve(&replies, &env), NerdFontSupport::uniform(true));
         replies.fill(Some(false));

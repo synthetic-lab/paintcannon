@@ -112,6 +112,15 @@ app.paintCannon.addEventListener("blur", () => {
 
 Inside tmux, terminal focus reporting requires `set -g focus-events on`.
 
+Font capabilities are available through `app.paintCannon.font`. Use
+`hasNerdFontSet(set)` or `hasSymbolsForLegacyComputing()` for initial support,
+then subscribe with `font.addEventListener("nerdfont-powerline-change", listener)`
+or `"symbols-for-legacy-computing-change"` to update React state from
+`event.supported`. Remove the listener in your effect's cleanup. Rust refreshes
+support every two seconds, requires support in every attached tmux terminal
+client, and repaints chunky borders automatically. See [font detection in
+PaintCannon](../paintcannon/README.md#nerd-font-detection) for all sets and limits.
+
 ### Common props:
 
 All host components accept:

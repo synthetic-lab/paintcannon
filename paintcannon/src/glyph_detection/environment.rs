@@ -1,54 +1,69 @@
-use super::{capabilities::Capabilities, terminals};
+use super::{capabilities::Capabilities, terminals, tmux};
 use std::collections::HashMap;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
-pub(super) struct Environment(HashMap<String, String>);
+pub(super) struct Environment {
+    values: HashMap<String, String>,
+    clients: Option<Vec<Capabilities>>,
+}
 
 impl Environment {
     pub(super) fn current() -> Self {
-        let mut environment = Self(
-            std::env::vars_os()
+        let mut environment = Self {
+            values: std::env::vars_os()
                 .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
                 .collect(),
-        );
+            clients: None,
+        };
         if !environment.get("TMUX").is_empty() {
-            for key in ["TERM_PROGRAM", "TERM"] {
-                if let Some(output) = tmux_environment(key) {
-                    environment.apply_tmux_terminal(&output);
-                }
-            }
+            environment.clients = Some(tmux::client_capabilities(environment.get("TMUX_PANE")));
         }
         environment
     }
 
-    pub(super) fn apply_tmux_terminal(&mut self, output: &str) {
-        if let Some((key @ ("TERM_PROGRAM" | "TERM"), value)) = output.trim().split_once('=') {
-            if !value.is_empty() && !value.chars().any(char::is_control) {
-                self.0.insert(key.into(), value.into());
-            }
+    pub(super) fn from_pairs(pairs: &[(&str, &str)]) -> Self {
+        Self {
+            values: pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            clients: None,
         }
     }
 
     #[cfg(test)]
-    pub(super) fn from_pairs(pairs: &[(&str, &str)]) -> Self {
-        Self(
-            pairs
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-        )
+    pub(super) fn with_clients(mut self, clients: Vec<Capabilities>) -> Self {
+        self.clients = Some(clients);
+        self
+    }
+
+    pub(super) fn can_probe(&self) -> bool {
+        // Passthrough replies carry no client identity. One positive reply cannot
+        // prove support in every attached client; no clients cannot answer at all.
+        self.clients
+            .as_ref()
+            .is_none_or(|clients| clients.len() == 1)
     }
 
     fn get(&self, key: &str) -> &str {
-        self.0.get(key).map(String::as_str).unwrap_or("")
+        self.values.get(key).map(String::as_str).unwrap_or("")
     }
 
     pub(super) fn nerd_font_override(&self) -> Option<bool> {
-        self.0.get("NERD_FONT").map(|value| value != "0")
+        self.values.get("NERD_FONT").map(|value| value != "0")
     }
 
     pub(super) fn capabilities(&self) -> Capabilities {
+        if let Some(clients) = &self.clients {
+            // Never use the pane's inherited terminal identifiers or markers:
+            // they describe the terminal that started it, not today's clients.
+            return Capabilities {
+                nerd_font: !clients.is_empty() && clients.iter().all(|client| client.nerd_font),
+                symbols_for_legacy_computing: !clients.is_empty()
+                    && clients
+                        .iter()
+                        .all(|client| client.symbols_for_legacy_computing),
+            };
+        }
         // A recognized terminal is authoritative, even for unconfirmed capabilities.
         // SSH may only forward TERM, so check both identifiers before other signals.
         if let Some(terminal) = terminals::from_term_program(self.get("TERM_PROGRAM"))
@@ -71,39 +86,6 @@ impl Environment {
             };
         }
         Capabilities::default()
-    }
-}
-
-fn tmux_environment(key: &str) -> Option<String> {
-    use std::io::Read;
-    let mut child = Command::new("tmux")
-        .args(["show-environment", "-g", key])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let deadline = Instant::now() + Duration::from_millis(300);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => {
-                let mut text = String::new();
-                child
-                    .stdout
-                    .take()?
-                    .take(4096)
-                    .read_to_string(&mut text)
-                    .ok()?;
-                return Some(text);
-            }
-            Ok(Some(_)) => return None,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
     }
 }
 
@@ -221,13 +203,14 @@ mod tests {
             ("alacritty-direct", false, false),
             ("foot-direct", false, true),
         ] {
-            let mut env = Environment::from_pairs(&[
+            let env = Environment::from_pairs(&[
                 ("TMUX", "/tmp/tmux-test/default,123,0"),
                 ("TERM_PROGRAM", "tmux"),
                 ("TERM", "tmux-256color"),
+            ])
+            .with_clients(vec![
+                Environment::from_pairs(&[("TERM", term)]).capabilities()
             ]);
-            env.apply_tmux_terminal("-TERM_PROGRAM\n");
-            env.apply_tmux_terminal(&format!("TERM={term}\n"));
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
@@ -248,10 +231,13 @@ mod tests {
             ("Apple_Terminal", "xterm-256color", false, false),
             ("tmux", "screen-256color", false, false),
         ] {
-            let mut env =
-                Environment::from_pairs(&[("TERM_PROGRAM", "tmux"), ("TERM", "tmux-256color")]);
-            env.apply_tmux_terminal(&format!("TERM_PROGRAM={program}\n"));
-            env.apply_tmux_terminal(&format!("TERM={term}\n"));
+            let env =
+                Environment::from_pairs(&[("TERM_PROGRAM", "tmux"), ("TERM", "tmux-256color")])
+                    .with_clients(vec![Environment::from_pairs(&[
+                        ("TERM_PROGRAM", program),
+                        ("TERM", term),
+                    ])
+                    .capabilities()]);
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
@@ -277,9 +263,11 @@ mod tests {
             ("gnome-terminal", false, true),
             ("vscode", false, true),
         ] {
-            let mut env =
-                Environment::from_pairs(&[("TERM_PROGRAM", "tmux"), ("TERM", "tmux-256color")]);
-            env.apply_tmux_terminal(&format!("TERM_PROGRAM={program}\n"));
+            let env =
+                Environment::from_pairs(&[("TERM_PROGRAM", "tmux"), ("TERM", "tmux-256color")])
+                    .with_clients(vec![
+                        Environment::from_pairs(&[("TERM_PROGRAM", program)]).capabilities()
+                    ]);
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
@@ -288,16 +276,24 @@ mod tests {
                 }
             );
         }
-        for output in [
-            "-TERM_PROGRAM",
-            "",
-            "TERM_PROGRAM=",
-            "OTHER=ghostty",
-            "TERM_PROGRAM=ghostty\nOTHER=1",
+    }
+
+    #[test]
+    fn every_attached_client_must_support_a_capability() {
+        let ghostty = Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")]).capabilities();
+        let wezterm = Environment::from_pairs(&[("TERM_PROGRAM", "WezTerm")]).capabilities();
+        let apple = Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal")]).capabilities();
+        for (clients, expected, can_probe) in [
+            (vec![ghostty], ghostty, true),
+            (vec![ghostty, ghostty], ghostty, false),
+            (vec![ghostty, wezterm], wezterm, false),
+            (vec![ghostty, apple], Capabilities::default(), false),
+            (vec![], Capabilities::default(), false),
         ] {
-            let mut env = Environment::from_pairs(&[("TERM_PROGRAM", "tmux")]);
-            env.apply_tmux_terminal(output);
-            assert_eq!(env.capabilities(), Capabilities::default());
+            // A pane inherited Ghostty at startup; clients may since have changed.
+            let env = Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")]).with_clients(clients);
+            assert_eq!(env.capabilities(), expected);
+            assert_eq!(env.can_probe(), can_probe);
         }
     }
 }

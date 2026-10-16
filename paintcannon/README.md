@@ -227,6 +227,33 @@ confirmed. Accepted sets are `"powerline"`, `"powerline-extended"`,
 samples representative characters for each set independently; an unsupported
 set does not disable another set. A stopped instance returns `false`.
 
+Rust refreshes support every two seconds. Listen for changes to switch your
+icons or fallbacks without polling from JavaScript:
+
+```ts
+import type { PaintFontChangeEvent } from "paintcannon";
+
+const onPowerlineChange = (event: PaintFontChangeEvent) => {
+  branchLabel.textContent = event.supported ? "\ue0a0 main" : "branch: main";
+};
+pc.font.addEventListener("nerdfont-powerline-change", onPowerlineChange);
+// Read the initial value as well; listeners only receive changes.
+branchLabel.textContent = (await pc.font.hasNerdFontSet("powerline"))
+  ? "\ue0a0 main"
+  : "branch: main";
+
+// When this UI is removed:
+pc.font.removeEventListener("nerdfont-powerline-change", onPowerlineChange);
+```
+
+Event names are `nerdfont-${set}-change` for each accepted set, plus
+`symbols-for-legacy-computing-change`. Events contain `type`, `supported`,
+`target`, and `currentTarget` (both targets are `pc.font`). Repeated unchanged
+checks do not emit events. Support starts unconfirmed (`false`), so initial
+confirmation can emit a change to `true`. `pc.stop()` removes all listeners
+and stops detection. In-flight glyph queries can add their probe timeout to
+the refresh latency; concurrent API calls share one probe per refresh.
+
 Detection tries these sources in order:
 
 1. `NERD_FONT=0` forces all sets to `false`; `NERD_FONT=1` forces them to `true`,
@@ -252,13 +279,29 @@ Detection tries these sources in order:
      values such as `xterm-ghostty` and `xterm-kitty`. [OpenSSH forwards `TERM`
      when allocating a PTY](https://man.openbsd.org/ssh_config#SendEnv), but does
      not automatically forward `TERM_PROGRAM`. Generic values such as
-     `xterm-256color` cannot identify an emulator. Inside tmux, detection also
-     checks its global `TERM_PROGRAM` and `TERM` environment values using the
-     same terminal definitions.
+     `xterm-256color` cannot identify an emulator. Inside tmux, detection reads
+     **live attached clients**, not the global/session environment saved when
+     the server or pane started. It checks each client's `TERM` and terminal
+     version-report identity, plus `TERM_PROGRAM` and fallback markers when
+     tmux supports per-client environment queries (added after tmux 3.7).
 3. The [Rio Glyph
    Protocol](https://github.com/raphamorim/rio/blob/main/specs/glyph-protocol.md),
    only for sets not confirmed by the terminal table. This works over SSH; tmux
-   requires `set -g allow-passthrough on`.
+   requires `set -g allow-passthrough on` and a single attached client.
+
+With tmux, **every attached terminal client whose session contains the pane**
+must support a capability. Attaching a less capable client downgrades it;
+detaching that client can restore it. Control-mode clients are excluded.
+Glyph replies have no client identity, so one client's positive response
+cannot prove support for multiple clients. Unidentified clients therefore
+fail closed in that case. With no clients, automatic detection also returns
+`false`. The explicit `NERD_FONT` override still takes precedence.
+
+Reattaching does not update the pane process's inherited environment or reliably
+update tmux's global environment. Live client detection avoids those stale
+values. On older tmux versions, generic `TERM` plus an absent/unrecognized
+terminal version report may remain unidentified. See [tmux formats and environment
+handling](https://man.openbsd.org/tmux).
 
 PaintCannon does not inspect installed fonts or parse terminal configuration.
 Unknown support returns `false`; users can set `NERD_FONT=1` when they have
@@ -269,10 +312,15 @@ from the repository root. It uses an isolated tmux server and a simulated
 terminal, cleans up on exit, and requires Python 3. It is not part of CI and
 does not test your actual terminal's glyph coverage.
 
+After building, `bash scripts/test-font-changes-tmux.sh` tests live attach,
+detach, multiple clients, JavaScript change events, and actual border cells
+using simulated terminal identities on an isolated tmux server. This is also
+opt-in, requires Python 3, and cleans up its clients/server on exit.
+
 `chunky` uses Powerline Extended triangles when that set is detected.
 `chunky-rounded` uses Symbols for Legacy Computing corners
 (U+1FB41, U+1FB4C, U+1FB52, U+1FB5D) when supported. Both fall back to filled
-square corners and retain filled edges. Detection completion only repaints;
+square corners and retain filled edges. Detection changes only repaint;
 it does not change layout. `npm run demo:borders` shows both styles.
 
 `chunky-best-effort` chooses rounded legacy corners first, Powerline Extended
@@ -285,7 +333,7 @@ border layout in all three cases. The borders demo also shows this style.
 const supported = await pc.font.hasSymbolsForLegacyComputing();
 ```
 
-This cached `Promise<boolean>` checks known terminal built-in support first,
+This `Promise<boolean>` reads the current detection pass, checking known terminal built-in support first,
 including the smooth mosaic corners used by `chunky-rounded`. It is independent
 of `NERD_FONT`: Nerd Fonts do not guarantee those characters. If the table does
 not recognize the terminal, environment markers such as `VTE_VERSION` can
