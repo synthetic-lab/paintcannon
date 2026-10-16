@@ -1857,6 +1857,159 @@ fn terminal_focus_changes_cursor_without_recomputing_layout() {
 }
 
 #[test]
+fn chunky_styles_have_explicit_distinct_corners_without_font_detection() {
+    for (name, corners) in [
+        ("chunky-rounded", ['🭁', '🭌', '🭒', '🭝']),
+        ("chunky", ['█'; 4]),
+    ] {
+        let mut engine = PaintEngine::new();
+        let border = crate::style::parse_border_style(name).unwrap();
+        engine.set_legacy_symbols(true);
+        let mut style = block_style(CssDimension::Length(4.0), CssDimension::Length(3.0));
+        style.border_top = border;
+        style.border_right = border;
+        style.border_bottom = border;
+        style.border_left = border;
+        let root = engine.create_element(style);
+        engine.set_root(root);
+        let frame = engine.render_frame(4, 3).unwrap();
+        for ((x, y), expected) in [(0, 0), (3, 0), (0, 2), (3, 2)].into_iter().zip(corners) {
+            assert_eq!(frame.cell(x, y).unwrap().character, expected, "{name}");
+        }
+        assert_eq!(frame.cell(1, 0).unwrap().character, '█');
+        assert_eq!(frame.cell(0, 1).unwrap().character, '█');
+    }
+}
+
+#[test]
+fn detecting_powerline_repaints_chunky_without_layout() {
+    let mut engine = PaintEngine::new();
+    let mut style = block_style(CssDimension::Length(4.0), CssDimension::Length(3.0));
+    style.border_top = BorderStyle::Chunky;
+    style.border_right = BorderStyle::Chunky;
+    style.border_bottom = BorderStyle::Chunky;
+    style.border_left = BorderStyle::Chunky;
+    let root = engine.create_element(style);
+    engine.set_root(root);
+    assert_eq!(
+        engine
+            .render_frame(4, 3)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .character,
+        '█'
+    );
+    let passes = engine.layout_passes();
+    engine.set_powerline_extended(true);
+    let frame = engine.render_frame(4, 3).unwrap();
+    for ((x, y), expected) in [(0, 0), (3, 0), (0, 2), (3, 2)]
+        .into_iter()
+        .zip(['\u{e0ba}', '\u{e0b8}', '\u{e0be}', '\u{e0bc}'])
+    {
+        assert_eq!(frame.cell(x, y).unwrap().character, expected);
+    }
+    assert_eq!(engine.layout_passes(), passes);
+    engine.set_powerline_extended(false);
+    assert_eq!(
+        engine
+            .render_frame(4, 3)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .character,
+        '█'
+    );
+    assert_eq!(engine.layout_passes(), passes);
+}
+
+#[test]
+fn detecting_legacy_symbols_repaints_rounded_corners_without_layout() {
+    let mut engine = PaintEngine::new();
+    let mut style = block_style(CssDimension::Length(4.0), CssDimension::Length(3.0));
+    style.border_top = BorderStyle::ChunkyRounded;
+    style.border_right = BorderStyle::ChunkyRounded;
+    style.border_bottom = BorderStyle::ChunkyRounded;
+    style.border_left = BorderStyle::ChunkyRounded;
+    let root = engine.create_element(style);
+    engine.set_root(root);
+    assert_eq!(
+        engine
+            .render_frame(4, 3)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .character,
+        '█'
+    );
+    let passes = engine.layout_passes();
+    engine.set_legacy_symbols(true);
+    let frame = engine.render_frame(4, 3).unwrap();
+    for ((x, y), expected) in [(0, 0), (3, 0), (0, 2), (3, 2)]
+        .into_iter()
+        .zip(['🭁', '🭌', '🭒', '🭝'])
+    {
+        assert_eq!(frame.cell(x, y).unwrap().character, expected);
+    }
+    assert_eq!(engine.layout_passes(), passes);
+    engine.set_legacy_symbols(false);
+    assert_eq!(
+        engine
+            .render_frame(4, 3)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .character,
+        '█'
+    );
+    assert_eq!(engine.layout_passes(), passes);
+}
+
+#[test]
+fn best_effort_border_upgrades_without_layout_or_size_changes() {
+    let mut engine = PaintEngine::new();
+    let mut style = block_style(CssDimension::Length(4.0), CssDimension::Length(3.0));
+    let border = crate::style::parse_border_style("chunky-best-effort").unwrap();
+    style.border_top = border;
+    style.border_right = border;
+    style.border_bottom = border;
+    style.border_left = border;
+    let root = engine.create_element(style);
+    engine.set_root(root);
+    let initial = engine.render_frame(4, 3).unwrap();
+    assert_eq!(initial.cell(0, 0).unwrap().character, '█');
+    let passes = engine.layout_passes();
+    engine.set_powerline_extended(true);
+    assert_eq!(
+        engine
+            .render_frame(4, 3)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .character,
+        '\u{e0ba}'
+    );
+    engine.set_legacy_symbols(true);
+    assert_eq!(
+        engine
+            .render_frame(4, 3)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .character,
+        '🭁'
+    );
+    engine.set_powerline_extended(false);
+    let rounded = engine.render_frame(4, 3).unwrap();
+    assert_eq!(rounded.cell(0, 0).unwrap().character, '🭁');
+    assert_eq!(
+        (rounded.width(), rounded.height()),
+        (initial.width(), initial.height())
+    );
+    assert_eq!(engine.layout_passes(), passes);
+}
+
+#[test]
 fn initially_blurred_terminal_hides_cursor_on_first_frame() {
     let mut engine = PaintEngine::new();
     let input = engine.create_input_with_id(

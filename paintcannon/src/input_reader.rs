@@ -10,6 +10,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+use crate::glyph_detection::protocol::{Queries, Request};
 use terminput::{Event, KeyCode};
 
 const ESCAPE_DELAY: Duration = Duration::from_millis(25);
@@ -22,6 +23,9 @@ struct Parser {
     paste: Option<Vec<u8>>,
     control_string: Option<u8>,
     control_escape: bool,
+    control_bytes: Vec<u8>,
+    control_overflow: bool,
+    glyph_queries: Option<Queries>,
     escape_since: Option<Instant>,
     events: VecDeque<Event>,
     kitty: Option<bool>,
@@ -41,11 +45,25 @@ impl Parser {
                 continue;
             }
             if let Some(kind) = self.control_string {
+                if self.control_escape && byte == b'\\' && kind == b'_' && !self.control_overflow {
+                    self.control_bytes.pop(); // The ESC preceding ST is not part of the body.
+                    if let Some(queries) = &mut self.glyph_queries {
+                        queries.reply(&self.control_bytes);
+                    }
+                }
                 if (self.control_escape && byte == b'\\')
                     || (kind == b']' && byte == 7)
                     || matches!(byte, 0x18 | 0x1a)
                 {
                     self.control_string = None;
+                }
+                if kind == b'_' && !self.control_overflow {
+                    if self.control_bytes.len() < MAX_SEQUENCE {
+                        self.control_bytes.push(byte);
+                    } else {
+                        self.control_overflow = true;
+                        self.control_bytes.clear();
+                    }
                 }
                 self.control_escape = byte == 0x1b;
                 continue;
@@ -70,6 +88,8 @@ impl Parser {
             {
                 self.control_string = Some(byte);
                 self.control_escape = false;
+                self.control_bytes.clear();
+                self.control_overflow = false;
                 self.sequence.clear();
                 continue;
             }
@@ -117,6 +137,13 @@ impl Parser {
                     self.sequence.clear();
                     continue;
                 }
+                if self.sequence == b"\x1b[0n" {
+                    if let Some(queries) = &mut self.glyph_queries {
+                        queries.heartbeat(now);
+                    }
+                    self.sequence.clear();
+                    continue;
+                }
             }
             match Event::parse_from(&self.sequence) {
                 Ok(Some(event)) => {
@@ -149,6 +176,26 @@ pub(crate) struct InputReader {
 }
 
 impl InputReader {
+    pub(crate) fn enable_glyph_queries(&mut self) -> crossbeam_channel::Sender<Request> {
+        let (sender, queries) = Queries::new();
+        self.parser.glyph_queries = Some(queries);
+        sender
+    }
+
+    pub(crate) fn poll_glyph_queries(&mut self, captured: bool) {
+        if let Some(queries) = &mut self.parser.glyph_queries {
+            if !queries.has_work() {
+                return;
+            }
+            queries.poll(
+                captured && io::stdout().is_terminal(),
+                &mut io::stdout().lock(),
+                std::env::var_os("TMUX").is_some(),
+                Instant::now(),
+            );
+        }
+    }
+
     pub(crate) fn open() -> io::Result<Self> {
         let file = if io::stdin().is_terminal() {
             // Duplicate the descriptor without changing its blocking flags or owning stdin.
@@ -262,6 +309,181 @@ mod tests {
         let (input, terminal) = UnixStream::pair().unwrap();
         let fd: OwnedFd = input.into();
         (InputReader::from_file(File::from(fd)).unwrap(), terminal)
+    }
+
+    #[test]
+    fn glyph_replies_are_fragment_safe_and_do_not_reorder_user_events() {
+        use crate::glyph_detection::protocol::QUERY_TIMEOUT;
+        let bytes = b"a\x1b_25a1;q;cp=e0a0;status=system\x1b\\\x1b[200~pasted\x1b[201~\x1b[Ob";
+        for split in 0..=bytes.len() {
+            let (tx, mut queries) = Queries::new();
+            let (reply, rx) = crossbeam_channel::bounded(1);
+            let now = Instant::now();
+            tx.send(Request {
+                characters: vec!['\u{e0a0}'],
+                deadline: now + QUERY_TIMEOUT,
+                reply,
+            })
+            .unwrap();
+            queries.poll(true, &mut Vec::new(), false, now);
+            let mut parser = Parser {
+                glyph_queries: Some(queries),
+                ..Default::default()
+            };
+            parser.feed(&bytes[..split], now);
+            parser.feed(&bytes[split..], now);
+            assert_eq!(rx.try_recv().unwrap(), vec![Some(true)]);
+            assert_eq!(
+                parser.events.into_iter().collect::<Vec<_>>(),
+                vec![
+                    Event::Key(KeyCode::Char('a').into()),
+                    Event::Paste("pasted".into()),
+                    Event::FocusLost,
+                    Event::Key(KeyCode::Char('b').into())
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn glyph_worker_round_trip_uses_the_existing_reader() {
+        for (status, supported) in [("system", true), ("", false)] {
+            let (mut reader, mut terminal) = connected_reader();
+            let tx = reader.enable_glyph_queries();
+            let worker = std::thread::spawn(move || {
+                let (reply, response) = crossbeam_channel::bounded(1);
+                tx.send(Request {
+                    characters: vec!['\u{e0a0}'],
+                    deadline: Instant::now() + Duration::from_secs(1),
+                    reply,
+                })
+                .unwrap();
+                response.recv_timeout(Duration::from_secs(1)).unwrap()
+            });
+            let mut query = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while query.is_empty() && Instant::now() < deadline {
+                reader.parser.glyph_queries.as_mut().unwrap().poll(
+                    true,
+                    &mut query,
+                    false,
+                    Instant::now(),
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            terminal
+                .write_all(format!("a\x1b_25a1;q;cp=e0a0;status={status}\x1b\\b").as_bytes())
+                .unwrap();
+            let first = reader.read(Duration::from_millis(100)).unwrap();
+            let second = reader.read(Duration::from_millis(100)).unwrap();
+            let result = worker.join().unwrap();
+            assert_eq!(query, b"\x1b_25a1;q;cp=e0a0\x1b\\\x1b[5n");
+            assert_eq!(first, Some(Event::Key(KeyCode::Char('a').into())));
+            assert_eq!(second, Some(Event::Key(KeyCode::Char('b').into())));
+            assert_eq!(result, vec![Some(supported)]);
+        }
+    }
+
+    #[test]
+    fn heartbeat_fragments_are_control_replies_not_keyboard_events() {
+        let bytes = b"a\x1b[0n\x1b[Ob";
+        for split in 0..=bytes.len() {
+            let (tx, mut queries) = Queries::new();
+            let (reply, rx) = crossbeam_channel::bounded(1);
+            let start = Instant::now();
+            tx.send(Request {
+                characters: vec!['x'],
+                deadline: start + Duration::from_secs(2),
+                reply,
+            })
+            .unwrap();
+            queries.poll(true, &mut Vec::new(), false, start);
+            let mut parser = Parser {
+                glyph_queries: Some(queries),
+                ..Default::default()
+            };
+            let received = start + Duration::from_millis(10);
+            parser.feed(&bytes[..split], received);
+            parser.feed(&bytes[split..], received);
+            parser.glyph_queries.as_mut().unwrap().poll(
+                true,
+                &mut Vec::new(),
+                false,
+                received + Duration::from_millis(50),
+            );
+            assert_eq!(rx.try_recv().unwrap(), vec![None]);
+            assert_eq!(
+                parser.events.into_iter().collect::<Vec<_>>(),
+                vec![
+                    Event::Key(KeyCode::Char('a').into()),
+                    Event::FocusLost,
+                    Event::Key(KeyCode::Char('b').into())
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn pasted_heartbeat_does_not_shorten_probe_deadline() {
+        let (tx, mut queries) = Queries::new();
+        let (reply, rx) = crossbeam_channel::bounded(1);
+        let now = Instant::now();
+        tx.send(Request {
+            characters: vec!['x'],
+            deadline: now + Duration::from_secs(2),
+            reply,
+        })
+        .unwrap();
+        queries.poll(true, &mut Vec::new(), false, now);
+        let mut parser = Parser {
+            glyph_queries: Some(queries),
+            ..Default::default()
+        };
+        parser.feed(b"\x1b[200~\x1b[0n\x1b[201~", now);
+        parser.glyph_queries.as_mut().unwrap().poll(
+            true,
+            &mut Vec::new(),
+            false,
+            now + Duration::from_millis(100),
+        );
+        assert!(rx.is_empty());
+        assert_eq!(
+            parser.events.pop_front(),
+            Some(Event::Paste("\x1b[0n".into()))
+        );
+    }
+
+    #[test]
+    fn pasted_and_oversized_replies_cannot_confirm_a_glyph() {
+        let (tx, mut queries) = Queries::new();
+        let (reply, rx) = crossbeam_channel::bounded(1);
+        let now = Instant::now();
+        tx.send(Request {
+            characters: vec!['\u{e0a0}'],
+            deadline: now + Duration::from_secs(1),
+            reply,
+        })
+        .unwrap();
+        queries.poll(true, &mut Vec::new(), false, now);
+        let mut parser = Parser {
+            glyph_queries: Some(queries),
+            ..Default::default()
+        };
+        parser.feed(
+            b"\x1b[200~\x1b_25a1;q;cp=e0a0;status=system\x1b\\\x1b[201~",
+            now,
+        );
+        assert!(rx.is_empty());
+        let oversized = format!(
+            "\x1b_25a1;q;cp=e0a0;status=system;extra={}\x1b\\",
+            "x".repeat(MAX_SEQUENCE)
+        );
+        parser.feed(oversized.as_bytes(), now);
+        assert!(rx.is_empty());
+        parser.feed(b"\x1b_25a1;q;cp=e0a0;status=\x1b\\", now);
+        assert_eq!(rx.try_recv().unwrap(), vec![Some(false)]);
+        assert_eq!(parser.events.len(), 1);
+        assert!(matches!(parser.events[0], Event::Paste(_)));
     }
 
     #[test]

@@ -285,6 +285,8 @@ pub(crate) enum BorderStyle {
     Heavy,
     Rounded,
     ChunkyRounded,
+    Chunky,
+    ChunkyBestEffort,
     Ascii,
 }
 
@@ -988,6 +990,8 @@ pub(crate) fn parse_border_style(value: &str) -> Result<BorderStyle> {
         "heavy" => Ok(BorderStyle::Heavy),
         "rounded" => Ok(BorderStyle::Rounded),
         "chunky-rounded" => Ok(BorderStyle::ChunkyRounded),
+        "chunky" => Ok(BorderStyle::Chunky),
+        "chunky-best-effort" => Ok(BorderStyle::ChunkyBestEffort),
         "ascii" => Ok(BorderStyle::Ascii),
         value => Err(Error::from_reason(format!(
             "unsupported border style: {value}"

@@ -10,6 +10,7 @@ import type {
   IntersectionRect as NativeIntersectionRect,
   KeyboardEvent as NativeKeyboardEvent,
   NativeEvent as NativeQueuedEvent,
+  NerdFontSet,
   PaintCannon as NativePaintCannon,
   ScrollbarHit as NativeScrollbarHit,
   ScrollMetrics as NativeScrollMetrics,
@@ -29,6 +30,7 @@ export type {
   ClickEvent as NativeClickEvent,
   KeyboardEvent as NativeKeyboardEvent,
   NativeEvent,
+  NerdFontSet,
   PaintCannon as NativePaintCannon,
   ScrollbarHit as NativeScrollbarHit,
   ScrollMetrics as NativeScrollMetrics,
@@ -893,6 +895,18 @@ export class PaintCannon {
   get kittyKeyboardEnabled(): boolean {
     return this.binding.kittyKeyboardEnabled;
   }
+
+  readonly font = {
+    hasSymbolsForLegacyComputing: (): Promise<boolean> => {
+      if (this.stopped) return Promise.resolve(false);
+      return this.binding.hasSymbolsForLegacyComputing();
+    },
+    /** Cached, conservative detection of the current terminal's font sets. */
+    hasNerdFontSet: (set: NerdFontSet): Promise<boolean> => {
+      if (this.stopped) return Promise.resolve(false);
+      return this.binding.hasNerdFontSet(set);
+    },
+  };
 
   get hasFocus(): boolean {
     return this.binding.hasFocus;

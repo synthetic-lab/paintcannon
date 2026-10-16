@@ -1,3 +1,6 @@
+// NAPI's type generator must see Task implementations before their return types.
+mod glyph_detection;
+
 mod api;
 mod engine;
 mod event_notification;

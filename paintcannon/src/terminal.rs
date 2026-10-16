@@ -182,7 +182,7 @@ fn write_tmux_passthrough(out: &mut impl Write, sequence: &[u8]) -> io::Result<(
     encode_tmux_passthrough(out, sequence)
 }
 
-fn encode_tmux_passthrough(out: &mut impl Write, sequence: &[u8]) -> io::Result<()> {
+pub(crate) fn encode_tmux_passthrough(out: &mut impl Write, sequence: &[u8]) -> io::Result<()> {
     out.write_all(b"\x1bPtmux;")?;
     for byte in sequence {
         if *byte == 0x1b {

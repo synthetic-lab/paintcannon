@@ -469,6 +469,12 @@ pub(crate) enum EngineCommand {
     SetTerminalFocused {
         focused: bool,
     },
+    SetPowerlineExtended {
+        supported: bool,
+    },
+    SetLegacySymbols {
+        supported: bool,
+    },
     ObserveIntersection {
         observer_id: u32,
         target: DomId,
@@ -526,6 +532,8 @@ pub(crate) struct PaintEngine {
     terminal_foreground: Background,
     terminal_background: Background,
     terminal_focused: bool,
+    powerline_extended: bool,
+    legacy_symbols: bool,
     current_pointer_shape: Option<&'static str>,
     last_pointer_position: Option<(u32, u32)>,
     scrollbar_selection_suppressed: bool,
@@ -562,6 +570,8 @@ impl PaintEngine {
             terminal_foreground: Background::White,
             terminal_background: Background::Black,
             terminal_focused: true,
+            powerline_extended: false,
+            legacy_symbols: false,
             current_pointer_shape: None,
             last_pointer_position: None,
             scrollbar_selection_suppressed: false,
@@ -1070,6 +1080,20 @@ impl PaintEngine {
         self.mark_paint_dirty();
     }
 
+    pub(crate) fn set_legacy_symbols(&mut self, supported: bool) {
+        if self.legacy_symbols != supported {
+            self.legacy_symbols = supported;
+            self.mark_paint_dirty();
+        }
+    }
+
+    pub(crate) fn set_powerline_extended(&mut self, supported: bool) {
+        if self.powerline_extended != supported {
+            self.powerline_extended = supported;
+            self.mark_paint_dirty();
+        }
+    }
+
     pub(crate) fn set_terminal_focused(&mut self, focused: bool) {
         if self.terminal_focused == focused {
             return;
@@ -1549,6 +1573,8 @@ impl PaintEngine {
                 default_foreground: self.terminal_foreground,
                 default_background: self.terminal_background,
                 terminal_focused: self.terminal_focused,
+                powerline_extended: self.powerline_extended,
+                legacy_symbols: self.legacy_symbols,
             },
         );
         profile_log(

@@ -39,6 +39,26 @@ afterEach(() => {
   restores = [];
 });
 
+describe("Nerd Font detection", () => {
+  it("exposes independent legacy symbol detection and fails closed after stop", async () => {
+    const { paintCannon, mockNative } = createPaintTree();
+    mockNative.supportedNerdFontSets.add("powerline");
+    expect(await paintCannon.font.hasSymbolsForLegacyComputing()).toBe(false);
+    mockNative.symbolsForLegacyComputing = true;
+    expect(await paintCannon.font.hasSymbolsForLegacyComputing()).toBe(true);
+    paintCannon.stop();
+    expect(await paintCannon.font.hasSymbolsForLegacyComputing()).toBe(false);
+  });
+  it("exposes async Nerd Font detection and fails closed after stop", async () => {
+    const { paintCannon, mockNative } = createPaintTree();
+    mockNative.supportedNerdFontSets.add("powerline");
+    expect(await paintCannon.font.hasNerdFontSet("powerline")).toBe(true);
+    expect(await paintCannon.font.hasNerdFontSet("powerline-extended")).toBe(false);
+    paintCannon.stop();
+    expect(await paintCannon.font.hasNerdFontSet("powerline")).toBe(false);
+  });
+});
+
 describe("core keyboard events", () => {
   it("keeps Tab navigation limited to text controls after generic focus", () => {
     const { paintCannon, mockNative, root, child: menu } = createPaintTree();

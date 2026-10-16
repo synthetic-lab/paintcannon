@@ -40,6 +40,8 @@ pixel-based borders can't be rendered in terminals:
 - `heavy`
 - `rounded`
 - `chunky-rounded`
+- `chunky`
+- `chunky-best-effort` (attempts chunky-rounded, and chunky as a fallback)
 - `ascii`
 
 PaintCannon supports the following HTML elements:
@@ -79,9 +81,42 @@ tmux has `focus-events` enabled:
 set -g focus-events on
 ```
 
+## Glyph progressive enhancement
+
+Paintcannon ships a few terminal-specific progressive enhancement queries for
+font support:
+
+- `pc.font.hasNerdFontSet(fontSetString): Promise<boolean>`. See [Nerd Font
+  detection](paintcannon/README.md#nerd-font-detection) for the supported sets
+  and SSH/tmux behavior. The `chunky` borders use Powerline Extended triangles
+  when detected.
+
+- `pc.font.hasSymbolsForLegacyComputing(): Promise<boolean>` detects known
+  built-in legacy glyph support independently of `NERD_FONT`. `chunky-rounded`
+  uses those rounded corners when supported.
+
+Note that these checks are best-effort and conservative. We use standard env
+vars such as checking `NERD_FONT=1`, and also attempt to check the
+currently-connected terminal emulator against whitelists of terminal emulators
+known to ship fallbacks such as Ghostty, Kitty, WezTerm, VTE-based terminals
+like Gnome, and others, and finally use the Rio Glyph Protocol to attempt to
+check glyph support, but many older terminals do not support the Glyph Protocol
+and don't ship bundled fallbacks, so we may not successfully determine a
+terminal supports these glyphs even if the user has configured a font that does
+support them. We do however support piercing tmux's veil and finding the true
+connected terminal behind tmux, as well as (default) SSH connections, so that
+the results aren't false negatives simply due to using tmux or SSH.
+
+Treat these as progressive enhancement hints, and make sure that the
+non-enhanced version of your app still is reasonable!
+
+## React support
+
 We also ship `paintcannon-react`, a React reconciler that sits on top of
 PaintCannon's DOM API, for fast, React-based terminal rendering with
 [Ink](https://github.com/vadimdemedes/ink)-inspired hooks.
+
+## Demos
 
 To check out the main demo, clone this repo and then:
 

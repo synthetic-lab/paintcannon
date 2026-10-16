@@ -384,6 +384,12 @@ fn apply_command_inner(
         EngineCommand::SetTerminalFocused { focused } => {
             engine.set_terminal_focused(focused);
         }
+        EngineCommand::SetPowerlineExtended { supported } => {
+            engine.set_powerline_extended(supported);
+        }
+        EngineCommand::SetLegacySymbols { supported } => {
+            engine.set_legacy_symbols(supported);
+        }
         EngineCommand::ObserveIntersection {
             observer_id,
             target,
