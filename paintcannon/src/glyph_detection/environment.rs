@@ -315,11 +315,7 @@ mod tests {
             }
         }
         for (program, platform, expected) in [
-            (
-                "iterm.app",
-                ClientPlatform::MacOs,
-                "Cmd-Option-Click to open",
-            ),
+            ("iterm.app", ClientPlatform::MacOs, "Cmd-Click to open"),
             (
                 "windows_terminal",
                 ClientPlatform::Unknown,
@@ -352,7 +348,7 @@ mod tests {
                     ("kitty", "Ctrl-Shift-Click to open"),
                     ("rio", "Alt-Click to open (Cmd-Click on macOS)"),
                     ("WezTerm", "Shift-Click to open"),
-                    ("iterm.app", "Cmd-Option-Click to open"),
+                    ("iterm.app", "Cmd-Click to open"),
                 ] {
                     let env = Environment::from_pairs(&[
                         ("TERM_PROGRAM", program),
