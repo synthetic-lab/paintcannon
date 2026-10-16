@@ -339,10 +339,10 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["iterm.app", "iterm2"],
         capabilities: TerminalCapabilities {
-            // Option bypasses mouse reporting; Cmd opens the link.
+            // Cmd opens the link.
             // https://iterm2.com/documentation-one-page.html (Mouse)
             osc8: HyperlinkSupport::Supported {
-                open_hint: "Cmd-Option-Click to open",
+                open_hint: "Cmd-Click to open",
             },
             nerd_font: false,
             symbols_for_legacy_computing: false,
