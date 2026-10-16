@@ -82,7 +82,10 @@
     "demo:viewport-scroll": "npm run build:debug && node dist/examples/viewport-scroll.js",
     "demo:transitions": "npm run build:debug && node dist/examples/transitions.js",
     "test": "cargo test --locked && npm run build:debug && vitest run && node test/native-lifecycle-check.mjs",
-    "prepublishOnly": "npm run build:native:local && npm run build:ts && node scripts/verify-native-artifacts.mjs && npm run napi:prepublish"
+    "prepublishOnly": "npm run build:native:local && npm run build:ts && node scripts/verify-native-artifacts.mjs && npm run napi:prepublish",
+    "demo:links": "npm run build:debug && node dist/examples/links.js",
+    "demo:links-edges": "npm run build:debug && node dist/examples/links-edges.js",
+    "demo:links-edges:fallback": "npm run build:debug && NERD_FONT=0 node dist/examples/links-edges.js"
   },
   "napi": {
     "constEnum": false,

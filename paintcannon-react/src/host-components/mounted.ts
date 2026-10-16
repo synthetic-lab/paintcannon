@@ -1,4 +1,5 @@
 import type { PaintElement, TextNode } from "paintcannon";
+import * as a from "./a/a.ts";
 import * as button from "./button/button.ts";
 import * as div from "./div/div.ts";
 import * as form from "./form/form.ts";
@@ -8,6 +9,7 @@ import * as textarea from "./textarea/textarea.ts";
 import type { HostComponent, HostType } from "./shared.ts";
 
 export type HostProps =
+  | a.Props
   | div.Props
   | span.Props
   | form.Props
@@ -32,6 +34,7 @@ export type MountedComponent<Module> = Module extends {
   : never;
 
 export type HostElement =
+  | MountedComponent<typeof a>
   | MountedComponent<typeof div>
   | MountedComponent<typeof span>
   | MountedComponent<typeof form>
@@ -50,6 +53,7 @@ export type HostNode = HostElement | HostText;
 export type HostParent = { children: Set<HostNode> };
 
 const hostPropsForType = {
+  [a.type]: undefined as unknown as a.Props,
   [div.type]: undefined as unknown as div.Props,
   [span.type]: undefined as unknown as span.Props,
   [form.type]: undefined as unknown as form.Props,

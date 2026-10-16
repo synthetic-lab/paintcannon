@@ -105,33 +105,43 @@ pub(crate) fn paint_arena_with_options(
         frame: Frame::new(width, height, capture_hidden_selection_units),
         hit_regions: Vec::new(),
     };
+    output.frame.hyperlinks = arena.hyperlinks();
     output.frame.powerline_extended = options.powerline_extended;
     output.frame.legacy_symbols = options.legacy_symbols;
-    {
-        let mut painter = Painter {
-            arena,
-            options,
-            capture_hidden_selection_units,
-            output: &mut output,
-        };
-        painter.paint_stacking_context(
-            root,
-            PaintState {
-                parent_x: 0,
-                parent_y: 0,
-                background: Background::Default,
-                selection_background: None,
-                foreground: Background::Default,
-                bold: false,
-                italic: false,
-                underline: false,
-                strikethrough: false,
-                visible: true,
-                clip: ClipBounds::unbounded(),
-            },
-        );
-    }
+    paint_arena_into(
+        arena,
+        root,
+        &mut output,
+        capture_hidden_selection_units,
+        options,
+    );
     output
+}
+
+/// Paint another layout tree over an existing frame, without changing its backdrop.
+pub(crate) fn paint_arena_into(
+    arena: &LayoutArena,
+    root: NodeId,
+    output: &mut PaintOutput,
+    capture_hidden_selection_units: bool,
+    options: PaintOptions<'_>,
+) {
+    let mut painter = Painter {
+        arena,
+        options,
+        capture_hidden_selection_units,
+        output,
+    };
+    painter.paint_stacking_context(
+        root,
+        PaintState {
+            parent_x: 0,
+            parent_y: 0,
+            glyph_style: GlyphStyle::default(),
+            visible: true,
+            clip: ClipBounds::unbounded(),
+        },
+    );
 }
 
 struct Painter<'a, 'out> {
@@ -145,13 +155,7 @@ struct Painter<'a, 'out> {
 struct PaintState {
     parent_x: i32,
     parent_y: i32,
-    background: Background,
-    selection_background: Option<Background>,
-    foreground: Background,
-    bold: bool,
-    italic: bool,
-    underline: bool,
-    strikethrough: bool,
+    glyph_style: GlyphStyle,
     visible: bool,
     clip: ClipBounds,
 }
@@ -232,14 +236,15 @@ impl<'a, 'out> Painter<'a, 'out> {
         let layout = self.arena.layout(id);
         let painted_background = effective_background(
             self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
-            state.background,
+            state.glyph_style.background,
         );
         let foreground = effective_background(
             self.paint_color(id, TransitionProperty::Color, style.color),
-            state.foreground,
+            state.glyph_style.foreground,
         );
-        let selection_background = style.selection_background.or(state.selection_background);
-        let text_state = apply_text_style(style, state);
+        let selection_background = style
+            .selection_background
+            .or(state.glyph_style.selection_background);
 
         if visible {
             push_hit_region(&mut self.output.hit_regions, id, bounds, state.clip);
@@ -261,17 +266,17 @@ impl<'a, 'out> Painter<'a, 'out> {
         let child_state = PaintState {
             parent_x: bounds.left - scroll_offset_cells(style.overflow_x, scroll_left),
             parent_y: bounds.top - scroll_offset_cells(style.overflow_y, scroll_top),
-            background: if visible {
-                painted_background
-            } else {
-                state.background
+            glyph_style: GlyphStyle {
+                background: if visible {
+                    painted_background
+                } else {
+                    state.glyph_style.background
+                },
+                selection_background,
+                foreground,
+                hyperlink: self.arena.hyperlink(id).or(state.glyph_style.hyperlink),
+                ..apply_text_style(style, state.glyph_style)
             },
-            selection_background,
-            foreground,
-            bold: text_state.bold,
-            italic: text_state.italic,
-            underline: text_state.underline,
-            strikethrough: text_state.strikethrough,
             visible,
             clip: child_clip,
         };
@@ -397,18 +402,21 @@ impl<'a, 'out> Painter<'a, 'out> {
         let style = self.arena.style(id);
         let visible = effective_visibility(style.visibility, state.visible);
         if visible {
-            state.background = effective_background(
+            state.glyph_style.background = effective_background(
                 self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
-                state.background,
+                state.glyph_style.background,
             );
         }
-        state.foreground = effective_background(
+        state.glyph_style.foreground = effective_background(
             self.paint_color(id, TransitionProperty::Color, style.color),
-            state.foreground,
+            state.glyph_style.foreground,
         );
-        state.selection_background = style.selection_background.or(state.selection_background);
-        state = apply_text_style(style, state);
+        state.glyph_style.selection_background = style
+            .selection_background
+            .or(state.glyph_style.selection_background);
+        state.glyph_style = apply_text_style(style, state.glyph_style);
         state.visible = visible;
+        state.glyph_style.hyperlink = self.arena.hyperlink(id).or(state.glyph_style.hyperlink);
         state
     }
 
@@ -427,31 +435,32 @@ impl<'a, 'out> Painter<'a, 'out> {
         );
         let background = effective_background(
             self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
-            state.background,
+            state.glyph_style.background,
         );
         let foreground = effective_background(
             self.paint_color(id, TransitionProperty::Color, style.color),
-            state.foreground,
+            state.glyph_style.foreground,
         );
-        let selection_background = style.selection_background.or(state.selection_background);
-        let text_state = apply_text_style(style, state);
+        let selection_background = style
+            .selection_background
+            .or(state.glyph_style.selection_background);
         let scrollport = scrollport_rect(bounds, layout);
         let clip = child_clip_for(style.overflow_x, style.overflow_y, scrollport, state.clip);
         let (scroll_left, scroll_top) = self.arena.scroll_offset(id);
         PaintState {
             parent_x: bounds.left - scroll_offset_cells(style.overflow_x, scroll_left),
             parent_y: bounds.top - scroll_offset_cells(style.overflow_y, scroll_top),
-            background: if visible {
-                background
-            } else {
-                state.background
+            glyph_style: GlyphStyle {
+                background: if visible {
+                    background
+                } else {
+                    state.glyph_style.background
+                },
+                selection_background,
+                foreground,
+                hyperlink: self.arena.hyperlink(id).or(state.glyph_style.hyperlink),
+                ..apply_text_style(style, state.glyph_style)
             },
-            selection_background,
-            foreground,
-            bold: text_state.bold,
-            italic: text_state.italic,
-            underline: text_state.underline,
-            strikethrough: text_state.strikethrough,
             visible,
             clip,
         }
@@ -505,12 +514,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                 ' ',
                 GlyphStyle {
                     background: if is_thumb { thumb_color } else { track_color },
-                    foreground: Background::Default,
-                    selection_background: None,
-                    bold: false,
-                    italic: false,
-                    underline: false,
-                    strikethrough: false,
+                    ..Default::default()
                 },
                 clip,
             );
@@ -565,12 +569,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                 ' ',
                 GlyphStyle {
                     background: if is_thumb { thumb_color } else { track_color },
-                    foreground: Background::Default,
-                    selection_background: None,
-                    bold: false,
-                    italic: false,
-                    underline: false,
-                    strikethrough: false,
+                    ..Default::default()
                 },
                 clip,
             );
@@ -590,9 +589,11 @@ impl<'a, 'out> Painter<'a, 'out> {
         }
         let background = effective_background(
             self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
-            state.background,
+            state.glyph_style.background,
         );
-        let selection_background = style.selection_background.or(state.selection_background);
+        let selection_background = style
+            .selection_background
+            .or(state.glyph_style.selection_background);
         let layout = self.arena.layout(id);
         let content = content_box_rect(bounds, layout);
         let child_clip = child_clip_for(style.overflow_x, style.overflow_y, content, state.clip);
@@ -611,6 +612,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             style.image_rendering,
             content,
             selection_background,
+            state.glyph_style.hyperlink,
             child_clip,
         );
         let border_color =
@@ -637,16 +639,17 @@ impl<'a, 'out> Painter<'a, 'out> {
         }
         let background = effective_background(
             self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
-            state.background,
+            state.glyph_style.background,
         );
         let foreground = effective_background(
             self.paint_color(id, TransitionProperty::Color, style.color),
-            state.foreground,
+            state.glyph_style.foreground,
         );
         let placeholder_foreground =
-            effective_background(style.placeholder_color, state.foreground);
-        let selection_background = style.selection_background.or(state.selection_background);
-        let text_state = apply_text_style(style, state);
+            effective_background(style.placeholder_color, state.glyph_style.foreground);
+        let selection_background = style
+            .selection_background
+            .or(state.glyph_style.selection_background);
         let layout = self.arena.layout(id);
         let content = content_box_rect(bounds, layout);
 
@@ -663,11 +666,13 @@ impl<'a, 'out> Painter<'a, 'out> {
             input,
             content,
             TextControlPaintOptions {
-                background,
-                selection_background,
-                foreground,
+                glyph_style: GlyphStyle {
+                    background,
+                    selection_background,
+                    foreground,
+                    ..apply_text_style(style, state.glyph_style)
+                },
                 placeholder_foreground,
-                text_attributes: TextAttributes::from_state(text_state),
                 clip: state.clip,
                 show_cursor: self.options.terminal_focused,
             },
@@ -696,16 +701,17 @@ impl<'a, 'out> Painter<'a, 'out> {
         }
         let background = effective_background(
             self.paint_color(id, TransitionProperty::BackgroundColor, style.background),
-            state.background,
+            state.glyph_style.background,
         );
         let foreground = effective_background(
             self.paint_color(id, TransitionProperty::Color, style.color),
-            state.foreground,
+            state.glyph_style.foreground,
         );
         let placeholder_foreground =
-            effective_background(style.placeholder_color, state.foreground);
-        let selection_background = style.selection_background.or(state.selection_background);
-        let text_state = apply_text_style(style, state);
+            effective_background(style.placeholder_color, state.glyph_style.foreground);
+        let selection_background = style
+            .selection_background
+            .or(state.glyph_style.selection_background);
         let layout = self.arena.layout(id);
         let content = content_box_rect(bounds, layout);
         let (_, scroll_top) = self.arena.scroll_offset(id);
@@ -724,11 +730,13 @@ impl<'a, 'out> Painter<'a, 'out> {
             content,
             scroll_top as usize,
             TextControlPaintOptions {
-                background,
-                selection_background,
-                foreground,
+                glyph_style: GlyphStyle {
+                    background,
+                    selection_background,
+                    foreground,
+                    ..apply_text_style(style, state.glyph_style)
+                },
                 placeholder_foreground,
-                text_attributes: TextAttributes::from_state(text_state),
                 clip: state.clip,
                 show_cursor: self.options.terminal_focused,
             },
@@ -748,15 +756,6 @@ impl<'a, 'out> Painter<'a, 'out> {
         if !state.visible {
             return;
         }
-        let style = GlyphStyle {
-            background: state.background,
-            foreground: state.foreground,
-            selection_background: state.selection_background,
-            bold: state.bold,
-            italic: state.italic,
-            underline: state.underline,
-            strikethrough: state.strikethrough,
-        };
         let normalized = parse_text_for_white_space(text, CssWhiteSpace::Normal)
             .into_iter()
             .collect::<String>();
@@ -774,7 +773,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                     suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
                     width: grapheme.width,
                 },
-                style,
+                state.glyph_style,
                 state.clip,
             );
             col += grapheme.width as i32;
@@ -822,15 +821,6 @@ impl<'a, 'out> Painter<'a, 'out> {
                             fragment_state.clip,
                         );
                     }
-                    let glyph_style = GlyphStyle {
-                        background: fragment_state.background,
-                        foreground: fragment_state.foreground,
-                        selection_background: fragment_state.selection_background,
-                        bold: fragment_state.bold,
-                        italic: fragment_state.italic,
-                        underline: fragment_state.underline,
-                        strikethrough: fragment_state.strikethrough,
-                    };
                     self.output.frame.write_grapheme(
                         rect.left,
                         rect.top,
@@ -839,7 +829,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                             suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
                             width: fragment.width as usize,
                         },
-                        glyph_style,
+                        fragment_state.glyph_style,
                         fragment_state.clip,
                     );
                 }
@@ -871,21 +861,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             if !matches!(self.arena.kind(node), LayoutNodeKind::Element) {
                 continue;
             }
-            let style = self.arena.style(node);
-            let visible = effective_visibility(style.visibility, state.visible);
-            if visible {
-                state.background = effective_background(
-                    self.paint_color(node, TransitionProperty::BackgroundColor, style.background),
-                    state.background,
-                );
-            }
-            state.foreground = effective_background(
-                self.paint_color(node, TransitionProperty::Color, style.color),
-                state.foreground,
-            );
-            state.selection_background = style.selection_background.or(state.selection_background);
-            state = apply_text_style(style, state);
-            state.visible = visible;
+            state = self.inline_element_child_state(node, state);
         }
 
         state
@@ -908,8 +884,8 @@ impl<'a, 'out> Painter<'a, 'out> {
             LayoutNodeKind::Element | LayoutNodeKind::Text(_) => {
                 self.output.frame.fill_rect(
                     rect,
-                    state.background,
-                    state.selection_background,
+                    state.glyph_style.background,
+                    state.glyph_style.selection_background,
                     state.clip,
                 );
             }
@@ -1059,62 +1035,40 @@ fn effective_visibility(value: CssVisibility, inherited: bool) -> bool {
 }
 
 #[derive(Clone, Copy)]
-struct TextAttributes {
-    bold: bool,
-    italic: bool,
-    underline: bool,
-    strikethrough: bool,
-}
-
-#[derive(Clone, Copy)]
 struct TextControlPaintOptions {
-    background: Background,
-    selection_background: Option<Background>,
-    foreground: Background,
+    glyph_style: GlyphStyle,
     placeholder_foreground: Background,
-    text_attributes: TextAttributes,
     clip: ClipBounds,
     show_cursor: bool,
 }
 
-impl TextAttributes {
-    fn from_state(state: PaintState) -> Self {
-        Self {
-            bold: state.bold,
-            italic: state.italic,
-            underline: state.underline,
-            strikethrough: state.strikethrough,
-        }
-    }
-}
-
-fn apply_text_style(style: &DivStyle, mut state: PaintState) -> PaintState {
+fn apply_text_style(style: &DivStyle, mut glyph_style: GlyphStyle) -> GlyphStyle {
     match style.font_weight {
         CssFontWeight::Inherit => {}
-        CssFontWeight::Normal => state.bold = false,
-        CssFontWeight::Bold => state.bold = true,
+        CssFontWeight::Normal => glyph_style.bold = false,
+        CssFontWeight::Bold => glyph_style.bold = true,
     }
     match style.font_style {
         CssFontStyle::Inherit => {}
-        CssFontStyle::Normal => state.italic = false,
-        CssFontStyle::Italic => state.italic = true,
+        CssFontStyle::Normal => glyph_style.italic = false,
+        CssFontStyle::Italic => glyph_style.italic = true,
     }
     match style.text_decoration_line {
         CssTextDecorationLine::Inherit => {}
         CssTextDecorationLine::None => {
-            state.underline = false;
-            state.strikethrough = false;
+            glyph_style.underline = false;
+            glyph_style.strikethrough = false;
         }
         CssTextDecorationLine::Underline => {
-            state.underline = true;
-            state.strikethrough = false;
+            glyph_style.underline = true;
+            glyph_style.strikethrough = false;
         }
         CssTextDecorationLine::LineThrough => {
-            state.underline = false;
-            state.strikethrough = true;
+            glyph_style.underline = false;
+            glyph_style.strikethrough = true;
         }
     }
-    state
+    glyph_style
 }
 
 fn paint_image(
@@ -1123,6 +1077,7 @@ fn paint_image(
     rendering: ImageRendering,
     rect: ClipRect,
     selection_background: Option<Background>,
+    hyperlink: Option<NodeId>,
     clip: ClipBounds,
 ) {
     let Some(rgb) = image.rgb.as_ref() else {
@@ -1156,6 +1111,7 @@ fn paint_image(
                             background: Background::Default,
                             foreground: Background::Rgb(pixel[0], pixel[1], pixel[2]),
                             selection_background,
+                            hyperlink,
                             ..Default::default()
                         },
                         clip,
@@ -1201,6 +1157,7 @@ fn paint_image(
                                 bottom_pixel[2],
                             ),
                             selection_background,
+                            hyperlink,
                             ..Default::default()
                         },
                         clip,
@@ -1218,18 +1175,20 @@ fn paint_input(
     options: TextControlPaintOptions,
 ) {
     let TextControlPaintOptions {
-        background,
-        selection_background,
-        foreground,
+        glyph_style,
         placeholder_foreground,
-        text_attributes,
         clip,
         show_cursor,
     } = options;
     if rect.width() <= 0 || rect.height() <= 0 {
         return;
     }
-    frame.fill_rect(rect, background, selection_background, clip);
+    frame.fill_rect(
+        rect,
+        glyph_style.background,
+        glyph_style.selection_background,
+        clip,
+    );
 
     let width = rect.width() as usize;
     let is_placeholder = input.value.is_empty();
@@ -1258,18 +1217,13 @@ fn paint_input(
     };
     let start = grapheme_boundary_at_or_after_cell(&normalized, start);
     let cursor_col = (input.focused && show_cursor).then_some(cursor_cell.saturating_sub(start));
-    let glyph_style = GlyphStyle {
-        background,
+    let text_style = GlyphStyle {
         foreground: if is_placeholder {
             placeholder_foreground
         } else {
-            foreground
+            glyph_style.foreground
         },
-        selection_background,
-        bold: text_attributes.bold,
-        italic: text_attributes.italic,
-        underline: text_attributes.underline,
-        strikethrough: text_attributes.strikethrough,
+        ..glyph_style
     };
 
     for (grapheme, col) in &glyphs {
@@ -1285,21 +1239,12 @@ fn paint_input(
                 suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
                 width: grapheme.width,
             },
-            glyph_style,
+            text_style,
             clip,
         );
     }
     if let Some(cursor_col) = cursor_col {
         if cursor_col < width {
-            let cursor_style = GlyphStyle {
-                background,
-                foreground,
-                selection_background,
-                bold: text_attributes.bold,
-                italic: text_attributes.italic,
-                underline: text_attributes.underline,
-                strikethrough: text_attributes.strikethrough,
-            };
             if let Some((grapheme, _)) = glyphs.iter().find(|(_, col)| *col == cursor_cell) {
                 let (character, suffix) = grapheme_parts(grapheme.text);
                 frame.write_grapheme(
@@ -1310,7 +1255,7 @@ fn paint_input(
                         suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
                         width: grapheme.width,
                     },
-                    cursor_style,
+                    glyph_style,
                     clip,
                 );
             } else {
@@ -1319,7 +1264,7 @@ fn paint_input(
                     rect.top,
                     ' ',
                     1,
-                    cursor_style,
+                    glyph_style,
                     clip,
                 );
             }
@@ -1336,18 +1281,20 @@ fn paint_textarea(
     options: TextControlPaintOptions,
 ) {
     let TextControlPaintOptions {
-        background,
-        selection_background,
-        foreground,
+        glyph_style,
         placeholder_foreground,
-        text_attributes,
         clip,
         show_cursor,
     } = options;
     if rect.width() <= 0 || rect.height() <= 0 {
         return;
     }
-    frame.fill_rect(rect, background, selection_background, clip);
+    frame.fill_rect(
+        rect,
+        glyph_style.background,
+        glyph_style.selection_background,
+        clip,
+    );
 
     let is_placeholder = textarea.value.is_empty();
     let visible_text = if is_placeholder {
@@ -1356,18 +1303,13 @@ fn paint_textarea(
         textarea.value.as_str()
     };
     let layout = WrappedText::new(visible_text, rect.width() as usize);
-    let glyph_style = GlyphStyle {
-        background,
+    let text_style = GlyphStyle {
         foreground: if is_placeholder {
             placeholder_foreground
         } else {
-            foreground
+            glyph_style.foreground
         },
-        selection_background,
-        bold: text_attributes.bold,
-        italic: text_attributes.italic,
-        underline: text_attributes.underline,
-        strikethrough: text_attributes.strikethrough,
+        ..glyph_style
     };
     let cursor_position = textarea.focused.then(|| {
         WrappedText::new(&textarea.value, rect.width() as usize)
@@ -1396,7 +1338,7 @@ fn paint_textarea(
                 suffix: glyph.suffix.as_deref().map(|suffix| suffix.as_str()),
                 width: glyph.width,
             },
-            glyph_style,
+            text_style,
             clip,
         );
     }
@@ -1418,15 +1360,6 @@ fn paint_textarea(
                         glyph.width,
                     )
                 });
-            let cursor_style = GlyphStyle {
-                background,
-                foreground,
-                selection_background,
-                bold: text_attributes.bold,
-                italic: text_attributes.italic,
-                underline: text_attributes.underline,
-                strikethrough: text_attributes.strikethrough,
-            };
             if let Some((character, suffix, width)) = cursor_glyph {
                 frame.write_grapheme(
                     rect.left + col as i32,
@@ -1436,7 +1369,7 @@ fn paint_textarea(
                         suffix,
                         width,
                     },
-                    cursor_style,
+                    glyph_style,
                     clip,
                 );
             } else {
@@ -1445,7 +1378,7 @@ fn paint_textarea(
                     rect.top + visible_row as i32,
                     ' ',
                     1,
-                    cursor_style,
+                    glyph_style,
                     clip,
                 );
             }
@@ -2361,6 +2294,177 @@ mod tests {
             Background::Default
         );
         assert_eq!(output.target_at(0, 0), Some(visible));
+    }
+
+    #[test]
+    fn text_glyph_styles_survive_plain_and_nested_inline_layouts() {
+        for display in [
+            LayoutDisplay::Block,
+            LayoutDisplay::Flex,
+            LayoutDisplay::Grid,
+        ] {
+            for nested_inline in [false, true] {
+                for decoration in [
+                    CssTextDecorationLine::Underline,
+                    CssTextDecorationLine::LineThrough,
+                ] {
+                    let mut arena = LayoutArena::new();
+                    arena.set_hyperlinks_supported(true);
+                    let root = arena.create_element(DivStyle {
+                        display,
+                        background: Background::Blue,
+                        color: Background::White,
+                        selection_background: Some(Background::Green),
+                        font_weight: CssFontWeight::Bold,
+                        font_style: CssFontStyle::Italic,
+                        text_decoration_line: decoration,
+                        ..block_style(CssDimension::Length(8.0), CssDimension::Length(2.0))
+                    });
+                    arena.set_anchor_href(root, "https://example.com".into());
+                    let text = arena.create_text("hi");
+                    if nested_inline {
+                        let outer = arena.create_element(DivStyle {
+                            display: LayoutDisplay::Inline,
+                            ..DivStyle::default()
+                        });
+                        let inner = arena.create_element(DivStyle {
+                            display: LayoutDisplay::Inline,
+                            ..DivStyle::default()
+                        });
+                        arena.append_child(inner, text);
+                        arena.append_child(outer, inner);
+                        arena.append_child(root, outer);
+                    } else {
+                        arena.append_child(root, text);
+                    }
+                    arena.compute_layout(
+                        root,
+                        Size {
+                            width: AvailableSpace::Definite(8.0),
+                            height: AvailableSpace::Definite(2.0),
+                        },
+                    );
+                    if !nested_inline {
+                        assert_eq!(
+                            arena.inline_fragments(root).is_empty(),
+                            display != LayoutDisplay::Block,
+                        );
+                    }
+
+                    let output = paint_arena(&arena, root, 8, 2, false);
+                    let cell = output.frame.cell(0, 0).unwrap();
+                    assert_eq!(cell.character, 'h');
+                    assert_eq!(cell.background, Background::Blue);
+                    assert_eq!(cell.foreground, Background::White);
+                    assert_eq!(cell.selection_background, Some(Background::Green));
+                    assert!(cell.bold);
+                    assert!(cell.italic);
+                    assert_eq!(
+                        cell.underline,
+                        decoration == CssTextDecorationLine::Underline
+                    );
+                    assert_eq!(
+                        cell.strikethrough,
+                        decoration == CssTextDecorationLine::LineThrough
+                    );
+                    assert_eq!(cell.hyperlink, Some(root));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn text_controls_preserve_glyph_styles_for_values_placeholders_and_cursors() {
+        for multiline in [false, true] {
+            for inherited in [false, true] {
+                for decoration in [
+                    CssTextDecorationLine::Underline,
+                    CssTextDecorationLine::LineThrough,
+                ] {
+                    for value in ["", "hi"] {
+                        for cursor in [0, value.len() as u32] {
+                            let mut arena = LayoutArena::new();
+                            arena.set_hyperlinks_supported(true);
+                            let styled = DivStyle {
+                                background: Background::Blue,
+                                color: Background::White,
+                                selection_background: Some(Background::Green),
+                                font_weight: CssFontWeight::Bold,
+                                font_style: CssFontStyle::Italic,
+                                text_decoration_line: decoration,
+                                ..block_style(CssDimension::Length(8.0), CssDimension::Length(2.0))
+                            };
+                            let unstyled =
+                                block_style(CssDimension::Length(8.0), CssDimension::Length(2.0));
+                            let (parent_style, mut control_style) = if inherited {
+                                (styled, unstyled)
+                            } else {
+                                (unstyled, styled)
+                            };
+                            control_style.placeholder_color = Background::Magenta;
+                            let root = arena.create_element(parent_style);
+                            arena.set_anchor_href(root, "https://example.com".into());
+                            let control = if multiline {
+                                let control = arena.create_textarea(control_style, value);
+                                arena.set_textarea_value(control, value, cursor);
+                                arena.set_textarea_placeholder(control, "hi");
+                                arena.set_textarea_focused(control, true);
+                                control
+                            } else {
+                                let control = arena.create_input(control_style, value);
+                                arena.set_input_value(control, value, cursor);
+                                arena.set_input_placeholder(control, "hi");
+                                arena.set_input_focused(control, true);
+                                control
+                            };
+                            arena.append_child(root, control);
+                            arena.compute_layout(
+                                root,
+                                Size {
+                                    width: AvailableSpace::Definite(8.0),
+                                    height: AvailableSpace::Definite(2.0),
+                                },
+                            );
+                            let output = paint_arena(&arena, root, 8, 2, false);
+                            for column in 0..=cursor.max(1) {
+                                let cell = output.frame.cell(column as usize, 0).unwrap();
+                                let is_cursor = column == cursor;
+                                assert_eq!(
+                                    cell.character,
+                                    match column {
+                                        0 => 'h',
+                                        1 => 'i',
+                                        _ => ' ',
+                                    }
+                                );
+                                assert_eq!(cell.background, Background::Blue);
+                                assert_eq!(
+                                    cell.foreground,
+                                    if value.is_empty() && !is_cursor {
+                                        Background::Magenta
+                                    } else {
+                                        Background::White
+                                    }
+                                );
+                                assert_eq!(cell.selection_background, Some(Background::Green));
+                                assert!(cell.bold);
+                                assert!(cell.italic);
+                                assert_eq!(
+                                    cell.underline,
+                                    decoration == CssTextDecorationLine::Underline
+                                );
+                                assert_eq!(
+                                    cell.strikethrough,
+                                    decoration == CssTextDecorationLine::LineThrough
+                                );
+                                assert_eq!(cell.hyperlink, Some(root));
+                                assert_eq!(cell.reversed, is_cursor);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

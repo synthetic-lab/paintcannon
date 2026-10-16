@@ -8,12 +8,14 @@ use taffy::{AvailableSpace, NodeId, Size};
 use termprofile::TermProfile;
 
 use crate::frame::Frame;
+use crate::glyph_detection::HyperlinkCapability;
 use crate::image::load_png_image;
 use crate::layout::{
     AbsoluteRect, ArenaScrollAdjustment, ArenaScrollMetrics, ArenaScrollbarHit,
     IntersectionRootMargin, LayoutArena, LayoutNodeKind, ScrollbarAxis,
 };
 use crate::paint::{paint_arena_with_options, HitRegion, PaintOptions};
+use crate::paintcannon_layer::PaintCannonLayer;
 use crate::selection::{
     SelectionAction, SelectionMouseEvent, SelectionMouseEventType, SelectionState,
 };
@@ -364,6 +366,13 @@ pub(crate) enum EngineCommand {
         node: DomId,
         transitions: Vec<TransitionSpec>,
     },
+    SetAnchorHref {
+        node: DomId,
+        href: String,
+    },
+    SetHyperlinkSupport {
+        support: HyperlinkCapability,
+    },
     SetText {
         node: DomId,
         text: String,
@@ -511,6 +520,7 @@ struct TransitionBatch {
 
 pub(crate) struct PaintEngine {
     arena: LayoutArena,
+    paintcannon_layer: PaintCannonLayer,
     root: Option<DomId>,
     viewport: Option<DomId>,
     next_dom_id: u32,
@@ -549,6 +559,7 @@ impl PaintEngine {
     pub(crate) fn new() -> Self {
         Self {
             arena: LayoutArena::new(),
+            paintcannon_layer: PaintCannonLayer::new(),
             root: None,
             viewport: None,
             next_dom_id: 1,
@@ -1080,6 +1091,32 @@ impl PaintEngine {
         self.mark_paint_dirty();
     }
 
+    pub(crate) fn set_anchor_href(&mut self, id: DomId, href: String) {
+        if let Some(node) = self.node_for(id) {
+            if self.arena.set_anchor_href(node, href) {
+                self.mark_layout_dirty();
+            } else {
+                self.mark_paint_dirty();
+            }
+        }
+    }
+
+    pub(crate) fn set_hyperlink_support(&mut self, support: HyperlinkCapability) {
+        let open_hint = match support {
+            HyperlinkCapability::Unconfirmed | HyperlinkCapability::ConfirmedButUnhintable => None,
+            HyperlinkCapability::Confirmed { open_hint } => Some(open_hint),
+        };
+        if self
+            .arena
+            .set_hyperlinks_supported(support != HyperlinkCapability::Unconfirmed)
+        {
+            self.mark_layout_dirty();
+        }
+        if self.paintcannon_layer.set_link_hint(open_hint) {
+            self.mark_paint_dirty();
+        }
+    }
+
     pub(crate) fn set_legacy_symbols(&mut self, supported: bool) {
         if self.legacy_symbols != supported {
             self.legacy_symbols = supported;
@@ -1560,6 +1597,16 @@ impl PaintEngine {
         let capture_hidden_selection_units =
             force_capture_hidden_selection_units || self.selection.active_selection().is_some();
         let paint_start = Instant::now();
+        let paint_options = PaintOptions {
+            transitions: None,
+            now,
+            truecolor_enabled: self.truecolor_enabled,
+            default_foreground: self.terminal_foreground,
+            default_background: self.terminal_background,
+            terminal_focused: self.terminal_focused,
+            powerline_extended: self.powerline_extended,
+            legacy_symbols: self.legacy_symbols,
+        };
         let mut output = paint_arena_with_options(
             &self.arena,
             root,
@@ -1568,13 +1615,7 @@ impl PaintEngine {
             capture_hidden_selection_units,
             PaintOptions {
                 transitions: Some(&self.transitions),
-                now,
-                truecolor_enabled: self.truecolor_enabled,
-                default_foreground: self.terminal_foreground,
-                default_background: self.terminal_background,
-                terminal_focused: self.terminal_focused,
-                powerline_extended: self.powerline_extended,
-                legacy_symbols: self.legacy_symbols,
+                ..paint_options
             },
         );
         profile_log(
@@ -1596,6 +1637,9 @@ impl PaintEngine {
             .refresh_focus_from_last_pointer(&output.frame);
         self.hit_regions = output.hit_regions;
         self.current_frame = Some(output.frame.clone());
+        self.refresh_link_hover();
+        self.paintcannon_layer.prepare_layout(width, height);
+        let frame = self.paintcannon_layer.paint(output.frame, paint_options);
         for (node, property) in self.transitions.finish_completed(now) {
             if property == TransitionProperty::Opacity {
                 self.arena.set_opacity_transition_active(node, false);
@@ -1603,7 +1647,7 @@ impl PaintEngine {
         }
         profile_log("frame_bookkeeping", bookkeeping_start.elapsed(), &[]);
         profile_log("render_frame_total", total_start.elapsed(), &[]);
-        Some(output.frame)
+        Some(frame)
     }
 
     pub(crate) fn target_at(&self, x: u32, y: u32) -> Option<DomId> {
@@ -1650,6 +1694,19 @@ impl PaintEngine {
     pub(crate) fn handle_pointer_move(&mut self, x: u32, y: u32) {
         self.last_pointer_position = Some((x, y));
         self.refresh_pointer_shape();
+        self.refresh_link_hover();
+    }
+
+    fn refresh_link_hover(&mut self) {
+        let link = self.last_pointer_position.and_then(|(x, y)| {
+            if !self.terminal_focused {
+                return None;
+            }
+            self.current_frame.as_ref()?.hyperlink_region_at(x, y)
+        });
+        if self.paintcannon_layer.set_hovered_link(link) {
+            self.mark_paint_dirty();
+        }
     }
 
     pub(crate) fn handle_selection_event(&mut self, event: SelectionMouseEvent) -> SelectionAction {

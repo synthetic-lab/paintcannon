@@ -321,6 +321,13 @@ function createHostElement(
       applyCommonProps,
     );
   }
+  if (type === hostComponents.a.type) {
+    return hostComponents.reconcileA.create(
+      paintCannon,
+      hostComponents.castHostProps(type, props),
+      applyCommonProps,
+    );
+  }
   if (type === hostComponents.span.type) {
     return hostComponents.reconcileSpan.create(
       paintCannon,
@@ -383,6 +390,11 @@ function applyHostElementProps(host: HostElement, newProps: HostProps): HostProp
   if (host.type === hostComponents.div.type) {
     const props = hostComponents.castHostProps(host.type, newProps);
     hostComponents.reconcileDiv.applyProps(host.node, host.props, props, applyCommonProps);
+    return props;
+  }
+  if (host.type === hostComponents.a.type) {
+    const props = hostComponents.castHostProps(host.type, newProps);
+    hostComponents.reconcileA.applyProps(host.node, host.props, props, applyCommonProps);
     return props;
   }
   if (host.type === hostComponents.span.type) {
@@ -513,7 +525,7 @@ function reactEventListener(listener: (event: unknown) => void): (event: unknown
 }
 
 function defaultDisplay(type: HostType): string {
-  return type === hostComponents.span.type ? "inline" : "block";
+  return type === hostComponents.span.type || type === hostComponents.a.type ? "inline" : "block";
 }
 
 function reportReactError(error: unknown): void {

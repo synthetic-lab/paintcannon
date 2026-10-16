@@ -287,7 +287,26 @@ pub(crate) enum BorderStyle {
     ChunkyRounded,
     Chunky,
     ChunkyBestEffort,
+    Pill,
     Ascii,
+}
+
+impl BorderStyle {
+    pub(crate) fn width(self) -> f32 {
+        if self == Self::None {
+            0.0
+        } else {
+            1.0
+        }
+    }
+
+    pub(crate) fn height(self) -> f32 {
+        if self == Self::Pill {
+            0.0
+        } else {
+            self.width()
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -775,10 +794,10 @@ impl DivStyle {
                 height: self.max_height.to_taffy(),
             },
             border: Rect {
-                left: border_size(self.border_left),
-                right: border_size(self.border_right),
-                top: border_size(self.border_top),
-                bottom: border_size(self.border_bottom),
+                left: LengthPercentage::length(self.border_left.width()),
+                right: LengthPercentage::length(self.border_right.width()),
+                top: LengthPercentage::length(self.border_top.height()),
+                bottom: LengthPercentage::length(self.border_bottom.height()),
             },
             padding: Rect {
                 left: self.padding_left.to_taffy(),
@@ -848,10 +867,6 @@ impl DivStyle {
             LayoutOverflow::Scroll => Overflow::Hidden,
         }
     }
-}
-
-fn border_size(style: BorderStyle) -> LengthPercentage {
-    LengthPercentage::length(if style == BorderStyle::None { 0.0 } else { 1.0 })
 }
 
 fn layout_align_items_to_taffy(value: LayoutAlignItems) -> AlignItems {
@@ -992,6 +1007,7 @@ pub(crate) fn parse_border_style(value: &str) -> Result<BorderStyle> {
         "chunky-rounded" => Ok(BorderStyle::ChunkyRounded),
         "chunky" => Ok(BorderStyle::Chunky),
         "chunky-best-effort" => Ok(BorderStyle::ChunkyBestEffort),
+        "pill" => Ok(BorderStyle::Pill),
         "ascii" => Ok(BorderStyle::Ascii),
         value => Err(Error::from_reason(format!(
             "unsupported border style: {value}"

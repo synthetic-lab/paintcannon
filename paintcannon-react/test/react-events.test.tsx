@@ -5,13 +5,14 @@ import {
   PaintCannon,
   PaintKeyboardEvent,
   paintCannonDeps,
+  type AnchorElement,
   type InputElement,
   type DivElement,
   type PaintElement,
   type PaintResizeEvent,
   type TextAreaElement,
 } from "paintcannon";
-import { Div, Input, Textarea, render } from "../src/index.ts";
+import { A, Div, Input, Textarea, render } from "../src/index.ts";
 import {
   createMockNativeBinding,
   keyboardInput,
@@ -520,3 +521,33 @@ function notifyNativeEvents(_paintCannon: PaintCannon): void {
 async function commit(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 20));
 }
+
+describe("anchors", () => {
+  it("reconciles href changes and removal while retaining the anchor and its children", async () => {
+    let anchor: AnchorElement | undefined;
+    const ref = (node: AnchorElement): void => {
+      anchor = node;
+    };
+    const root = render(
+      <A ref={ref} href="https://example.com">
+        docs
+      </A>,
+    );
+    await commit();
+    expect(anchor?.href).toBe("https://example.com");
+    const original = anchor;
+    root.render(
+      <A ref={ref} href="https://example.com/next">
+        next
+      </A>,
+    );
+    await commit();
+    expect(anchor).toBe(original);
+    expect(anchor?.href).toBe("https://example.com/next");
+    root.render(<A ref={ref}>plain</A>);
+    await commit();
+    expect(anchor?.href).toBe("");
+    expect(mockNativeInstances.at(-1)?.anchorHrefs.get(anchor!.id)).toBe("");
+    root.paintCannon.stop();
+  });
+});

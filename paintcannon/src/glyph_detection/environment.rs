@@ -1,9 +1,50 @@
-use super::{capabilities::Capabilities, terminals, tmux};
+use super::{
+    capabilities::{Capabilities, HyperlinkCapability},
+    environment_markers::MARKERS,
+    ssh,
+    terminals::{self, HyperlinkSupport},
+    tmux,
+};
 use std::collections::HashMap;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum ClientPlatform {
+    #[default]
+    Unknown,
+    MacOs,
+    Linux,
+}
+
+impl ClientPlatform {
+    pub(super) fn local() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else if cfg!(target_os = "linux") {
+            Self::Linux
+        } else {
+            Self::Unknown
+        }
+    }
+}
+
+pub(super) fn resolve_hyperlink_support(
+    support: HyperlinkSupport,
+    platform: ClientPlatform,
+) -> HyperlinkCapability {
+    let open_hint = match (support, platform) {
+        (HyperlinkSupport::Unconfirmed, _) => return HyperlinkCapability::Unconfirmed,
+        (HyperlinkSupport::Supported { open_hint }, _) => open_hint,
+        (HyperlinkSupport::PlatformSpecific { macos, .. }, ClientPlatform::MacOs) => macos,
+        (HyperlinkSupport::PlatformSpecific { linux, .. }, ClientPlatform::Linux) => linux,
+        (HyperlinkSupport::PlatformSpecific { unknown, .. }, ClientPlatform::Unknown) => unknown,
+    };
+    HyperlinkCapability::Confirmed { open_hint }
+}
 
 pub(super) struct Environment {
     values: HashMap<String, String>,
     clients: Option<Vec<Capabilities>>,
+    platform: ClientPlatform,
 }
 
 impl Environment {
@@ -13,6 +54,7 @@ impl Environment {
                 .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
                 .collect(),
             clients: None,
+            platform: ClientPlatform::local(),
         };
         if !environment.get("TMUX").is_empty() {
             environment.clients = Some(tmux::client_capabilities(environment.get("TMUX_PANE")));
@@ -27,6 +69,22 @@ impl Environment {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             clients: None,
+            platform: ClientPlatform::Unknown,
+        }
+    }
+
+    pub(super) fn with_platform(mut self, platform: ClientPlatform) -> Self {
+        self.platform = platform;
+        self
+    }
+
+    fn client_platform(&self) -> ClientPlatform {
+        // SSH exposes the server OS, not the terminal's OS. Locale spellings
+        // cannot establish that identity, either. Apply this per live tmux client.
+        if ssh::from_environment(|key| self.values.get(key).map(String::as_bytes)) {
+            ClientPlatform::Unknown
+        } else {
+            self.platform
         }
     }
 
@@ -57,6 +115,18 @@ impl Environment {
             // Never use the pane's inherited terminal identifiers or markers:
             // they describe the terminal that started it, not today's clients.
             return Capabilities {
+                osc8: match clients.as_slice() {
+                    [] => HyperlinkCapability::Unconfirmed,
+                    [client] => client.osc8,
+                    clients
+                        if clients
+                            .iter()
+                            .any(|client| client.osc8 == HyperlinkCapability::Unconfirmed) =>
+                    {
+                        HyperlinkCapability::Unconfirmed
+                    }
+                    _ => HyperlinkCapability::ConfirmedButUnhintable,
+                },
                 nerd_font: !clients.is_empty() && clients.iter().all(|client| client.nerd_font),
                 symbols_for_legacy_computing: !clients.is_empty()
                     && clients
@@ -69,29 +139,291 @@ impl Environment {
         if let Some(terminal) = terminals::from_term_program(self.get("TERM_PROGRAM"))
             .or_else(|| terminals::from_term(self.get("TERM")))
         {
-            return terminal.capabilities;
-        }
-
-        // These markers establish legacy glyph support without claiming a product identity.
-        if !self.get("KITTY_WINDOW_ID").is_empty()
-            || !self.get("KONSOLE_DBUS_SESSION").is_empty()
-            || !self.get("VTE_VERSION").is_empty()
-            || !self.get("GNOME_TERMINAL_SCREEN").is_empty()
-            || !self.get("TERMINATOR_UUID").is_empty()
-            || self.get("COLORTERM") == "xfce4-terminal"
-        {
             return Capabilities {
-                nerd_font: false,
-                symbols_for_legacy_computing: true,
+                osc8: resolve_hyperlink_support(terminal.capabilities.osc8, self.client_platform()),
+                nerd_font: terminal.capabilities.nerd_font,
+                symbols_for_legacy_computing: terminal.capabilities.symbols_for_legacy_computing,
             };
         }
-        Capabilities::default()
+
+        MARKERS
+            .iter()
+            .find_map(|marker| (marker.detect)(self.get(marker.name)))
+            .unwrap_or_default()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn foot_and_vte_terminals_have_opening_hints() {
+        for (program, expected) in [
+            ("foot", "Ctrl-Shift-O, then type the link label to open"),
+            ("gnome-terminal", "Ctrl-Click to open"),
+            ("xfce4-terminal", "Ctrl-Click to open"),
+            ("terminator", "Ctrl-Click to open"),
+            ("gnome-console", "Ctrl-Click to open"),
+            ("tilix", "Ctrl-Click to open"),
+            ("ptyxis", "Ctrl-Click to open"),
+            ("guake", "Ctrl-Click to open"),
+            ("mate-terminal", "Ctrl-Click to open"),
+            ("roxterm", "Ctrl-Click to open"),
+        ] {
+            let local = Environment::from_pairs(&[("TERM_PROGRAM", program)]).capabilities();
+            let expected = HyperlinkCapability::Confirmed {
+                open_hint: expected,
+            };
+            assert_eq!(local.osc8, expected, "{program}");
+            assert_eq!(
+                Environment::from_pairs(&[])
+                    .with_clients(vec![local])
+                    .capabilities()
+                    .osc8,
+                expected,
+                "tmux: {program}"
+            );
+        }
+        assert_eq!(
+            Environment::from_pairs(&[("VTE_VERSION", "7600")])
+                .capabilities()
+                .osc8,
+            HyperlinkCapability::Confirmed {
+                open_hint: "Ctrl-Click to open"
+            }
+        );
+    }
+
+    #[test]
+    fn platform_specific_definition_resolves_to_a_concrete_capability() {
+        let definition = HyperlinkSupport::PlatformSpecific {
+            macos: "Cmd-Shift-Click to open",
+            linux: "Ctrl-Shift-Click to open",
+            unknown: "Consult this terminal's link bindings",
+        };
+        for (platform, expected) in [
+            (ClientPlatform::MacOs, "Cmd-Shift-Click to open"),
+            (ClientPlatform::Linux, "Ctrl-Shift-Click to open"),
+            (
+                ClientPlatform::Unknown,
+                "Consult this terminal's link bindings",
+            ),
+        ] {
+            assert_eq!(
+                resolve_hyperlink_support(definition, platform),
+                HyperlinkCapability::Confirmed {
+                    open_hint: expected
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn tmux_does_not_resolve_confirmed_client_hints_again_using_the_pane_platform() {
+        let client = Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")])
+            .with_platform(ClientPlatform::MacOs)
+            .capabilities();
+        let pane = Environment::from_pairs(&[("SSH_TTY", "/dev/pts/1")])
+            .with_platform(ClientPlatform::Linux)
+            .with_clients(vec![client]);
+        assert_eq!(pane.capabilities(), client);
+        assert_eq!(
+            pane.capabilities().osc8,
+            HyperlinkCapability::Confirmed {
+                open_hint: "Cmd-Shift-Click to open"
+            }
+        );
+    }
+
+    #[test]
+    fn direct_terminal_hints_use_local_platform_and_terminal_defaults() {
+        for (program, macos, linux, unknown) in [
+            (
+                "ghostty",
+                "Cmd-Shift-Click to open",
+                "Ctrl-Shift-Click to open",
+                "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)",
+            ),
+            (
+                "rio",
+                "Cmd-Click to open",
+                "Alt-Click to open",
+                "Alt-Click to open (Cmd-Click on macOS)",
+            ),
+            (
+                "WezTerm",
+                "Shift-Click to open",
+                "Shift-Click to open",
+                "Shift-Click to open",
+            ),
+            (
+                "kitty",
+                "Ctrl-Shift-Click to open",
+                "Ctrl-Shift-Click to open",
+                "Ctrl-Shift-Click to open",
+            ),
+            (
+                "alacritty",
+                "Shift-Click to open",
+                "Shift-Click to open",
+                "Shift-Click to open",
+            ),
+        ] {
+            for (platform, expected) in [
+                (ClientPlatform::MacOs, macos),
+                (ClientPlatform::Linux, linux),
+                (ClientPlatform::Unknown, unknown),
+            ] {
+                let env =
+                    Environment::from_pairs(&[("TERM_PROGRAM", program)]).with_platform(platform);
+                assert_eq!(
+                    env.capabilities().osc8,
+                    HyperlinkCapability::Confirmed {
+                        open_hint: expected
+                    },
+                    "{program}, {platform:?}"
+                );
+            }
+        }
+        for (program, platform, expected) in [
+            (
+                "iterm.app",
+                ClientPlatform::MacOs,
+                "Cmd-Option-Click to open",
+            ),
+            (
+                "windows_terminal",
+                ClientPlatform::Unknown,
+                "Ctrl-Click to open",
+            ),
+        ] {
+            let env = Environment::from_pairs(&[("TERM_PROGRAM", program)]).with_platform(platform);
+            assert_eq!(
+                env.capabilities().osc8,
+                HyperlinkCapability::Confirmed {
+                    open_hint: expected
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_preserves_terminal_specific_hints_with_unknown_client_os() {
+        for key in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"] {
+            for platform in [
+                ClientPlatform::MacOs,
+                ClientPlatform::Linux,
+                ClientPlatform::Unknown,
+            ] {
+                for (program, expected) in [
+                    (
+                        "ghostty",
+                        "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)",
+                    ),
+                    ("kitty", "Ctrl-Shift-Click to open"),
+                    ("rio", "Alt-Click to open (Cmd-Click on macOS)"),
+                    ("WezTerm", "Shift-Click to open"),
+                    ("iterm.app", "Cmd-Option-Click to open"),
+                ] {
+                    let env = Environment::from_pairs(&[
+                        ("TERM_PROGRAM", program),
+                        (key, "remote"),
+                        ("LC_CTYPE", "UTF-8"),
+                    ])
+                    .with_platform(platform);
+                    assert_eq!(
+                        env.capabilities().osc8,
+                        HyperlinkCapability::Confirmed {
+                            open_hint: expected
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multiple_tmux_clients_keep_links_but_never_show_a_hint() {
+        let local = Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")])
+            .with_platform(ClientPlatform::Linux)
+            .capabilities();
+        let mac = Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")])
+            .with_platform(ClientPlatform::MacOs)
+            .capabilities();
+        let wezterm = Environment::from_pairs(&[("TERM_PROGRAM", "WezTerm")])
+            .with_platform(ClientPlatform::Linux)
+            .capabilities();
+        let remote =
+            Environment::from_pairs(&[("TERM_PROGRAM", "ghostty"), ("SSH_CONNECTION", "remote")])
+                .with_platform(ClientPlatform::Linux)
+                .capabilities();
+        for clients in [
+            vec![local, local],
+            vec![local, mac],
+            vec![local, wezterm],
+            vec![local, remote],
+            vec![remote, local],
+            vec![remote, remote],
+        ] {
+            let env = Environment::from_pairs(&[]).with_clients(clients);
+            assert_eq!(
+                env.capabilities().osc8,
+                HyperlinkCapability::ConfirmedButUnhintable
+            );
+        }
+    }
+
+    #[test]
+    fn osc8_support_uses_known_terminals_then_markers_not_nerd_font_overrides() {
+        for (program, supported) in [
+            ("ghostty", true),
+            ("rio", true),
+            ("WezTerm", true),
+            ("alacritty", true),
+            ("kitty", true),
+            ("foot", true),
+            ("iTerm.app", true),
+            ("vscode", true),
+            ("gnome-terminal", true),
+            ("Hyper", true),
+            ("Apple_Terminal", false),
+            ("konsole", false),
+            ("unrecognized", false),
+        ] {
+            for override_value in ["0", "1"] {
+                let env = Environment::from_pairs(&[
+                    ("TERM_PROGRAM", program),
+                    ("NERD_FONT", override_value),
+                ]);
+                assert_eq!(
+                    env.capabilities().osc8 != HyperlinkCapability::Unconfirmed,
+                    supported,
+                    "{program}"
+                );
+            }
+        }
+        assert_eq!(
+            Environment::from_pairs(&[("VTE_VERSION", "4900")])
+                .capabilities()
+                .osc8,
+            HyperlinkCapability::Unconfirmed
+        );
+        assert_eq!(
+            Environment::from_pairs(&[("VTE_VERSION", "5004")])
+                .capabilities()
+                .osc8,
+            HyperlinkCapability::Confirmed {
+                open_hint: "Ctrl-Click to open"
+            }
+        );
+        assert!(matches!(
+            Environment::from_pairs(&[("WT_SESSION", "session")])
+                .capabilities()
+                .osc8,
+            HyperlinkCapability::Confirmed { .. }
+        ));
+    }
 
     #[test]
     fn ssh_uses_term_without_a_recognized_term_program() {
@@ -113,10 +445,31 @@ mod tests {
                     pairs.push(("TERM_PROGRAM", program));
                 }
                 assert_eq!(
-                    Environment::from_pairs(&pairs).capabilities(),
+                    Environment::from_pairs(&pairs)
+                        .with_platform(ClientPlatform::Linux)
+                        .capabilities(),
                     Capabilities {
                         nerd_font,
-                        symbols_for_legacy_computing
+                        symbols_for_legacy_computing,
+                        osc8: match term {
+                            "rxvt-unicode-256color" => HyperlinkCapability::Unconfirmed,
+                            "rio" => HyperlinkCapability::Confirmed {
+                                open_hint: "Alt-Click to open (Cmd-Click on macOS)"
+                            },
+                            "foot" | "foot-extra" | "foot-direct" =>
+                                HyperlinkCapability::Confirmed {
+                                    open_hint: "Ctrl-Shift-O, then type the link label to open"
+                                },
+                            "xterm-ghostty" => HyperlinkCapability::Confirmed {
+                                open_hint: "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)"
+                            },
+                            "xterm-kitty" => HyperlinkCapability::Confirmed {
+                                open_hint: "Ctrl-Shift-Click to open"
+                            },
+                            _ => HyperlinkCapability::Confirmed {
+                                open_hint: "Shift-Click to open"
+                            },
+                        },
                     },
                     "{term}, {program:?}"
                 );
@@ -148,9 +501,38 @@ mod tests {
                 Capabilities {
                     nerd_font: true,
                     symbols_for_legacy_computing: true,
+                    osc8: HyperlinkCapability::Confirmed {
+                        open_hint: "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)"
+                    },
                 }
             );
         }
+    }
+
+    #[test]
+    fn windows_terminal_and_wt_session_confirm_legacy_mosaic_corners() {
+        for identity in [
+            ("TERM_PROGRAM", "windows_terminal"),
+            ("TERM_PROGRAM", "windowsterminal"),
+            ("WT_SESSION", "session-id"),
+        ] {
+            let capabilities =
+                Environment::from_pairs(&[("TERM", "xterm-256color"), identity]).capabilities();
+            assert!(capabilities.symbols_for_legacy_computing, "{identity:?}");
+            assert!(!capabilities.nerd_font);
+            assert_eq!(
+                capabilities.osc8,
+                HyperlinkCapability::Confirmed {
+                    open_hint: "Ctrl-Click to open"
+                }
+            );
+        }
+        // An unrelated inherited marker must not override a recognized terminal.
+        let apple = Environment::from_pairs(&[
+            ("TERM_PROGRAM", "Apple_Terminal"),
+            ("WT_SESSION", "inherited-session"),
+        ]);
+        assert_eq!(apple.capabilities(), Capabilities::default());
     }
 
     #[test]
@@ -170,6 +552,15 @@ mod tests {
                     Capabilities {
                         nerd_font: false,
                         symbols_for_legacy_computing: true,
+                        osc8: match marker.0 {
+                            "KITTY_WINDOW_ID" => HyperlinkCapability::Confirmed {
+                                open_hint: "Ctrl-Shift-Click to open"
+                            },
+                            "VTE_VERSION" => HyperlinkCapability::Confirmed {
+                                open_hint: "Ctrl-Click to open"
+                            },
+                            _ => HyperlinkCapability::Unconfirmed,
+                        },
                     },
                     "{term}, {marker:?}"
                 );
@@ -216,6 +607,23 @@ mod tests {
                 Capabilities {
                     nerd_font,
                     symbols_for_legacy_computing,
+                    osc8: match term {
+                        "rio" => HyperlinkCapability::Confirmed {
+                            open_hint: "Alt-Click to open (Cmd-Click on macOS)"
+                        },
+                        "foot-direct" => HyperlinkCapability::Confirmed {
+                            open_hint: "Ctrl-Shift-O, then type the link label to open"
+                        },
+                        "xterm-ghostty" => HyperlinkCapability::Confirmed {
+                            open_hint: "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)"
+                        },
+                        "xterm-kitty" => HyperlinkCapability::Confirmed {
+                            open_hint: "Ctrl-Shift-Click to open"
+                        },
+                        _ => HyperlinkCapability::Confirmed {
+                            open_hint: "Shift-Click to open"
+                        },
+                    },
                 },
                 "{term}"
             );
@@ -243,6 +651,15 @@ mod tests {
                 Capabilities {
                     nerd_font,
                     symbols_for_legacy_computing,
+                    osc8: match program {
+                        "WezTerm" => HyperlinkCapability::Confirmed {
+                            open_hint: "Shift-Click to open"
+                        },
+                        "ghostty" | "unrecognized" => HyperlinkCapability::Confirmed {
+                            open_hint: "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)"
+                        },
+                        _ => HyperlinkCapability::Unconfirmed,
+                    },
                 },
                 "{program}, {term}"
             );
@@ -273,6 +690,21 @@ mod tests {
                 Capabilities {
                     nerd_font,
                     symbols_for_legacy_computing,
+                    osc8: match program {
+                        "Apple_Terminal" => HyperlinkCapability::Unconfirmed,
+                        "gnome-terminal" => HyperlinkCapability::Confirmed {
+                            open_hint: "Ctrl-Click to open"
+                        },
+                        "ghostty" => HyperlinkCapability::Confirmed {
+                            open_hint: "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)"
+                        },
+                        "WezTerm" => HyperlinkCapability::Confirmed {
+                            open_hint: "Shift-Click to open"
+                        },
+                        _ => HyperlinkCapability::Confirmed {
+                            open_hint: "Ctrl-Click to open (Cmd-Click on macOS)"
+                        },
+                    },
                 }
             );
         }
@@ -285,8 +717,22 @@ mod tests {
         let apple = Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal")]).capabilities();
         for (clients, expected, can_probe) in [
             (vec![ghostty], ghostty, true),
-            (vec![ghostty, ghostty], ghostty, false),
-            (vec![ghostty, wezterm], wezterm, false),
+            (
+                vec![ghostty, ghostty],
+                Capabilities {
+                    osc8: HyperlinkCapability::ConfirmedButUnhintable,
+                    ..ghostty
+                },
+                false,
+            ),
+            (
+                vec![ghostty, wezterm],
+                Capabilities {
+                    osc8: HyperlinkCapability::ConfirmedButUnhintable,
+                    ..wezterm
+                },
+                false,
+            ),
             (vec![ghostty, apple], Capabilities::default(), false),
             (vec![], Capabilities::default(), false),
         ] {

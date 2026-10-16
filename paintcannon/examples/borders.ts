@@ -16,7 +16,7 @@ title.style.borderBottom = "solid";
 title.style.borderColor = "cyan";
 title.appendChild(
   pc.createTextNode(
-    "Borders: solid, double, heavy, rounded, chunky-rounded, chunky, chunky-best-effort, ascii, and mixed sides",
+    "Borders: solid, double, heavy, rounded, chunky-rounded, chunky, chunky-best-effort, pill, ascii, and mixed sides",
   ),
 );
 
@@ -49,6 +49,16 @@ pc.transaction(() => {
   mixed.style.backgroundColor = "blue";
   mixed.appendChild(pc.createTextNode("mixed per-side borders"));
   grid.appendChild(mixed);
+
+  const pill = box("pill", "pill", "#38bdf8");
+  pill.style.backgroundColor = "#38bdf8";
+  pill.style.color = "black";
+  pill.style.width = 10;
+  pill.style.alignSelf = "start";
+  pill.style.justifySelf = "start";
+  pill.style.display = "flex";
+  pill.style.justifyContent = "center";
+  grid.appendChild(pill);
 });
 
 function box(label: string, border: string, color: string) {

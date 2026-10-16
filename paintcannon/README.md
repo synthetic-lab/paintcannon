@@ -43,6 +43,7 @@ PaintCannon also exposes terminal-specific border styles:
 - `chunky-rounded`
 - `chunky`
 - `chunky-best-effort`
+- `pill`
 - `ascii`
 
 Positioned elements support `position: static | relative | absolute`, the `top`, `right`,
@@ -74,6 +75,7 @@ The core DOM subset supports:
 
 - `div`
 - `span`
+- `a` with `href`
 - `input` with `type: "text"`
 - `textarea`
 - `button`
@@ -87,6 +89,57 @@ not available. The row is relative to the complete textarea value, not its curre
 viewport. Pass that row to `getVisualLineRange(row)` to get its `{start, end}` character offsets;
 `end` is exclusive, explicit newline characters are excluded, and both offsets use the same units
 as `cursorPosition`.
+
+## Links
+
+Create an inline anchor with a destination and ordinary child nodes:
+
+```ts
+const link = pc.createElement("a");
+link.href = "https://example.com/docs";
+link.style.textDecorationLine = "underline";
+link.appendChild(pc.createTextNode("Documentation"));
+root.appendChild(link);
+```
+
+`AnchorElement.href` is readable and writable. Use absolute URLs: PaintCannon
+has no document base URL to resolve relative destinations against.
+
+In supported terminals, the label is a native OSC 8 hyperlink. Otherwise,
+PaintCannon renders `[Documentation](https://example.com/docs)`. This fallback
+is part of layout, so it wraps, clips, scrolls and copies like other text.
+Spaces, Unicode and control characters in destinations are percent-encoded in
+the rendered URL.
+
+Support is based on the [OSC 8 adoption
+list](https://github.com/Alhadis/OSC8-Adoption/). Unknown terminals use the
+fallback, as do terminals whose hyperlinks are disabled by default (such as
+Konsole). There is no universal OSC 8 capability query; terminal identity
+cannot reveal every user setting or older emulator version. PaintCannon does
+not launch a browser process itself. Its ordinary click events still bubble,
+but `preventDefault()` cannot cancel a gesture handled by the terminal
+emulator, since the gesture is handled by the emulator itself rather than
+PaintCannon.
+
+Inside tmux, **every attached client viewing the pane's session** must have a
+supported outer terminal and tmux's `hyperlinks` terminal feature enabled.
+tmux 3.4 or newer is required. If tmux has not enabled the feature automatically,
+add `set -as terminal-features 'xterm-ghostty:hyperlinks'` to your tmux configuration
+for Ghostty (use the matching terminal pattern for other emulators). Detach and
+reattach existing clients if the feature is not applied immediately.
+
+Opening a link uses your terminal's gesture, commonly Ctrl-click or Cmd-click.
+With mouse capture enabled, Shift may also be required to let the terminal
+handle the click. With `captureMouse: true`, hovering a native link
+automatically shows opening instructions for the detected terminal's default
+link-opening bindings.
+
+Shortcuts can be OS-specific; for example, on Linux a terminal emulator may
+require Ctrl-Shift-Click and on macOS require Command-Shift-Click. Local
+clients detect the host OS and render the OS-specific shortcut. When the client
+OS cannot be determined (for example, over SSH), PaintCannon shows generic
+hints when necessary; for example, we might render: `Ctrl-Shift-Click to open
+(Cmd-Shift-Click on macOS)`.
 
 ## Events
 
@@ -327,6 +380,22 @@ it does not change layout. `npm run demo:borders` shows both styles.
 triangles second, and filled square corners last. It uses the same one-cell
 border layout in all three cases. The borders demo also shows this style.
 
+`pill` adds only a one-cell left and right border, so a one-line label stays one
+row tall. It uses the Powerline Extended left/right semicircles (U+E0B6/U+E0B4),
+or filled square cells when unsupported. For a solid pill, set `borderColor`
+to match `backgroundColor`:
+
+```ts
+button.style.border = "pill";
+button.style.borderColor = "#38bdf8";
+button.style.backgroundColor = "#38bdf8";
+button.style.color = "black";
+```
+
+`borderLeft` and `borderRight` can also use `pill` independently. `pill` on
+`borderTop` or `borderBottom` reserves no space and draws no border. Wrapped
+content keeps the same side caps on each row.
+
 ### Symbols for Legacy Computing
 
 ```ts
@@ -335,7 +404,10 @@ const supported = await pc.font.hasSymbolsForLegacyComputing();
 
 This `Promise<boolean>` reads the current detection pass, checking known terminal built-in support first,
 including the smooth mosaic corners used by `chunky-rounded`. It is independent
-of `NERD_FONT`: Nerd Fonts do not guarantee those characters. If the table does
+of `NERD_FONT`: Nerd Fonts do not guarantee those characters. Windows Terminal
+1.25.2733.0 and newer includes these corners in its
+[built-in glyph renderer](https://github.com/microsoft/terminal/discussions/20758);
+both its terminal identity and `WT_SESSION` are recognized. If the table does
 not recognize the terminal, environment markers such as `VTE_VERSION` can
 establish legacy glyph support without identifying a particular application.
 Recognized terminals use their table entry; these fallback markers do not

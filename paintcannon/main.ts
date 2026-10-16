@@ -400,6 +400,7 @@ type ActiveScrollbarDrag = {
 export const PAINT_ELEMENT_TAG_NAMES = [
   "div",
   "span",
+  "a",
   "form",
   "button",
   "img",
@@ -413,6 +414,7 @@ type ExactPaintElementTagMap<T extends { [Tag in PaintElementTagName]: object }>
 export type PaintElementByTagName = ExactPaintElementTagMap<{
   div: DivElement;
   span: SpanElement;
+  a: AnchorElement;
   form: FormElement;
   button: ButtonElement;
   img: ImageElement;
@@ -717,6 +719,7 @@ export class PaintCannon {
   } = {
     div: () => this.createDivElement(),
     span: () => this.createSpanElement(),
+    a: () => this.createAnchorElement(),
     form: () => this.createFormElement(),
     button: () => this.createButtonElement(),
     img: () => this.createImageElement(),
@@ -796,6 +799,19 @@ export class PaintCannon {
       (parent, child) => this.appendNativeChild(parent, child),
       (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
       (id, property, value) => this.setNativeStyleProperty(id, property, value),
+    );
+    this.registerElement(element);
+    return element;
+  }
+
+  private createAnchorElement(): AnchorElement {
+    const element = new AnchorElement(
+      this,
+      this.createNativeSpan(),
+      (parent, child) => this.appendNativeChild(parent, child),
+      (parent, child, before) => this.insertNativeChildBefore(parent, child, before),
+      (id, property, value) => this.setNativeStyleProperty(id, property, value),
+      (id, href) => this.setNativeAnchorHref(id, href),
     );
     this.registerElement(element);
     return element;
@@ -1375,6 +1391,14 @@ export class PaintCannon {
     }
 
     this.binding.setTextNodeValue(id, text);
+  }
+
+  private setNativeAnchorHref(id: number, href: string): void {
+    if (this.isTransactionActive()) {
+      this.batchCommands.push({ type: "setAnchorHref", id, text: href });
+      return;
+    }
+    this.binding.setAnchorHref(id, href);
   }
 
   private setNativeImageSource(id: number, src: string): void {
@@ -3160,6 +3184,31 @@ export class SpanElement extends PaintElementEventTarget<ContainerElementEventLi
 
   detachChild(child: PaintNode): PaintNode {
     return this.ownerDocument.detachChild(this, child);
+  }
+}
+
+export class AnchorElement extends SpanElement {
+  private destination = "";
+
+  constructor(
+    owner: PaintCannon,
+    id: number,
+    appendNativeChild: (parent: PaintElement, child: PaintNode) => void,
+    insertNativeChildBefore: (parent: PaintElement, child: PaintNode, before: PaintNode) => void,
+    setNativeStyleProperty: SetNativeStyleProperty,
+    private readonly setNativeAnchorHref: (id: number, href: string) => void,
+  ) {
+    super(owner, id, appendNativeChild, insertNativeChildBefore, setNativeStyleProperty);
+  }
+
+  get href(): string {
+    return this.destination;
+  }
+
+  set href(value: string) {
+    const next = String(value);
+    this.setNativeAnchorHref(this.id, next);
+    this.destination = next;
   }
 }
 

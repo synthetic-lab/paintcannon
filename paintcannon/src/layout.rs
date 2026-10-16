@@ -10,8 +10,8 @@ use taffy::{
 
 use crate::line_break::LineBreakPlan;
 use crate::style::{
-    BorderStyle, CssDimension, CssLengthPercentageAuto, CssOverflowAnchor, CssOverflowWrap,
-    CssPosition, CssWhiteSpace, CssWordBreak, CssZIndex, DivStyle, LayoutDisplay, LayoutOverflow,
+    CssDimension, CssLengthPercentageAuto, CssOverflowAnchor, CssOverflowWrap, CssPosition,
+    CssWhiteSpace, CssWordBreak, CssZIndex, DivStyle, LayoutDisplay, LayoutOverflow,
     ScrollbarGutter,
 };
 use crate::text::{
@@ -57,6 +57,8 @@ pub(crate) struct TextAreaLayoutData {
 }
 
 pub(crate) struct LayoutArena {
+    anchors: std::collections::HashMap<NodeId, crate::hyperlink::Anchor>,
+    hyperlinks_supported: bool,
     nodes: Vec<LayoutNode>,
     free_nodes: Vec<usize>,
     scroll_nodes: HashSet<NodeId>,
@@ -329,6 +331,8 @@ pub(crate) enum InlineFragmentKind {
 impl LayoutArena {
     pub(crate) fn new() -> Self {
         Self {
+            anchors: std::collections::HashMap::new(),
+            hyperlinks_supported: false,
             nodes: Vec::new(),
             free_nodes: Vec::new(),
             scroll_nodes: HashSet::new(),
@@ -348,6 +352,90 @@ impl LayoutArena {
 
     pub(crate) fn create_element(&mut self, style: DivStyle) -> NodeId {
         self.push_node(LayoutNodeKind::Element, style)
+    }
+
+    // Returns whether generated fallback content changed layout.
+    pub(crate) fn set_anchor_href(&mut self, node: NodeId, href: String) -> bool {
+        let href = crate::hyperlink::encode_href(&href);
+        if self
+            .anchors
+            .get(&node)
+            .is_some_and(|anchor| anchor.href == href)
+        {
+            return false;
+        }
+        self.remove_anchor_fallback(node);
+        if href.is_empty() {
+            self.anchors.remove(&node);
+        } else {
+            self.anchors.insert(
+                node,
+                crate::hyperlink::Anchor {
+                    href,
+                    fallback: None,
+                },
+            );
+            self.add_anchor_fallback(node);
+        }
+        !self.hyperlinks_supported
+    }
+
+    pub(crate) fn set_hyperlinks_supported(&mut self, supported: bool) -> bool {
+        if self.hyperlinks_supported == supported {
+            return false;
+        }
+        self.hyperlinks_supported = supported;
+        let anchors: Vec<_> = self.anchors.keys().copied().collect();
+        for node in &anchors {
+            self.remove_anchor_fallback(*node);
+            self.add_anchor_fallback(*node);
+        }
+        !anchors.is_empty()
+    }
+
+    pub(crate) fn hyperlinks(&self) -> std::collections::HashMap<NodeId, std::sync::Arc<str>> {
+        if !self.hyperlinks_supported {
+            return Default::default();
+        }
+        self.anchors
+            .iter()
+            .map(|(node, anchor)| (*node, anchor.href.clone()))
+            .collect()
+    }
+
+    pub(crate) fn hyperlink(&self, node: NodeId) -> Option<NodeId> {
+        (self.hyperlinks_supported && self.anchors.contains_key(&node)).then_some(node)
+    }
+
+    fn add_anchor_fallback(&mut self, node: NodeId) {
+        if self.hyperlinks_supported {
+            return;
+        }
+        let href = self.anchors[&node].href.clone();
+        // Generated content belongs to layout, not the public DOM. This keeps
+        // fallback URLs in measurement, clipping, selection and scroll extents.
+        let prefix = self.create_text("[");
+        let suffix = self.create_text(format!("]({href})"));
+        if let Some(first) = self.children(node).first().copied() {
+            self.insert_child_before(node, prefix, first);
+        } else {
+            self.append_child(node, prefix);
+        }
+        self.append_child(node, suffix);
+        self.anchors.get_mut(&node).unwrap().fallback = Some([prefix, suffix]);
+    }
+
+    fn remove_anchor_fallback(&mut self, node: NodeId) {
+        if let Some([prefix, suffix]) = self
+            .anchors
+            .get_mut(&node)
+            .and_then(|anchor| anchor.fallback.take())
+        {
+            for child in [prefix, suffix] {
+                self.remove_child(node, child);
+                self.remove_node(child);
+            }
+        }
     }
 
     pub(crate) fn reserve_nodes(&mut self, additional: usize) {
@@ -677,6 +765,10 @@ impl LayoutArena {
     }
 
     pub(crate) fn append_child(&mut self, parent: NodeId, child: NodeId) {
+        if let Some([_, suffix]) = self.anchors.get(&parent).and_then(|anchor| anchor.fallback) {
+            self.insert_child_before(parent, child, suffix);
+            return;
+        }
         let previous_parent = self.nodes[node_index(child)].parent;
         if let Some(previous_parent) = previous_parent {
             let children = &mut self.nodes[node_index(previous_parent)].children;
@@ -765,6 +857,8 @@ impl LayoutArena {
     }
 
     pub(crate) fn remove_node(&mut self, node: NodeId) {
+        self.remove_anchor_fallback(node);
+        self.anchors.remove(&node);
         self.invalidate_scroll_anchors_in_subtree(node);
         if self.focused_text_control == Some(node) {
             self.focused_text_control = None;
@@ -3206,6 +3300,11 @@ impl LayoutPartialTree for LayoutArena {
                     return tree.compute_inline_layout(node_id, inputs);
                 }
 
+                // A former inline context may now be empty or contain block children.
+                // Its old fragments must not survive the new formatting context.
+                if tree.should_store_layout() {
+                    tree.nodes[node_index(node_id)].fragments.clear();
+                }
                 let display = tree.nodes[node_index(node_id)].taffy_style.display;
                 let has_children = tree.child_count(node_id) > 0;
                 match (display, has_children) {
@@ -3633,16 +3732,8 @@ fn explicit_content_width_cells(style: &DivStyle) -> Option<u32> {
 
 fn border_size_cells(style: &DivStyle) -> Size<f32> {
     Size {
-        width: border_edge_cells(style.border_left) + border_edge_cells(style.border_right),
-        height: border_edge_cells(style.border_top) + border_edge_cells(style.border_bottom),
-    }
-}
-
-fn border_edge_cells(style: BorderStyle) -> f32 {
-    if style == BorderStyle::None {
-        0.0
-    } else {
-        1.0
+        width: style.border_left.width() + style.border_right.width(),
+        height: style.border_top.height() + style.border_bottom.height(),
     }
 }
 

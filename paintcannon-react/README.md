@@ -88,6 +88,7 @@ DOM API:
 
 - `Div`
 - `Span`
+- `A`
 - `Input`
 - `Textarea`
 - `Button`
@@ -236,6 +237,7 @@ both supported:
 
 - `Div`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
 - `Span`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
+- `A`: shared props, `scrollLeft?: number`, `scrollTop?: number`, and `href?: string`.
 - `Form`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
 - `Button`: shared props, plus `type?: "submit" | "button"`,
   `scrollLeft?: number`, and `scrollTop?: number`.

@@ -1,4 +1,7 @@
-use super::{environment::Environment, protocol::Request, Detection, ProbeReport, SAMPLES};
+use super::{
+    environment::Environment, protocol::Request, Detection, HyperlinkCapability, ProbeReport,
+    SAMPLES,
+};
 use crate::engine::EngineCommand;
 use crate::event_notification::EventNotification;
 use crate::native_event::{NativeEvent, NativeEventQueue};
@@ -41,6 +44,7 @@ impl FontMonitor {
         let thread = thread::spawn(move || {
             let mut published = Published {
                 report: ProbeReport::default(),
+                osc8: HyperlinkCapability::Unconfirmed,
                 commands,
                 events,
                 notifier,
@@ -49,7 +53,10 @@ impl FontMonitor {
             loop {
                 let deadline = Instant::now() + POLL_INTERVAL;
                 let detection = shared.read().unwrap().clone();
-                detection.environment.get_or_init(&mut environment);
+                let snapshot = detection.environment.get_or_init(&mut environment);
+                if !published.update_osc8(snapshot.capabilities().osc8) {
+                    break;
+                }
                 // Known sets needn't wait for unrelated, unrecognized sets. Keep
                 // the previous result for those until this pass's probe completes.
                 let known = ProbeReport {
@@ -111,6 +118,7 @@ impl Drop for FontMonitor {
 
 struct Published {
     report: ProbeReport,
+    osc8: HyperlinkCapability,
     commands: Sender<EngineCommand>,
     events: Arc<NativeEventQueue>,
     notifier: Arc<dyn EventNotification>,
@@ -118,6 +126,18 @@ struct Published {
 }
 
 impl Published {
+    fn update_osc8(&mut self, support: HyperlinkCapability) -> bool {
+        if self.osc8 != support {
+            select! {
+                recv(self.stopping) -> _ => return false,
+                send(self.commands, EngineCommand::SetHyperlinkSupport { support }) -> result =>
+                    if result.is_err() { return false; },
+            }
+            self.osc8 = support;
+        }
+        true
+    }
+
     fn update(&mut self, report: ProbeReport) -> bool {
         if self.stopping.try_recv() == Err(TryRecvError::Disconnected) {
             return false;
@@ -178,12 +198,71 @@ mod tests {
     }
 
     #[test]
+    fn osc8_changes_update_the_engine_without_becoming_font_events() {
+        let (commands, rx) = unbounded();
+        let (wake, wakes) = unbounded();
+        let events = Arc::new(NativeEventQueue::default());
+        let mut published = Published {
+            report: ProbeReport::default(),
+            osc8: HyperlinkCapability::Unconfirmed,
+            commands,
+            events: events.clone(),
+            notifier: Arc::new(Notify(wake)),
+            stopping: never(),
+        };
+        assert!(published.update_osc8(HyperlinkCapability::Confirmed {
+            open_hint: "Shift-Click to open"
+        }));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            EngineCommand::SetHyperlinkSupport {
+                support: HyperlinkCapability::Confirmed {
+                    open_hint: "Shift-Click to open"
+                }
+            }
+        ));
+        assert!(published.update_osc8(HyperlinkCapability::Confirmed {
+            open_hint: "Shift-Click to open"
+        }));
+        assert!(rx.is_empty());
+        // Still OSC 8 capable, but a different attached terminal needs new instructions.
+        assert!(published.update_osc8(HyperlinkCapability::Confirmed {
+            open_hint: "Cmd-Shift-Click to open"
+        }));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            EngineCommand::SetHyperlinkSupport {
+                support: HyperlinkCapability::Confirmed {
+                    open_hint: "Cmd-Shift-Click to open"
+                }
+            }
+        ));
+        assert!(published.update_osc8(HyperlinkCapability::ConfirmedButUnhintable));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            EngineCommand::SetHyperlinkSupport {
+                support: HyperlinkCapability::ConfirmedButUnhintable
+            }
+        ));
+        assert!(published.update_osc8(HyperlinkCapability::Unconfirmed));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            EngineCommand::SetHyperlinkSupport {
+                support: HyperlinkCapability::Unconfirmed
+            }
+        ));
+        assert!(events.drain().is_empty());
+        assert!(wakes.is_empty());
+    }
+
+    #[test]
     fn publishes_only_changes_including_downgrades_and_border_commands() {
         let (commands, rx) = unbounded();
         let (wake, wakes) = unbounded();
         let events = Arc::new(NativeEventQueue::default());
         let mut published = Published {
             report: ProbeReport::default(),
+            osc8: HyperlinkCapability::Unconfirmed,
             commands,
             events: events.clone(),
             notifier: Arc::new(Notify(wake)),
@@ -243,6 +322,51 @@ mod tests {
             EngineCommand::SetLegacySymbols { supported: false }
         ));
         assert_eq!(wakes.try_iter().count(), 1);
+    }
+
+    #[test]
+    fn polling_publishes_hint_changes_even_when_osc8_and_fonts_stay_supported() {
+        use super::super::environment::ClientPlatform;
+        let (commands, rx) = unbounded();
+        let (wake, _wakes) = unbounded();
+        let events = Arc::new(NativeEventQueue::default());
+        let mut pass = 0;
+        let mut monitor = FontMonitor::start_with_environment(
+            None,
+            commands,
+            events,
+            Arc::new(Notify(wake)),
+            move || {
+                pass += 1;
+                let pairs = if pass == 1 {
+                    vec![("TERM_PROGRAM", "ghostty")]
+                } else {
+                    vec![("TERM_PROGRAM", "ghostty"), ("SSH_CONNECTION", "remote")]
+                };
+                Environment::from_pairs(&[]).with_clients(vec![Environment::from_pairs(&pairs)
+                    .with_platform(ClientPlatform::Linux)
+                    .capabilities()])
+            },
+        );
+        for expected in [
+            "Ctrl-Shift-Click to open",
+            "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)",
+        ] {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let command = rx.recv_deadline(deadline).unwrap();
+                if let EngineCommand::SetHyperlinkSupport { support } = command {
+                    assert_eq!(
+                        support,
+                        HyperlinkCapability::Confirmed {
+                            open_hint: expected
+                        }
+                    );
+                    break;
+                }
+            }
+        }
+        monitor.shutdown();
     }
 
     #[test]
