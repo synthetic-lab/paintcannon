@@ -100,6 +100,7 @@ impl Environment {
         self.clients
             .as_ref()
             .is_none_or(|clients| clients.len() == 1)
+            && self.capabilities().supports_apc
     }
 
     fn get(&self, key: &str) -> &str {
@@ -115,6 +116,8 @@ impl Environment {
             // Never use the pane's inherited terminal identifiers or markers:
             // they describe the terminal that started it, not today's clients.
             return Capabilities {
+                supports_apc: !clients.is_empty()
+                    && clients.iter().all(|client| client.supports_apc),
                 osc8: match clients.as_slice() {
                     [] => HyperlinkCapability::Unconfirmed,
                     [client] => client.osc8,
@@ -141,6 +144,7 @@ impl Environment {
         {
             return Capabilities {
                 osc8: resolve_hyperlink_support(terminal.capabilities.osc8, self.client_platform()),
+                supports_apc: terminal.capabilities.supports_apc,
                 nerd_font: terminal.capabilities.nerd_font,
                 symbols_for_legacy_computing: terminal.capabilities.symbols_for_legacy_computing,
             };
@@ -156,6 +160,30 @@ impl Environment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fallback_markers_identify_apc_support_without_overriding_known_terminals() {
+        for marker in [
+            ("KITTY_WINDOW_ID", "1"),
+            ("WT_SESSION", "session"),
+            ("VTE_VERSION", "7600"),
+            ("KONSOLE_DBUS_SESSION", "/Sessions/1"),
+            ("GNOME_TERMINAL_SCREEN", "/screen/1"),
+            ("TERMINATOR_UUID", "session"),
+            ("COLORTERM", "xfce4-terminal"),
+        ] {
+            let local = Environment::from_pairs(&[("TERM", "xterm-256color"), marker]);
+            assert!(local.can_probe(), "{marker:?}");
+            assert!(
+                Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal")])
+                    .with_clients(vec![local.capabilities()])
+                    .can_probe()
+            );
+            assert!(
+                !Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal"), marker]).can_probe()
+            );
+        }
+    }
 
     #[test]
     fn foot_and_vte_terminals_have_opening_hints() {
@@ -427,17 +455,17 @@ mod tests {
 
     #[test]
     fn ssh_uses_term_without_a_recognized_term_program() {
-        for (term, nerd_font, symbols_for_legacy_computing) in [
-            ("xterm-ghostty", true, true),
-            ("xterm-kitty", false, true),
-            ("wezterm", true, false),
-            ("rio", true, false),
-            ("alacritty", false, false),
-            ("alacritty-direct", false, false),
-            ("foot", false, true),
-            ("foot-extra", false, true),
-            ("foot-direct", false, true),
-            ("rxvt-unicode-256color", false, false),
+        for (term, supports_apc, nerd_font, symbols_for_legacy_computing) in [
+            ("xterm-ghostty", true, true, true),
+            ("xterm-kitty", true, false, true),
+            ("wezterm", true, true, false),
+            ("rio", true, true, false),
+            ("alacritty", true, false, false),
+            ("alacritty-direct", true, false, false),
+            ("foot", true, false, true),
+            ("foot-extra", true, false, true),
+            ("foot-direct", true, false, true),
+            ("rxvt-unicode-256color", false, false, false),
         ] {
             for program in [None, Some(""), Some("tmux"), Some("unrecognized")] {
                 let mut pairs = vec![("TERM", term), ("SSH_TTY", "/dev/pts/1")];
@@ -449,6 +477,7 @@ mod tests {
                         .with_platform(ClientPlatform::Linux)
                         .capabilities(),
                     Capabilities {
+                        supports_apc,
                         nerd_font,
                         symbols_for_legacy_computing,
                         osc8: match term {
@@ -499,6 +528,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    supports_apc: true,
                     nerd_font: true,
                     symbols_for_legacy_computing: true,
                     osc8: HyperlinkCapability::Confirmed {
@@ -550,6 +580,7 @@ mod tests {
                 assert_eq!(
                     env.capabilities(),
                     Capabilities {
+                        supports_apc: true,
                         nerd_font: false,
                         symbols_for_legacy_computing: true,
                         osc8: match marker.0 {
@@ -605,6 +636,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    supports_apc: true,
                     nerd_font,
                     symbols_for_legacy_computing,
                     osc8: match term {
@@ -632,12 +664,13 @@ mod tests {
 
     #[test]
     fn tmux_checks_program_and_term_like_local_detection() {
-        for (program, term, nerd_font, symbols_for_legacy_computing) in [
-            ("WezTerm", "xterm-256color", true, false),
-            ("ghostty", "xterm-ghostty", true, true),
-            ("unrecognized", "xterm-ghostty", true, true),
-            ("Apple_Terminal", "xterm-256color", false, false),
-            ("tmux", "screen-256color", false, false),
+        for (program, term, supports_apc, nerd_font, symbols_for_legacy_computing) in [
+            ("WezTerm", "xterm-256color", true, true, false),
+            ("ghostty", "xterm-ghostty", true, true, true),
+            ("unrecognized", "xterm-ghostty", true, true, true),
+            ("Apple_Terminal", "xterm-256color", false, false, false),
+            ("Apple_Terminal", "xterm-ghostty", false, false, false),
+            ("tmux", "screen-256color", false, false, false),
         ] {
             let env =
                 Environment::from_pairs(&[("TERM_PROGRAM", "tmux"), ("TERM", "tmux-256color")])
@@ -649,6 +682,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    supports_apc,
                     nerd_font,
                     symbols_for_legacy_computing,
                     osc8: match program {
@@ -673,12 +707,12 @@ mod tests {
 
     #[test]
     fn tmux_outer_program_provides_capabilities() {
-        for (program, nerd_font, symbols_for_legacy_computing) in [
-            ("ghostty", true, true),
-            ("WezTerm", true, false),
-            ("Apple_Terminal", false, false),
-            ("gnome-terminal", false, true),
-            ("vscode", false, true),
+        for (program, supports_apc, nerd_font, symbols_for_legacy_computing) in [
+            ("ghostty", true, true, true),
+            ("WezTerm", true, true, false),
+            ("Apple_Terminal", false, false, false),
+            ("gnome-terminal", true, false, true),
+            ("vscode", true, false, true),
         ] {
             let env =
                 Environment::from_pairs(&[("TERM_PROGRAM", "tmux"), ("TERM", "tmux-256color")])
@@ -688,6 +722,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    supports_apc,
                     nerd_font,
                     symbols_for_legacy_computing,
                     osc8: match program {
@@ -733,7 +768,17 @@ mod tests {
                 },
                 false,
             ),
-            (vec![ghostty, apple], Capabilities::default(), false),
+            (vec![ghostty, apple], apple, false),
+            (
+                vec![Capabilities::default()],
+                Capabilities::default(),
+                false,
+            ),
+            (
+                vec![ghostty, Capabilities::default()],
+                Capabilities::default(),
+                false,
+            ),
             (vec![], Capabilities::default(), false),
         ] {
             // A pane inherited Ghostty at startup; clients may since have changed.

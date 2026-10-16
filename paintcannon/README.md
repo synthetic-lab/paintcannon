@@ -339,7 +339,8 @@ Detection tries these sources in order:
      tmux supports per-client environment queries (added after tmux 3.7).
 3. The [Rio Glyph
    Protocol](https://github.com/raphamorim/rio/blob/main/specs/glyph-protocol.md),
-   only for sets not confirmed by the terminal table. This works over SSH; tmux
+   only for sets not confirmed by the terminal table and only when the terminal
+   is known to support APC framing (`supports_apc`). This works over SSH; tmux
    requires `set -g allow-passthrough on` and a single attached client.
 
 With tmux, **every attached terminal client whose session contains the pane**

@@ -20,6 +20,7 @@ pub(super) enum HyperlinkSupport {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TerminalCapabilities {
     pub(super) osc8: HyperlinkSupport,
+    pub(super) supports_apc: bool,
     pub(super) nerd_font: bool,
     pub(super) symbols_for_legacy_computing: bool,
 }
@@ -36,6 +37,8 @@ const TERMINALS: &[Terminal] = &[
     // Shift bypasses application mouse reporting.
     // https://github.com/PerBothner/DomTerm/blob/master/hlib/domterm.js (clickLink)
     // https://github.com/PerBothner/DomTerm/blob/master/hlib/terminal.js (_mouseHandler)
+    // APC payloads are consumed in SEEN_APC_STATE through the string terminator:
+    // https://github.com/PerBothner/DomTerm/blob/master/hlib/domterm-parser.js
     Terminal {
         term: &["domterm"],
         term_program: &["domterm"],
@@ -45,6 +48,7 @@ const TERMINALS: &[Terminal] = &[
                 linux: "Ctrl-Shift-Click to open",
                 unknown: "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -52,6 +56,8 @@ const TERMINALS: &[Terminal] = &[
     // OSC 8 spans open on click; Alt overrides application mouse reporting.
     // https://github.com/chromium/hterm/blob/master/js/hterm_text_attributes.js
     // https://github.com/chromium/hterm/blob/master/js/hterm_terminal.js (defeatMouseReports_)
+    // ESC _ uses parseUntilStringTerminator_ to consume APC payloads:
+    // https://chromium.googlesource.com/apps/libapps/+/HEAD/hterm/js/hterm_vt.js
     Terminal {
         term: &[],
         term_program: &["hterm"],
@@ -61,6 +67,7 @@ const TERMINALS: &[Terminal] = &[
                 linux: "Alt-Click to open",
                 unknown: "Alt-Click to open (Option-Click on macOS)",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -69,6 +76,8 @@ const TERMINALS: &[Terminal] = &[
     // webLinksActivationKey applies to auto-detected URLs, not OSC 8 links.
     // https://github.com/vercel/hyper/blob/canary/lib/components/term.tsx
     // https://github.com/xtermjs/xterm.js/blob/master/src/browser/OscLinkProvider.ts
+    // xterm.js recognizes APC strings and silently ignores their payloads:
+    // https://xtermjs.org/docs/api/vtfeatures/
     Terminal {
         term: &[],
         term_program: &["hyper"],
@@ -76,12 +85,15 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Click to open",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
     },
     // Ctrl opens links; Ctrl+Shift overrides application mouse modes.
     // https://mintty.github.io/mintty.1.html#h-Opening-files_-directories-and-URLs
+    // ESC _ enters IGNORE_STRING for APC payloads:
+    // https://github.com/mintty/mintty/blob/master/src/termout.c
     Terminal {
         term: &[],
         term_program: &["mintty"],
@@ -89,12 +101,15 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Shift-Click to open",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
     },
     // The OSC 8 link overlay handles primary-button clicks directly.
     // https://github.com/borisfaure/terminology/blob/master/src/bin/termio.c (_cb_link_up)
+    // In 1.14.0, _handle_esc has no APC handler and leaves its payload as text:
+    // https://github.com/borisfaure/terminology/blob/v1.14.0/src/bin/termptyesc.c#L4948
     Terminal {
         term: &[],
         term_program: &["terminology"],
@@ -102,6 +117,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Click to open",
             },
+            supports_apc: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -109,6 +125,7 @@ const TERMINALS: &[Terminal] = &[
     // Shift keeps clicks local instead of forwarding them to mouse-aware apps.
     // https://secureshellfish.app/help/terminal
     // https://secureshellfish.app/help/cursor-and-selection
+    // APC framing is not documented in the terminal features above; unconfirmed.
     Terminal {
         term: &[],
         term_program: &["secure shellfish"],
@@ -116,12 +133,14 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Shift-Click to open",
             },
+            supports_apc: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
     },
     // 13.16 adds Go To URL and Ctrl-right-click to force the context menu;
     // 14.02 extends URL handling to OSC 8 hyperlinks.
+    // APC glyph queries arrived in 14.08; safety on older versions is unconfirmed.
     // https://www.celestialsoftware.net/version-history/
     Terminal {
         term: &[],
@@ -130,6 +149,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Right-Click, then Go To URL to open",
             },
+            supports_apc: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -137,6 +157,8 @@ const TERMINALS: &[Terminal] = &[
     // https://learn.microsoft.com/en-us/windows/terminal/tips-and-tricks#hyperlinks
     // Since 1.25.2733.0, built-in U+1FB00..U+1FB94 includes all four smooth corners:
     // https://github.com/microsoft/terminal/discussions/20758
+    // _EventSosPmApcString ignores the entire APC string:
+    // https://github.com/microsoft/terminal/blob/main/src/terminal/parser/stateMachine.cpp
     Terminal {
         term: &[],
         term_program: &["windows_terminal", "windowsterminal"],
@@ -144,6 +166,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Click to open",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -155,6 +178,8 @@ const TERMINALS: &[Terminal] = &[
     // Bundled Nerd Font + built-in smooth mosaics, including all four corners:
     // https://github.com/ghostty-org/ghostty/blob/v1.0.0/src/font/sprite/Box.zig
     // https://ghostty.org/docs/features
+    // The parser emits apc_start/apc_put/apc_end instead of printing APC payloads:
+    // https://github.com/ghostty-org/ghostty/blob/main/src/terminal/Parser.zig
     Terminal {
         term: &["xterm-ghostty"],
         term_program: &["ghostty"],
@@ -164,6 +189,7 @@ const TERMINALS: &[Terminal] = &[
                 linux: "Ctrl-Shift-Click to open",
                 unknown: "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)",
             },
+            supports_apc: true,
             nerd_font: true,
             symbols_for_legacy_computing: true,
         },
@@ -173,6 +199,8 @@ const TERMINALS: &[Terminal] = &[
     // https://wezterm.org/config/fonts.html
     // Legacy mosaics are in the nightly section, not the stable release:
     // https://wezterm.org/changelog.html#continuousnightly
+    // APC payloads are collected and delivered to apc_dispatch at ST:
+    // https://github.com/wez/wezterm/blob/main/vtparse/src/lib.rs
     Terminal {
         term: &["wezterm"],
         term_program: &["wezterm"],
@@ -180,6 +208,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Shift-Click to open",
             },
+            supports_apc: true,
             nerd_font: true,
             symbols_for_legacy_computing: false,
         },
@@ -191,6 +220,8 @@ const TERMINALS: &[Terminal] = &[
     // Bundled Nerd Font; legacy renderer covers sextants/octants, not our corners:
     // https://github.com/raphamorim/rio/tree/main/rio-fonts/resources
     // https://github.com/raphamorim/rio/blob/main/sugarloaf/src/sprite/legacy.rs
+    // The glyph protocol explicitly uses APC framing:
+    // https://rioterm.com/docs/features/glyph-protocol
     Terminal {
         term: &["rio"],
         term_program: &["rio"],
@@ -200,6 +231,7 @@ const TERMINALS: &[Terminal] = &[
                 linux: "Alt-Click to open",
                 unknown: "Alt-Click to open (Cmd-Click on macOS)",
             },
+            supports_apc: true,
             nerd_font: true,
             symbols_for_legacy_computing: false,
         },
@@ -207,6 +239,8 @@ const TERMINALS: &[Terminal] = &[
     // ctrl+shift+left is bound in both grabbed and ungrabbed modes:
     // https://sw.kovidgoyal.net/kitty/conf/#mouse-actions
     // https://github.com/kovidgoyal/kitty/blob/v0.20.0/kitty/fonts/box_drawing.py
+    // The graphics protocol uses APC framing:
+    // https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-graphics-escape-code
     Terminal {
         term: &["xterm-kitty"],
         term_program: &["kitty"],
@@ -214,6 +248,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Shift-Click to open",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -222,6 +257,8 @@ const TERMINALS: &[Terminal] = &[
     // https://alacritty.org/config-alacritty.html#mouse
     // Only sextants U+1FB00..U+1FB3B, NOT the smooth mosaic corners:
     // https://github.com/alacritty/alacritty/blob/master/extra/man/alacritty.5.scd#font
+    // The VTE parser consumes APC payloads in SosPmApcString:
+    // https://github.com/alacritty/vte/blob/master/src/lib.rs
     Terminal {
         term: &["alacritty", "alacritty-direct"],
         term_program: &["alacritty"],
@@ -229,6 +266,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Shift-Click to open",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -237,6 +275,8 @@ const TERMINALS: &[Terminal] = &[
     // https://codeberg.org/dnkl/foot/src/branch/master/doc/foot.ini.5.scd (show-urls-launch)
     // draw_wedge_triangle handles all four corners:
     // https://codeberg.org/dnkl/foot/src/branch/master/box-drawing.c
+    // state_sos_pm_apc_string_switch ignores APC payloads:
+    // https://codeberg.org/dnkl/foot/src/branch/master/vt.c
     Terminal {
         term: &["foot", "foot-extra", "foot-direct"],
         term_program: &["foot"],
@@ -244,17 +284,21 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Shift-O, then type the link label to open",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
     },
     // drawLegacyCharacter includes U+1FB3C..U+1FB6F:
     // https://github.com/KDE/konsole/blob/master/src/characters/LineBlockCharacters.cpp
+    // APC payloads go through apc_start/apc_put/apc_end:
+    // https://github.com/KDE/konsole/blob/master/src/Vt102Emulation.cpp
     Terminal {
         term: &[],
         term_program: &["konsole"],
         capabilities: TerminalCapabilities {
             osc8: HyperlinkSupport::Unconfirmed,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -272,6 +316,8 @@ const TERMINALS: &[Terminal] = &[
     // https://github.com/realh/roxterm/blob/master/src/roxterm.c
     // Built-in smooth mosaics are shared by these VTE-based terminals:
     // https://github.com/GNOME/vte/blob/0.76.0/src/minifont.cc#L1090
+    // VTE consumes APC strings in ST_IGNORE:
+    // https://github.com/GNOME/vte/blob/master/src/parser.hh
     Terminal {
         term: &[],
         term_program: &[
@@ -289,6 +335,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Click to open",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -300,6 +347,8 @@ const TERMINALS: &[Terminal] = &[
     // Default OSC 8 activation is a click followed by a confirmation dialog:
     // https://github.com/xtermjs/xterm.js/blob/master/src/browser/OscLinkProvider.ts
     // https://github.com/xtermjs/xterm.js/blob/master/src/browser/Linkifier.ts
+    // APC strings are recognized and silently ignored:
+    // https://xtermjs.org/docs/api/vtfeatures/
     Terminal {
         term: &[],
         term_program: &["xterm.js", "xtermjs"],
@@ -307,6 +356,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Click to open",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -314,6 +364,8 @@ const TERMINALS: &[Terminal] = &[
     // VS Code's default modifier depends on the frontend platform. A remote
     // integrated terminal may be on a different OS even without SSH_* variables,
     // so describe both modifiers (https://code.visualstudio.com/docs/terminal/basics#_links).
+    // Its xterm.js parser recognizes APC strings and silently ignores them:
+    // https://xtermjs.org/docs/api/vtfeatures/
     Terminal {
         term: &[],
         term_program: &["vscode"],
@@ -321,20 +373,26 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Click to open (Cmd-Click on macOS)",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
     },
     // No verified built-in smooth-mosaic/Nerd Font renderer.
+    // APC glyph-query payloads appear as text in Apple Terminal (reproduction):
+    // https://github.com/synthetic-lab/paintcannon/pull/47
     Terminal {
         term: &[],
         term_program: &["apple_terminal"],
         capabilities: TerminalCapabilities {
             osc8: HyperlinkSupport::Unconfirmed,
+            supports_apc: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
     },
+    // VT100XtermParser consumes APC strings using kAPCMode:
+    // https://github.com/gnachman/iTerm2/blob/master/sources/VT100/VT100XtermParser.m
     Terminal {
         term: &[],
         term_program: &["iterm.app", "iterm2"],
@@ -344,20 +402,26 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Cmd-Option-Click to open",
             },
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
     },
+    // APC payloads are explicitly ignored:
+    // https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Application-Program-Command-functions
     Terminal {
         // Generic xterm TERM values are used by many other emulators.
         term: &[],
         term_program: &["xterm"],
         capabilities: TerminalCapabilities {
             osc8: HyperlinkSupport::Unconfirmed,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
     },
+    // process_escape_seq has no APC case, leaving its payload as printable text:
+    // https://github.com/exg/rxvt-unicode/blob/master/src/command.C
     Terminal {
         term: &[
             "rxvt",
@@ -366,9 +430,10 @@ const TERMINALS: &[Terminal] = &[
             "rxvt-unicode",
             "rxvt-unicode-256color",
         ],
-        term_program: &["rxvt"],
+        term_program: &["rxvt", "rxvt-unicode", "urxvt"],
         capabilities: TerminalCapabilities {
             osc8: HyperlinkSupport::Unconfirmed,
+            supports_apc: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -408,6 +473,7 @@ mod tests {
                     ClientPlatform::Unknown,
                 ),
                 nerd_font: terminal.capabilities.nerd_font,
+                supports_apc: terminal.capabilities.supports_apc,
                 symbols_for_legacy_computing: terminal.capabilities.symbols_for_legacy_computing,
             };
             assert!(!terminal.term.is_empty() || !terminal.term_program.is_empty());

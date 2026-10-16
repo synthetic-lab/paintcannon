@@ -8,6 +8,7 @@ pub(super) struct EnvironmentMarker {
 
 const LEGACY_SYMBOLS: Capabilities = Capabilities {
     osc8: HyperlinkCapability::Unconfirmed,
+    supports_apc: true,
     nerd_font: false,
     symbols_for_legacy_computing: true,
 };
