@@ -100,7 +100,7 @@ impl Environment {
         self.clients
             .as_ref()
             .is_none_or(|clients| clients.len() == 1)
-            && !self.capabilities().glyph_queries_unsafe
+            && self.capabilities().supports_apc
     }
 
     fn get(&self, key: &str) -> &str {
@@ -116,7 +116,8 @@ impl Environment {
             // Never use the pane's inherited terminal identifiers or markers:
             // they describe the terminal that started it, not today's clients.
             return Capabilities {
-                glyph_queries_unsafe: clients.iter().any(|client| client.glyph_queries_unsafe),
+                supports_apc: !clients.is_empty()
+                    && clients.iter().all(|client| client.supports_apc),
                 osc8: match clients.as_slice() {
                     [] => HyperlinkCapability::Unconfirmed,
                     [client] => client.osc8,
@@ -143,7 +144,7 @@ impl Environment {
         {
             return Capabilities {
                 osc8: resolve_hyperlink_support(terminal.capabilities.osc8, self.client_platform()),
-                glyph_queries_unsafe: terminal.capabilities.glyph_queries_unsafe,
+                supports_apc: terminal.capabilities.supports_apc,
                 nerd_font: terminal.capabilities.nerd_font,
                 symbols_for_legacy_computing: terminal.capabilities.symbols_for_legacy_computing,
             };
@@ -161,8 +162,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn blacklisted_terminals_disable_glyph_queries_locally_and_through_tmux() {
+    fn glyph_queries_require_apc_support_locally_and_through_tmux() {
+        assert!(!Environment::from_pairs(&[]).can_probe());
         for identity in [
+            ("TERM_PROGRAM", ""),
+            ("TERM_PROGRAM", "unknown"),
+            ("TERM_PROGRAM", "not-rio"),
+            ("TERM_PROGRAM", "secure shellfish"),
+            ("TERM_PROGRAM", "absolutetelnet"),
             ("TERM_PROGRAM", "Apple_Terminal"),
             ("TERM_PROGRAM", "apple_terminal"),
             ("TERM_PROGRAM", "APPLE_TERMINAL"),
@@ -175,6 +182,11 @@ mod tests {
             ("TERM", "rxvt-256color"),
             ("TERM", "rxvt-unicode"),
             ("TERM", "rxvt-unicode-256color"),
+            ("TERM", "xterm"),
+            ("TERM", "xterm-256color"),
+            ("TERM", "screen-256color"),
+            ("TERM", "tmux-256color"),
+            ("TERM", "dumb"),
         ] {
             let local = Environment::from_pairs(&[identity]);
             assert!(!local.can_probe(), "{identity:?}");
@@ -183,13 +195,77 @@ mod tests {
                 .with_clients(vec![local.capabilities()])
                 .can_probe());
         }
-        for program in ["iTerm.app", "rio", "unknown"] {
-            let local = Environment::from_pairs(&[("TERM_PROGRAM", program)]);
-            assert!(local.can_probe(), "{program}");
+        for identity in [
+            ("TERM_PROGRAM", "domterm"),
+            ("TERM_PROGRAM", "hterm"),
+            ("TERM_PROGRAM", "hyper"),
+            ("TERM_PROGRAM", "mintty"),
+            ("TERM_PROGRAM", "windows_terminal"),
+            ("TERM_PROGRAM", "WindowsTerminal"),
+            ("TERM_PROGRAM", "ghostty"),
+            ("TERM_PROGRAM", "WezTerm"),
+            ("TERM_PROGRAM", "rio"),
+            ("TERM_PROGRAM", "kitty"),
+            ("TERM_PROGRAM", "alacritty"),
+            ("TERM_PROGRAM", "foot"),
+            ("TERM_PROGRAM", "iTerm.app"),
+            ("TERM_PROGRAM", "ITERM2"),
+            ("TERM_PROGRAM", "konsole"),
+            ("TERM_PROGRAM", "gnome-terminal"),
+            ("TERM_PROGRAM", "xfce4-terminal"),
+            ("TERM_PROGRAM", "terminator"),
+            ("TERM_PROGRAM", "gnome-console"),
+            ("TERM_PROGRAM", "tilix"),
+            ("TERM_PROGRAM", "ptyxis"),
+            ("TERM_PROGRAM", "guake"),
+            ("TERM_PROGRAM", "mate-terminal"),
+            ("TERM_PROGRAM", "roxterm"),
+            ("TERM_PROGRAM", "xterm.js"),
+            ("TERM_PROGRAM", "xtermjs"),
+            ("TERM_PROGRAM", "vscode"),
+            ("TERM_PROGRAM", "xterm"),
+            ("TERM", "domterm"),
+            ("TERM", "xterm-ghostty"),
+            ("TERM", "wezterm"),
+            ("TERM", "rio"),
+            ("TERM", "xterm-kitty"),
+            ("TERM", "alacritty"),
+            ("TERM", "alacritty-direct"),
+            ("TERM", "foot"),
+            ("TERM", "foot-extra"),
+            ("TERM", "foot-direct"),
+        ] {
+            let local = Environment::from_pairs(&[identity]);
+            assert!(local.can_probe(), "{identity:?}");
+            assert!(Environment::from_pairs(&[identity, ("SSH_TTY", "/dev/pts/1")]).can_probe());
             assert!(
                 Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal")])
                     .with_clients(vec![local.capabilities()])
                     .can_probe()
+            );
+        }
+    }
+
+    #[test]
+    fn fallback_markers_identify_apc_support_without_overriding_known_terminals() {
+        for marker in [
+            ("KITTY_WINDOW_ID", "1"),
+            ("WT_SESSION", "session"),
+            ("VTE_VERSION", "7600"),
+            ("KONSOLE_DBUS_SESSION", "/Sessions/1"),
+            ("GNOME_TERMINAL_SCREEN", "/screen/1"),
+            ("TERMINATOR_UUID", "session"),
+            ("COLORTERM", "xfce4-terminal"),
+        ] {
+            let local = Environment::from_pairs(&[("TERM", "xterm-256color"), marker]);
+            assert!(local.can_probe(), "{marker:?}");
+            assert!(
+                Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal")])
+                    .with_clients(vec![local.capabilities()])
+                    .can_probe()
+            );
+            assert!(
+                !Environment::from_pairs(&[("TERM_PROGRAM", "Apple_Terminal"), marker]).can_probe()
             );
         }
     }
@@ -464,17 +540,17 @@ mod tests {
 
     #[test]
     fn ssh_uses_term_without_a_recognized_term_program() {
-        for (term, nerd_font, symbols_for_legacy_computing) in [
-            ("xterm-ghostty", true, true),
-            ("xterm-kitty", false, true),
-            ("wezterm", true, false),
-            ("rio", true, false),
-            ("alacritty", false, false),
-            ("alacritty-direct", false, false),
-            ("foot", false, true),
-            ("foot-extra", false, true),
-            ("foot-direct", false, true),
-            ("rxvt-unicode-256color", false, false),
+        for (term, supports_apc, nerd_font, symbols_for_legacy_computing) in [
+            ("xterm-ghostty", true, true, true),
+            ("xterm-kitty", true, false, true),
+            ("wezterm", true, true, false),
+            ("rio", true, true, false),
+            ("alacritty", true, false, false),
+            ("alacritty-direct", true, false, false),
+            ("foot", true, false, true),
+            ("foot-extra", true, false, true),
+            ("foot-direct", true, false, true),
+            ("rxvt-unicode-256color", false, false, false),
         ] {
             for program in [None, Some(""), Some("tmux"), Some("unrecognized")] {
                 let mut pairs = vec![("TERM", term), ("SSH_TTY", "/dev/pts/1")];
@@ -486,7 +562,7 @@ mod tests {
                         .with_platform(ClientPlatform::Linux)
                         .capabilities(),
                     Capabilities {
-                        glyph_queries_unsafe: term == "rxvt-unicode-256color",
+                        supports_apc,
                         nerd_font,
                         symbols_for_legacy_computing,
                         osc8: match term {
@@ -537,7 +613,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
-                    glyph_queries_unsafe: false,
+                    supports_apc: true,
                     nerd_font: true,
                     symbols_for_legacy_computing: true,
                     osc8: HyperlinkCapability::Confirmed {
@@ -571,13 +647,7 @@ mod tests {
             ("TERM_PROGRAM", "Apple_Terminal"),
             ("WT_SESSION", "inherited-session"),
         ]);
-        assert_eq!(
-            apple.capabilities(),
-            Capabilities {
-                glyph_queries_unsafe: true,
-                ..Capabilities::default()
-            }
-        );
+        assert_eq!(apple.capabilities(), Capabilities::default());
     }
 
     #[test]
@@ -595,7 +665,7 @@ mod tests {
                 assert_eq!(
                     env.capabilities(),
                     Capabilities {
-                        glyph_queries_unsafe: false,
+                        supports_apc: true,
                         nerd_font: false,
                         symbols_for_legacy_computing: true,
                         osc8: match marker.0 {
@@ -651,7 +721,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
-                    glyph_queries_unsafe: false,
+                    supports_apc: true,
                     nerd_font,
                     symbols_for_legacy_computing,
                     osc8: match term {
@@ -679,12 +749,13 @@ mod tests {
 
     #[test]
     fn tmux_checks_program_and_term_like_local_detection() {
-        for (program, term, nerd_font, symbols_for_legacy_computing) in [
-            ("WezTerm", "xterm-256color", true, false),
-            ("ghostty", "xterm-ghostty", true, true),
-            ("unrecognized", "xterm-ghostty", true, true),
-            ("Apple_Terminal", "xterm-256color", false, false),
-            ("tmux", "screen-256color", false, false),
+        for (program, term, supports_apc, nerd_font, symbols_for_legacy_computing) in [
+            ("WezTerm", "xterm-256color", true, true, false),
+            ("ghostty", "xterm-ghostty", true, true, true),
+            ("unrecognized", "xterm-ghostty", true, true, true),
+            ("Apple_Terminal", "xterm-256color", false, false, false),
+            ("Apple_Terminal", "xterm-ghostty", false, false, false),
+            ("tmux", "screen-256color", false, false, false),
         ] {
             let env =
                 Environment::from_pairs(&[("TERM_PROGRAM", "tmux"), ("TERM", "tmux-256color")])
@@ -696,7 +767,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
-                    glyph_queries_unsafe: program == "Apple_Terminal",
+                    supports_apc,
                     nerd_font,
                     symbols_for_legacy_computing,
                     osc8: match program {
@@ -721,12 +792,12 @@ mod tests {
 
     #[test]
     fn tmux_outer_program_provides_capabilities() {
-        for (program, nerd_font, symbols_for_legacy_computing) in [
-            ("ghostty", true, true),
-            ("WezTerm", true, false),
-            ("Apple_Terminal", false, false),
-            ("gnome-terminal", false, true),
-            ("vscode", false, true),
+        for (program, supports_apc, nerd_font, symbols_for_legacy_computing) in [
+            ("ghostty", true, true, true),
+            ("WezTerm", true, true, false),
+            ("Apple_Terminal", false, false, false),
+            ("gnome-terminal", true, false, true),
+            ("vscode", true, false, true),
         ] {
             let env =
                 Environment::from_pairs(&[("TERM_PROGRAM", "tmux"), ("TERM", "tmux-256color")])
@@ -736,7 +807,7 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
-                    glyph_queries_unsafe: program == "Apple_Terminal",
+                    supports_apc,
                     nerd_font,
                     symbols_for_legacy_computing,
                     osc8: match program {
@@ -783,6 +854,16 @@ mod tests {
                 false,
             ),
             (vec![ghostty, apple], apple, false),
+            (
+                vec![Capabilities::default()],
+                Capabilities::default(),
+                false,
+            ),
+            (
+                vec![ghostty, Capabilities::default()],
+                Capabilities::default(),
+                false,
+            ),
             (vec![], Capabilities::default(), false),
         ] {
             // A pane inherited Ghostty at startup; clients may since have changed.

@@ -20,7 +20,7 @@ pub(super) enum HyperlinkSupport {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TerminalCapabilities {
     pub(super) osc8: HyperlinkSupport,
-    pub(super) glyph_queries_unsafe: bool,
+    pub(super) supports_apc: bool,
     pub(super) nerd_font: bool,
     pub(super) symbols_for_legacy_computing: bool,
 }
@@ -46,7 +46,7 @@ const TERMINALS: &[Terminal] = &[
                 linux: "Ctrl-Shift-Click to open",
                 unknown: "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -63,7 +63,7 @@ const TERMINALS: &[Terminal] = &[
                 linux: "Alt-Click to open",
                 unknown: "Alt-Click to open (Option-Click on macOS)",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -79,7 +79,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Click to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -93,7 +93,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Shift-Click to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -107,7 +107,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Click to open",
             },
-            glyph_queries_unsafe: true,
+            supports_apc: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -122,7 +122,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Shift-Click to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -137,7 +137,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Right-Click, then Go To URL to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -152,7 +152,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Click to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -173,7 +173,7 @@ const TERMINALS: &[Terminal] = &[
                 linux: "Ctrl-Shift-Click to open",
                 unknown: "Ctrl-Shift-Click to open (Cmd-Shift-Click on macOS)",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: true,
             symbols_for_legacy_computing: true,
         },
@@ -190,7 +190,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Shift-Click to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: true,
             symbols_for_legacy_computing: false,
         },
@@ -211,7 +211,7 @@ const TERMINALS: &[Terminal] = &[
                 linux: "Alt-Click to open",
                 unknown: "Alt-Click to open (Cmd-Click on macOS)",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: true,
             symbols_for_legacy_computing: false,
         },
@@ -226,7 +226,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Shift-Click to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -242,7 +242,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Shift-Click to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -258,7 +258,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Shift-O, then type the link label to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -270,7 +270,7 @@ const TERMINALS: &[Terminal] = &[
         term_program: &["konsole"],
         capabilities: TerminalCapabilities {
             osc8: HyperlinkSupport::Unconfirmed,
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -305,7 +305,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Click to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -324,7 +324,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Click to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -339,7 +339,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Ctrl-Click to open (Cmd-Click on macOS)",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: true,
         },
@@ -350,7 +350,7 @@ const TERMINALS: &[Terminal] = &[
         term_program: &["apple_terminal"],
         capabilities: TerminalCapabilities {
             osc8: HyperlinkSupport::Unconfirmed,
-            glyph_queries_unsafe: true,
+            supports_apc: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -364,7 +364,7 @@ const TERMINALS: &[Terminal] = &[
             osc8: HyperlinkSupport::Supported {
                 open_hint: "Cmd-Option-Click to open",
             },
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -375,7 +375,7 @@ const TERMINALS: &[Terminal] = &[
         term_program: &["xterm"],
         capabilities: TerminalCapabilities {
             osc8: HyperlinkSupport::Unconfirmed,
-            glyph_queries_unsafe: false,
+            supports_apc: true,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -391,7 +391,7 @@ const TERMINALS: &[Terminal] = &[
         term_program: &["rxvt", "rxvt-unicode", "urxvt"],
         capabilities: TerminalCapabilities {
             osc8: HyperlinkSupport::Unconfirmed,
-            glyph_queries_unsafe: true,
+            supports_apc: false,
             nerd_font: false,
             symbols_for_legacy_computing: false,
         },
@@ -431,7 +431,7 @@ mod tests {
                     ClientPlatform::Unknown,
                 ),
                 nerd_font: terminal.capabilities.nerd_font,
-                glyph_queries_unsafe: terminal.capabilities.glyph_queries_unsafe,
+                supports_apc: terminal.capabilities.supports_apc,
                 symbols_for_legacy_computing: terminal.capabilities.symbols_for_legacy_computing,
             };
             assert!(!terminal.term.is_empty() || !terminal.term_program.is_empty());

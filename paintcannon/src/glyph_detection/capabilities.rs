@@ -15,7 +15,7 @@ pub(crate) enum HyperlinkCapability {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct Capabilities {
     pub(super) osc8: HyperlinkCapability,
-    pub(super) glyph_queries_unsafe: bool,
+    pub(super) supports_apc: bool,
     pub(super) nerd_font: bool,
     pub(super) symbols_for_legacy_computing: bool,
 }

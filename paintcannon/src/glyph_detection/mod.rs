@@ -274,7 +274,7 @@ mod tests {
                 let detection = Arc::new(Detection::default());
                 detection
                     .environment
-                    .set(Environment::from_pairs(&[]))
+                    .set(Environment::from_pairs(&[("TERM_PROGRAM", "iTerm.app")]))
                     .ok()
                     .unwrap();
                 let (tx, rx) = bounded::<Request>(1);
@@ -349,8 +349,14 @@ mod tests {
     }
 
     #[test]
-    fn blacklisted_terminal_detection_never_writes_glyph_queries() {
+    fn terminals_without_apc_support_never_write_glyph_queries() {
         for pairs in [
+            vec![],
+            vec![("TERM_PROGRAM", "unknown")],
+            vec![("TERM_PROGRAM", "unknown"), ("NERD_FONT", "1")],
+            vec![("TERM_PROGRAM", "unknown"), ("NERD_FONT", "0")],
+            vec![("TERM", "xterm-256color")],
+            vec![("TERM_PROGRAM", "secure shellfish")],
             vec![("TERM_PROGRAM", "Apple_Terminal")],
             vec![("TERM_PROGRAM", "Apple_Terminal"), ("NERD_FONT", "1")],
             vec![("TERM_PROGRAM", "Apple_Terminal"), ("NERD_FONT", "0")],
@@ -380,6 +386,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn apc_support_does_not_confirm_glyph_coverage() {
+        let detection = Detection {
+            environment: OnceLock::from(Environment::from_pairs(&[("TERM_PROGRAM", "xterm")])),
+            ..Detection::default()
+        };
+        let (tx, rx) = bounded::<Request>(1);
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| detection.detect(Some(&tx)));
+            let request = rx.recv_timeout(QUERY_TIMEOUT).unwrap();
+            request
+                .reply
+                .send(vec![None; request.characters.len()])
+                .unwrap();
+            assert_eq!(worker.join().unwrap(), NerdFontSupport::default());
+        });
+        assert!(!detection.detect_legacy(Some(&tx)));
+        assert!(rx.is_empty());
     }
 
     #[test]
@@ -417,11 +443,14 @@ mod tests {
     }
 
     #[test]
-    fn refreshing_an_unknown_terminal_does_not_reuse_an_old_probe_result() {
+    fn refreshing_an_apc_terminal_does_not_reuse_an_old_probe_result() {
         let (tx, rx) = bounded::<Request>(1);
         for reply in [true, false, true] {
             let detection = Detection {
-                environment: OnceLock::from(Environment::from_pairs(&[])),
+                environment: OnceLock::from(Environment::from_pairs(&[(
+                    "TERM_PROGRAM",
+                    "iTerm.app",
+                )])),
                 ..Detection::default()
             };
             std::thread::scope(|scope| {
@@ -465,7 +494,7 @@ mod tests {
         let detection = Arc::new(Detection::default());
         detection
             .environment
-            .set(Environment::from_pairs(&[]))
+            .set(Environment::from_pairs(&[("TERM_PROGRAM", "iTerm.app")]))
             .ok()
             .unwrap();
         let (tx, rx) = bounded::<Request>(1);
@@ -476,7 +505,10 @@ mod tests {
                 let tx = tx.clone();
                 std::thread::spawn(move || {
                     detection
-                        .report(|| Environment::from_pairs(&[]), Some(&tx))
+                        .report(
+                            || Environment::from_pairs(&[("TERM_PROGRAM", "iTerm.app")]),
+                            Some(&tx),
+                        )
                         .supports(set)
                 })
             })
@@ -578,7 +610,10 @@ mod tests {
                 let detection = Detection::default();
                 detection
                     .environment
-                    .set(Environment::from_pairs(&[("NERD_FONT", override_value)]))
+                    .set(Environment::from_pairs(&[
+                        ("TERM_PROGRAM", "iTerm.app"),
+                        ("NERD_FONT", override_value),
+                    ]))
                     .ok()
                     .unwrap();
                 let expected = NerdFontSupport::uniform(override_value != "0");

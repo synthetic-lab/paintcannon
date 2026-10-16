@@ -416,7 +416,7 @@ mod tests {
             commands,
             Arc::new(NativeEventQueue::default()),
             Arc::new(Notify(wake)),
-            || Environment::from_pairs(&[]),
+            || Environment::from_pairs(&[("TERM_PROGRAM", "iTerm.app")]),
         );
         let request = requests.recv_timeout(Duration::from_secs(5)).unwrap();
         let before = Instant::now();

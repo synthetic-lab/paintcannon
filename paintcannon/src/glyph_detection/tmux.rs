@@ -268,13 +268,37 @@ mod tests {
     }
 
     #[test]
-    fn blacklisted_clients_disable_glyph_passthrough() {
-        for program in ["Apple_Terminal", "terminology", "rxvt"] {
+    fn glyph_passthrough_requires_apc_support_in_the_live_client() {
+        for (program, expected) in [
+            ("", false),
+            ("unknown", false),
+            ("secure shellfish", false),
+            ("Apple_Terminal", false),
+            ("terminology", false),
+            ("rxvt", false),
+            ("ghostty", true),
+            ("WezTerm", true),
+            ("rio", true),
+            ("kitty", true),
+            ("alacritty", true),
+            ("foot", true),
+            ("iTerm.app", true),
+            ("domterm", true),
+            ("hterm", true),
+            ("hyper", true),
+            ("mintty", true),
+            ("windows_terminal", true),
+            ("konsole", true),
+            ("gnome-terminal", true),
+            ("xterm.js", true),
+            ("vscode", true),
+            ("xterm", true),
+        ] {
             let output = client("%1 ", "xterm-256color", program);
             let clients = parse_clients(&output, "%1").unwrap();
             let pane =
                 Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")]).with_clients(clients);
-            assert!(!pane.can_probe(), "{program}");
+            assert_eq!(pane.can_probe(), expected, "{program}");
         }
     }
 
@@ -290,7 +314,7 @@ mod tests {
                     osc8: HyperlinkCapability::Confirmed {
                         open_hint: LOCAL_GHOSTTY_HINT
                     },
-                    glyph_queries_unsafe: false,
+                    supports_apc: true,
                     nerd_font: true,
                     symbols_for_legacy_computing: true
                 },
@@ -298,7 +322,7 @@ mod tests {
                     osc8: HyperlinkCapability::Confirmed {
                         open_hint: "Shift-Click to open"
                     },
-                    glyph_queries_unsafe: false,
+                    supports_apc: true,
                     nerd_font: true,
                     symbols_for_legacy_computing: false
                 },
@@ -320,27 +344,40 @@ mod tests {
 
     #[test]
     fn unidentified_clients_use_their_own_markers() {
-        for (name, value, hint, legacy) in [
+        for (name, value, hint, supports_apc, legacy) in [
             (
                 "KITTY_WINDOW_ID",
                 "1",
                 Some("Ctrl-Shift-Click to open"),
                 true,
+                true,
             ),
-            ("WT_SESSION", "session", Some("Ctrl-Click to open"), true),
-            ("VTE_VERSION", "7600", Some("Ctrl-Click to open"), true),
-            ("VTE_VERSION", "4999", None, true),
-            ("KONSOLE_DBUS_SESSION", "/Sessions/1", None, true),
-            ("GNOME_TERMINAL_SCREEN", "/screen/1", None, true),
-            ("TERMINATOR_UUID", "session", None, true),
-            ("COLORTERM", "xfce4-terminal", None, true),
-            ("COLORTERM", "truecolor", None, false),
+            (
+                "WT_SESSION",
+                "session",
+                Some("Ctrl-Click to open"),
+                true,
+                true,
+            ),
+            (
+                "VTE_VERSION",
+                "7600",
+                Some("Ctrl-Click to open"),
+                true,
+                true,
+            ),
+            ("VTE_VERSION", "4999", None, true, true),
+            ("KONSOLE_DBUS_SESSION", "/Sessions/1", None, true, true),
+            ("GNOME_TERMINAL_SCREEN", "/screen/1", None, true, true),
+            ("TERMINATOR_UUID", "session", None, true, true),
+            ("COLORTERM", "xfce4-terminal", None, true, true),
+            ("COLORTERM", "truecolor", None, false, false),
         ] {
             let expected = Capabilities {
                 osc8: hint.map_or(HyperlinkCapability::Unconfirmed, |open_hint| {
                     HyperlinkCapability::Confirmed { open_hint }
                 }),
-                glyph_queries_unsafe: false,
+                supports_apc,
                 nerd_font: false,
                 symbols_for_legacy_computing: legacy,
             };
@@ -370,22 +407,24 @@ mod tests {
 
     #[test]
     fn version_reports_identify_live_clients_without_client_environment_support() {
-        for (report, nerd, legacy, hint) in [
+        for (report, supports_apc, nerd, legacy, hint) in [
             (
                 "WezTerm 20240203-110809-5046fc22",
+                true,
                 true,
                 false,
                 "Shift-Click to open",
             ),
-            ("ghostty 1.0.1", true, true, LOCAL_GHOSTTY_HINT),
+            ("ghostty 1.0.1", true, true, true, LOCAL_GHOSTTY_HINT),
             (
                 "foot(1.18.0)",
+                true,
                 false,
                 true,
                 "Ctrl-Shift-O, then type the link label to open",
             ),
-            ("unknown 1.0", false, false, ""),
-            ("NotWezTerm 1.0", false, false, ""),
+            ("unknown 1.0", false, false, false, ""),
+            ("NotWezTerm 1.0", false, false, false, ""),
         ] {
             let output = client("%1 ", "xterm-256color", "").replacen(
                 "xterm-256color\t",
@@ -400,7 +439,7 @@ mod tests {
                     } else {
                         HyperlinkCapability::Unconfirmed
                     },
-                    glyph_queries_unsafe: false,
+                    supports_apc,
                     nerd_font: nerd,
                     symbols_for_legacy_computing: legacy,
                 }]),
