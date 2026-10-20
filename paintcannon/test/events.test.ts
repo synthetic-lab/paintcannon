@@ -835,6 +835,84 @@ describe("core mouse events", () => {
 });
 
 describe("core native scrollbar events", () => {
+  it("includes current client dimensions in renderer-originated scroll events", () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const onScroll = vi.fn();
+    root.addEventListener("scroll", onScroll);
+    const queuedMetrics = {
+      scrollLeft: 2,
+      scrollTop: 7,
+      scrollWidth: 40,
+      scrollHeight: 80,
+      clientWidth: 10,
+      clientHeight: 8,
+    };
+    mockNative.events.push({
+      kind: "scroll",
+      scroll: { targetId: root.id, ...queuedMetrics },
+    });
+    // A resize can update layout before the queued event reaches JavaScript.
+    const currentMetrics = { ...queuedMetrics, clientWidth: 13, clientHeight: 6 };
+    mockNative.scrollMetricsById.set(root.id, currentMetrics);
+
+    try {
+      notifyNativeEvents(paintCannon);
+      expect(onScroll).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          type: "scroll",
+          target: root,
+          currentTarget: root,
+          ...currentMetrics,
+          deltaX: 0,
+          deltaY: 0,
+        }),
+      );
+    } finally {
+      paintCannon.stop();
+    }
+  });
+
+  it.each(["x", "y"] as const)(
+    "includes client dimensions in %s-axis wheel scroll events",
+    axis => {
+      const { paintCannon, mockNative, child } = createPaintTree({ captureMouse: true });
+      const onScroll = vi.fn();
+      child.addEventListener("scroll", onScroll);
+      child.style.overflow = "scroll";
+      mockNative.targetIdAtPoint = child.id;
+      const metrics = {
+        scrollLeft: 2,
+        scrollTop: 7,
+        scrollWidth: 40,
+        scrollHeight: 80,
+        clientWidth: 13,
+        clientHeight: 6,
+      };
+      mockNative.scrollMetricsById.set(child.id, metrics);
+      const deltaX = axis === "x" ? 1 : 0;
+      const deltaY = axis === "y" ? 1 : 0;
+      mockNative.events.push(mouseEvent("wheel", { deltaX, deltaY }));
+
+      try {
+        notifyNativeEvents(paintCannon);
+        expect(onScroll).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            type: "scroll",
+            target: child,
+            currentTarget: child,
+            ...metrics,
+            scrollLeft: metrics.scrollLeft + deltaX * 4,
+            scrollTop: metrics.scrollTop + deltaY * 3,
+            deltaX,
+            deltaY,
+          }),
+        );
+      } finally {
+        paintCannon.stop();
+      }
+    },
+  );
+
   it("keeps bottom-following enabled when a queued anchor event arrives after an explicit scroll", () => {
     const { paintCannon, mockNative, root } = createPaintTree();
     let following = true;
