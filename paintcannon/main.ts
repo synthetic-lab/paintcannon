@@ -2683,10 +2683,7 @@ export class PaintCannon {
   ): void {
     const event = new PaintScrollEvent({
       target,
-      scrollLeft: metrics.scrollLeft,
-      scrollTop: metrics.scrollTop,
-      scrollWidth: metrics.scrollWidth,
-      scrollHeight: metrics.scrollHeight,
+      ...metrics,
       deltaX,
       deltaY,
     });
@@ -2780,15 +2777,11 @@ interface PaintChangeEventInit {
   target: TextControlElement;
 }
 
-interface PaintScrollEventInit {
+type PaintScrollEventInit = NativeScrollMetrics & {
   target: PaintElement;
-  scrollLeft: number;
-  scrollTop: number;
-  scrollWidth: number;
-  scrollHeight: number;
   deltaX: number;
   deltaY: number;
-}
+};
 
 interface PaintTransitionEventInit {
   type: TransitionElementEventType;
@@ -2914,7 +2907,7 @@ export class PaintChangeEvent {
   }
 }
 
-export class PaintScrollEvent {
+export class PaintScrollEvent implements NativeScrollMetrics {
   readonly type: "scroll" = "scroll";
   readonly target: PaintElement;
   currentTarget: PaintElement;
@@ -2922,6 +2915,8 @@ export class PaintScrollEvent {
   readonly scrollTop: number;
   readonly scrollWidth: number;
   readonly scrollHeight: number;
+  readonly clientWidth: number;
+  readonly clientHeight: number;
   readonly deltaX: number;
   readonly deltaY: number;
   defaultPrevented = false;
@@ -2934,6 +2929,8 @@ export class PaintScrollEvent {
     this.scrollTop = event.scrollTop;
     this.scrollWidth = event.scrollWidth;
     this.scrollHeight = event.scrollHeight;
+    this.clientWidth = event.clientWidth;
+    this.clientHeight = event.clientHeight;
     this.deltaX = event.deltaX;
     this.deltaY = event.deltaY;
   }
