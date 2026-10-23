@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Write};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -155,8 +155,17 @@ impl TerminalInput {
 
             while !thread_stop.load(Ordering::Relaxed) {
                 {
-                    let captured = thread_terminal_captured.lock().ok();
-                    reader.poll_glyph_queries(captured.as_deref().copied().unwrap_or(false));
+                    let captured_guard = thread_terminal_captured.lock().ok();
+                    let captured = captured_guard.as_deref().copied().unwrap_or(false);
+                    reader.poll_glyph_queries(captured);
+                    // iTerm2 3.6.6 rebuilds mouse tracking in a deferred screen callback:
+                    // https://github.com/gnachman/iTerm2/blob/v3.6.6/sources/VT100ScreenMutableState%2BTerminalDelegate.m#L1434-L1440
+                    if reader.take_device_attributes_reply()
+                        && captured
+                        && get_bool(&thread_mouse_capture_enabled)
+                    {
+                        let _ = execute!(io::stdout(), EnableMouseCapture);
+                    }
                 }
                 match reader.read(Duration::from_millis(25)) {
                     Ok(Some(event)) => match event {
@@ -410,6 +419,11 @@ impl TerminalInput {
                 PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
             );
             set_bool(&self.keyboard_enhancement_pushed, true);
+        }
+
+        if self.capture_mouse {
+            let _ = io::stdout().write_all(b"\x1b[c");
+            let _ = io::stdout().flush();
         }
     }
 

@@ -29,6 +29,7 @@ struct Parser {
     escape_since: Option<Instant>,
     events: VecDeque<Event>,
     kitty: Option<bool>,
+    device_attributes_received: bool,
 }
 
 impl Parser {
@@ -134,6 +135,7 @@ impl Parser {
                 }
                 if self.sequence.starts_with(b"\x1b[?") && byte == b'c' {
                     self.kitty.get_or_insert(false);
+                    self.device_attributes_received = true;
                     self.sequence.clear();
                     continue;
                 }
@@ -176,6 +178,10 @@ pub(crate) struct InputReader {
 }
 
 impl InputReader {
+    pub(crate) fn take_device_attributes_reply(&mut self) -> bool {
+        std::mem::take(&mut self.parser.device_attributes_received)
+    }
+
     pub(crate) fn enable_glyph_queries(&mut self) -> crossbeam_channel::Sender<Request> {
         let (sender, queries) = Queries::new();
         self.parser.glyph_queries = Some(queries);
@@ -531,6 +537,44 @@ mod tests {
         ] {
             assert_eq!(reader.read(Duration::from_secs(1)).unwrap(), Some(expected));
         }
+    }
+
+    #[test]
+    fn fragmented_device_attributes_replies_are_consumed_once_without_losing_input() {
+        let reply = b"\x1b[?1;2c";
+        for split in 0..=reply.len() {
+            let (mut reader, mut terminal) = connected_reader();
+            terminal.write_all(b"a").unwrap();
+            terminal.write_all(&reply[..split]).unwrap();
+            assert_eq!(
+                reader.read(Duration::from_millis(100)).unwrap(),
+                Some(Event::Key(KeyCode::Char('a').into()))
+            );
+            assert_eq!(reader.take_device_attributes_reply(), split == reply.len());
+            terminal.write_all(&reply[split..]).unwrap();
+            terminal.write_all(b"\x1b[<35;10;2Mb").unwrap();
+            assert!(matches!(
+                reader.read(Duration::from_millis(100)).unwrap(),
+                Some(Event::Mouse(event)) if event.kind == MouseEventKind::Moved
+            ));
+            assert_eq!(reader.take_device_attributes_reply(), split != reply.len());
+            assert!(!reader.take_device_attributes_reply());
+            assert_eq!(
+                reader.read(Duration::ZERO).unwrap(),
+                Some(Event::Key(KeyCode::Char('b').into()))
+            );
+        }
+    }
+
+    #[test]
+    fn pasted_device_attributes_do_not_signal_a_terminal_reply() {
+        let (mut reader, mut terminal) = connected_reader();
+        terminal.write_all(b"\x1b[200~\x1b[?1;2c\x1b[201~").unwrap();
+        assert_eq!(
+            reader.read(Duration::from_millis(100)).unwrap(),
+            Some(Event::Paste("\x1b[?1;2c".into()))
+        );
+        assert!(!reader.take_device_attributes_reply());
     }
 
     #[test]
