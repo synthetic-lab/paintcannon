@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use taffy::{tree::Layout, NodeId};
 
-use crate::frame::{ClipBounds, ClipRect, Frame, GlyphStyle, GraphemeGlyph};
+use crate::frame::{ClipBounds, ClipRect, Frame, GlyphStyle, GraphemeGlyph, SelectionPoint};
 use crate::layout::{
     ArenaScrollMetrics, ImageLayoutData, InlineFragmentKind, InputLayoutData, LayoutArena,
     LayoutNodeKind, TextAreaLayoutData,
@@ -115,6 +115,11 @@ pub(crate) fn paint_arena_with_options(
         capture_hidden_selection_units,
         options,
     );
+    if capture_hidden_selection_units {
+        output
+            .frame
+            .order_selection_units(&arena.selection_source_order(root));
+    }
     output
 }
 
@@ -215,7 +220,7 @@ impl<'a, 'out> Painter<'a, 'out> {
 
         match self.arena.kind(id) {
             LayoutNodeKind::Element => self.paint_element(id, bounds, state, stacking_context),
-            LayoutNodeKind::Text(text) => self.paint_text(text, bounds.left, bounds.top, state),
+            LayoutNodeKind::Text(text) => self.paint_text(id, text, bounds.left, bounds.top, state),
             LayoutNodeKind::Image(image) => self.paint_image_node(id, image, bounds, state),
             LayoutNodeKind::Input(input) => self.paint_input_node(id, input, bounds, state),
             LayoutNodeKind::TextArea(textarea) => {
@@ -608,6 +613,7 @@ impl<'a, 'out> Painter<'a, 'out> {
         );
         paint_image(
             &mut self.output.frame,
+            self.arena.selection_source(id),
             image,
             style.image_rendering,
             content,
@@ -666,6 +672,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             input,
             content,
             TextControlPaintOptions {
+                source: self.arena.selection_source(id),
                 glyph_style: GlyphStyle {
                     background,
                     selection_background,
@@ -730,6 +737,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             content,
             scroll_top as usize,
             TextControlPaintOptions {
+                source: self.arena.selection_source(id),
                 glyph_style: GlyphStyle {
                     background,
                     selection_background,
@@ -752,7 +760,7 @@ impl<'a, 'out> Painter<'a, 'out> {
         );
     }
 
-    fn paint_text(&mut self, text: &str, x: i32, y: i32, state: PaintState) {
+    fn paint_text(&mut self, id: NodeId, text: &str, x: i32, y: i32, state: PaintState) {
         if !state.visible {
             return;
         }
@@ -760,7 +768,7 @@ impl<'a, 'out> Painter<'a, 'out> {
             .into_iter()
             .collect::<String>();
         let mut col = 0;
-        for grapheme in text_graphemes(&normalized) {
+        for (offset, grapheme) in text_graphemes(&normalized).enumerate() {
             if grapheme.width == 0 {
                 continue;
             }
@@ -775,6 +783,10 @@ impl<'a, 'out> Painter<'a, 'out> {
                 },
                 state.glyph_style,
                 state.clip,
+                SelectionPoint {
+                    source: self.arena.selection_source(id),
+                    offset,
+                },
             );
             col += grapheme.width as i32;
         }
@@ -807,7 +819,9 @@ impl<'a, 'out> Painter<'a, 'out> {
             );
             match &fragment.kind {
                 InlineFragmentKind::Text {
-                    character, suffix, ..
+                    character,
+                    suffix,
+                    grapheme_offset,
                 } => {
                     let fragment_state = self.inline_fragment_state(id, fragment.node, state);
                     if !fragment_state.visible {
@@ -831,6 +845,10 @@ impl<'a, 'out> Painter<'a, 'out> {
                         },
                         fragment_state.glyph_style,
                         fragment_state.clip,
+                        SelectionPoint {
+                            source: self.arena.selection_source(fragment.node),
+                            offset: *grapheme_offset,
+                        },
                     );
                 }
                 InlineFragmentKind::Replaced => {
@@ -1036,6 +1054,7 @@ fn effective_visibility(value: CssVisibility, inherited: bool) -> bool {
 
 #[derive(Clone, Copy)]
 struct TextControlPaintOptions {
+    source: usize,
     glyph_style: GlyphStyle,
     placeholder_foreground: Background,
     clip: ClipBounds,
@@ -1073,6 +1092,7 @@ fn apply_text_style(style: &DivStyle, mut glyph_style: GlyphStyle) -> GlyphStyle
 
 fn paint_image(
     frame: &mut Frame,
+    source: usize,
     image: &ImageLayoutData,
     rendering: ImageRendering,
     rect: ClipRect,
@@ -1115,6 +1135,10 @@ fn paint_image(
                             ..Default::default()
                         },
                         clip,
+                        SelectionPoint {
+                            source,
+                            offset: (local_y * rect_width + local_x) as usize,
+                        },
                     );
                 }
             }
@@ -1161,6 +1185,10 @@ fn paint_image(
                             ..Default::default()
                         },
                         clip,
+                        SelectionPoint {
+                            source,
+                            offset: (local_y * rect_width + local_x) as usize,
+                        },
                     );
                 }
             }
@@ -1175,6 +1203,7 @@ fn paint_input(
     options: TextControlPaintOptions,
 ) {
     let TextControlPaintOptions {
+        source,
         glyph_style,
         placeholder_foreground,
         clip,
@@ -1226,39 +1255,29 @@ fn paint_input(
         ..glyph_style
     };
 
-    for (grapheme, col) in &glyphs {
-        if *col < start || *col >= start + width {
-            continue;
-        }
+    let clip = clip.intersect(ClipBounds::from_rect_axes(rect, true, true));
+    for (offset, (grapheme, col)) in glyphs.iter().enumerate() {
         let (character, suffix) = grapheme_parts(grapheme.text);
         frame.write_grapheme(
-            rect.left + (*col - start) as i32,
+            rect.left + *col as i32 - start as i32,
             rect.top,
             GraphemeGlyph {
                 character,
                 suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
                 width: grapheme.width,
             },
-            text_style,
+            if input.focused && show_cursor && *col == cursor_cell {
+                glyph_style
+            } else {
+                text_style
+            },
             clip,
+            SelectionPoint { source, offset },
         );
     }
     if let Some(cursor_col) = cursor_col {
         if cursor_col < width {
-            if let Some((grapheme, _)) = glyphs.iter().find(|(_, col)| *col == cursor_cell) {
-                let (character, suffix) = grapheme_parts(grapheme.text);
-                frame.write_grapheme(
-                    rect.left + cursor_col as i32,
-                    rect.top,
-                    GraphemeGlyph {
-                        character,
-                        suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
-                        width: grapheme.width,
-                    },
-                    glyph_style,
-                    clip,
-                );
-            } else {
+            if !glyphs.iter().any(|(_, col)| *col == cursor_cell) {
                 frame.write_glyph(
                     rect.left + cursor_col as i32,
                     rect.top,
@@ -1266,6 +1285,10 @@ fn paint_input(
                     1,
                     glyph_style,
                     clip,
+                    SelectionPoint {
+                        source,
+                        offset: glyphs.len(),
+                    },
                 );
             }
             frame.set_reversed(rect.left + cursor_col as i32, rect.top, true, clip);
@@ -1281,6 +1304,7 @@ fn paint_textarea(
     options: TextControlPaintOptions,
 ) {
     let TextControlPaintOptions {
+        source,
         glyph_style,
         placeholder_foreground,
         clip,
@@ -1322,24 +1346,26 @@ fn paint_textarea(
     } else {
         scroll_top
     };
+    let clip = clip.intersect(ClipBounds::from_rect_axes(rect, true, true));
     for glyph in &layout.glyphs {
-        if glyph.row < scroll_top {
-            continue;
-        }
-        let row = glyph.row - scroll_top;
-        if row as i32 >= rect.height() {
-            continue;
-        }
         frame.write_grapheme(
             rect.left + glyph.col as i32,
-            rect.top + row as i32,
+            rect.top + glyph.row as i32 - scroll_top as i32,
             GraphemeGlyph {
                 character: glyph.character,
                 suffix: glyph.suffix.as_deref().map(|suffix| suffix.as_str()),
                 width: glyph.width,
             },
-            text_style,
+            if show_cursor && cursor_position == Some((glyph.row, glyph.col)) {
+                glyph_style
+            } else {
+                text_style
+            },
             clip,
+            SelectionPoint {
+                source,
+                offset: glyph.grapheme_offset,
+            },
         );
     }
     if let Some((row, col)) = cursor_position.filter(|_| show_cursor) {
@@ -1349,30 +1375,11 @@ fn paint_textarea(
             && col as i32 >= 0
             && (col as i32) < rect.width()
         {
-            let cursor_glyph = layout
+            if !layout
                 .glyphs
                 .iter()
-                .find(|glyph| glyph.row == row && glyph.col == col)
-                .map(|glyph| {
-                    (
-                        glyph.character,
-                        glyph.suffix.as_deref().map(|suffix| suffix.as_str()),
-                        glyph.width,
-                    )
-                });
-            if let Some((character, suffix, width)) = cursor_glyph {
-                frame.write_grapheme(
-                    rect.left + col as i32,
-                    rect.top + visible_row as i32,
-                    GraphemeGlyph {
-                        character,
-                        suffix,
-                        width,
-                    },
-                    glyph_style,
-                    clip,
-                );
-            } else {
+                .any(|glyph| glyph.row == row && glyph.col == col)
+            {
                 frame.write_glyph(
                     rect.left + col as i32,
                     rect.top + visible_row as i32,
@@ -1380,6 +1387,10 @@ fn paint_textarea(
                     1,
                     glyph_style,
                     clip,
+                    SelectionPoint {
+                        source,
+                        offset: layout.grapheme_count,
+                    },
                 );
             }
             frame.set_reversed(
@@ -3619,8 +3630,14 @@ mod tests {
             output
                 .frame
                 .selected_text(&crate::frame::Selection {
-                    anchor: crate::frame::SelectionPoint { order: 0 },
-                    focus: crate::frame::SelectionPoint { order: 4 },
+                    anchor: SelectionPoint {
+                        source: arena.selection_source(text),
+                        offset: 0
+                    },
+                    focus: SelectionPoint {
+                        source: arena.selection_source(text),
+                        offset: 4
+                    },
                 })
                 .as_deref(),
             Some(source)
