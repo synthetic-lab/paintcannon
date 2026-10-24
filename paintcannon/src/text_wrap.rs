@@ -8,6 +8,7 @@ use crate::text::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WrappedText {
     pub(crate) glyphs: Vec<TextGlyph>,
+    pub(crate) grapheme_count: usize,
     cursor_positions: Vec<(usize, usize)>,
     visual_line_ranges: Vec<Range<usize>>,
     end_position: (usize, usize),
@@ -15,6 +16,7 @@ pub(crate) struct WrappedText {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TextGlyph {
+    pub(crate) grapheme_offset: usize,
     pub(crate) character: char,
     pub(crate) suffix: Option<Box<GraphemeSuffix>>,
     pub(crate) row: usize,
@@ -33,8 +35,10 @@ impl WrappedText {
         let mut parsed_cursor_positions = vec![(0, 0); chars.len() + 1];
         let mut row = 0;
         let mut col = 0;
+        let mut grapheme_count = 0;
 
-        for grapheme in text_graphemes(&normalized) {
+        for (grapheme_offset, grapheme) in text_graphemes(&normalized).enumerate() {
+            grapheme_count = grapheme_offset + 1;
             let index = grapheme.character_start;
             let character = grapheme
                 .text
@@ -83,6 +87,7 @@ impl WrappedText {
             if width > 0 {
                 let (character, suffix) = grapheme_parts(grapheme.text);
                 glyphs.push(TextGlyph {
+                    grapheme_offset,
                     character,
                     suffix,
                     row,
@@ -109,6 +114,7 @@ impl WrappedText {
 
         Self {
             glyphs,
+            grapheme_count,
             cursor_positions,
             visual_line_ranges,
             end_position,

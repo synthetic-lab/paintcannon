@@ -70,6 +70,7 @@
     "demo:powerline:fallback": "npm run build:debug && NERD_FONT=0 node dist/examples/powerline.js",
     "demo:native-scroll": "npm run build:debug && node dist/examples/native-scroll.js",
     "demo:scroll": "npm run build:debug && node dist/examples/scroll.js",
+    "demo:selection-drift": "napi build --platform --output-dir dist/napi --dts index.d.ts --js index.js --esm && npm run build:ts && node dist/examples/selection-drift.js",
     "demo:scroll-anchoring": "npm run build:debug && node dist/examples/scroll-anchoring.js",
     "demo:scroll-percent": "npm run build:debug && node dist/examples/scroll-percent.js",
     "demo:scroll-percent-static": "npm run build:debug && node dist/examples/scroll-percent-static.js",

@@ -1,4 +1,8 @@
-use std::{collections::HashSet, ops::Range, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+    time::Instant,
+};
 
 use taffy::{
     compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
@@ -61,6 +65,7 @@ pub(crate) struct LayoutArena {
     hyperlinks_supported: bool,
     nodes: Vec<LayoutNode>,
     free_nodes: Vec<usize>,
+    next_selection_source: usize,
     scroll_nodes: HashSet<NodeId>,
     absolute_nodes: HashSet<NodeId>,
     stacking_candidates: HashSet<NodeId>,
@@ -104,6 +109,7 @@ pub(crate) struct LayoutStats {
 
 struct LayoutNode {
     occupied: bool,
+    selection_source: usize,
     kind: LayoutNodeKind,
     style: DivStyle,
     taffy_style: Style,
@@ -323,7 +329,7 @@ pub(crate) enum InlineFragmentKind {
     Text {
         character: char,
         suffix: Option<Box<GraphemeSuffix>>,
-        selection_order: usize,
+        grapheme_offset: usize,
     },
     Replaced,
 }
@@ -335,6 +341,7 @@ impl LayoutArena {
             hyperlinks_supported: false,
             nodes: Vec::new(),
             free_nodes: Vec::new(),
+            next_selection_source: 0,
             scroll_nodes: HashSet::new(),
             absolute_nodes: HashSet::new(),
             stacking_candidates: HashSet::new(),
@@ -1072,6 +1079,7 @@ impl LayoutArena {
         let is_absolute = style.position == CssPosition::Absolute;
         let node = LayoutNode {
             occupied: true,
+            selection_source: self.next_selection_source,
             kind,
             taffy_style: style.to_taffy(),
             style,
@@ -1096,6 +1104,7 @@ impl LayoutArena {
             measure_cache: InlineMeasureCache::default(),
             visible_overflow_size: Size::ZERO,
         };
+        self.next_selection_source += 1;
         let id = if let Some(index) = self.free_nodes.pop() {
             self.nodes[index] = node;
             NodeId::from(index)
@@ -1116,6 +1125,20 @@ impl LayoutArena {
         self.update_scroll_node(id);
         self.stacking_tree_dirty = true;
         id
+    }
+
+    pub(crate) fn selection_source(&self, node: NodeId) -> usize {
+        self.nodes[node_index(node)].selection_source
+    }
+
+    pub(crate) fn selection_source_order(&self, root: NodeId) -> HashMap<usize, usize> {
+        let mut order = HashMap::new();
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            order.insert(self.selection_source(node), order.len());
+            pending.extend(self.children(node).iter().rev().copied());
+        }
+        order
     }
 
     pub(crate) fn prepare_paint(&mut self, root: NodeId) {
@@ -3095,7 +3118,6 @@ impl LayoutArena {
             width: width.max(1),
             max_col: 0,
             previous_character: None,
-            selection_order: 0,
             has_relative_descendants: false,
             absolute_positions: Vec::new(),
             fragments: Vec::with_capacity(fragment_capacity),
@@ -3437,7 +3459,6 @@ struct InlineLayoutCursor {
     width: u32,
     max_col: u32,
     previous_character: Option<char>,
-    selection_order: usize,
     has_relative_descendants: bool,
     absolute_positions: Vec<(NodeId, Point<u32>)>,
     fragments: Vec<InlineFragment>,
@@ -4075,7 +4096,7 @@ fn measure_inline_text(text: &str, config: TextWrapConfig, cursor: &mut InlineMe
         max_col: cursor.max_col,
         previous_character: cursor.previous_character,
     };
-    flow_inline_text(text, config, &mut flow, |_, _, _, _| {});
+    flow_inline_text(text, config, &mut flow, |_, _, _, _, _| {});
     cursor.col = flow.col;
     cursor.row = flow.row;
     cursor.max_col = flow.max_col;
@@ -4096,26 +4117,29 @@ fn layout_inline_text(
         max_col: cursor.max_col,
         previous_character: cursor.previous_character,
     };
-    flow_inline_text(text, config, &mut flow, |grapheme, x, y, width| {
-        if width > 0 {
-            let (character, suffix) = grapheme_parts(grapheme);
-            let selection_order = cursor.selection_order;
-            cursor.selection_order += 1;
-            cursor.fragments.push(InlineFragment {
-                node,
-                hit_node: hit_target,
-                kind: InlineFragmentKind::Text {
-                    character,
-                    suffix,
-                    selection_order,
-                },
-                x,
-                y,
-                width,
-                height: 1,
-            });
-        }
-    });
+    flow_inline_text(
+        text,
+        config,
+        &mut flow,
+        |grapheme, grapheme_offset, x, y, width| {
+            if width > 0 {
+                let (character, suffix) = grapheme_parts(grapheme);
+                cursor.fragments.push(InlineFragment {
+                    node,
+                    hit_node: hit_target,
+                    kind: InlineFragmentKind::Text {
+                        character,
+                        suffix,
+                        grapheme_offset,
+                    },
+                    x,
+                    y,
+                    width,
+                    height: 1,
+                });
+            }
+        },
+    );
     cursor.col = flow.col;
     cursor.row = flow.row;
     cursor.max_col = flow.max_col;
@@ -4126,7 +4150,7 @@ fn flow_inline_text(
     text: &str,
     config: TextWrapConfig,
     cursor: &mut InlineTextFlow,
-    mut emit: impl FnMut(&str, u32, u32, u32),
+    mut emit: impl FnMut(&str, usize, u32, u32, u32),
 ) {
     let chars = parse_text_for_white_space(text, config.white_space);
     let normalized = chars.iter().collect::<String>();
@@ -4140,7 +4164,7 @@ fn flow_inline_text(
             LineBreakPlan::new(&[previous, first], config.word_break).is_soft_break_before(1)
         });
 
-    for grapheme in text_graphemes(&normalized) {
+    for (grapheme_offset, grapheme) in text_graphemes(&normalized).enumerate() {
         let index = grapheme.character_start;
         let character = grapheme
             .text
@@ -4180,7 +4204,13 @@ fn flow_inline_text(
             }
         }
 
-        emit(grapheme.text, cursor.col, cursor.row, width);
+        emit(
+            grapheme.text,
+            grapheme_offset,
+            cursor.col,
+            cursor.row,
+            width,
+        );
         cursor.col += width;
         cursor.max_col = cursor.max_col.max(cursor.col);
         cursor.previous_character = grapheme.text.chars().last();
@@ -6573,7 +6603,7 @@ mod tests {
             InlineFragmentKind::Text {
                 character: 'h',
                 suffix: None,
-                selection_order: 0
+                grapheme_offset: 0
             }
         ));
     }
@@ -6986,7 +7016,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_fragments_keep_selection_order_across_spans() {
+    fn inline_fragments_keep_source_offsets_across_spans() {
         let mut arena = LayoutArena::new();
         let mut row_style = block_style(CssDimension::Length(3.0), CssDimension::Auto);
         row_style.overflow_wrap = CssOverflowWrap::Anywhere;
@@ -7020,18 +7050,18 @@ mod tests {
                 InlineFragmentKind::Replaced => None,
             })
             .collect::<String>();
-        let orders = fragments
+        let offsets = fragments
             .iter()
             .filter_map(|fragment| match fragment.kind {
                 InlineFragmentKind::Text {
-                    selection_order, ..
-                } => Some(selection_order),
+                    grapheme_offset, ..
+                } => Some(grapheme_offset),
                 InlineFragmentKind::Replaced => None,
             })
             .collect::<Vec<_>>();
 
         assert_eq!(chars, "abcd");
-        assert_eq!(orders, vec![0, 1, 2, 3]);
+        assert_eq!(offsets, vec![0, 1, 0, 1]);
         assert_eq!(fragments[0].hit_node, Some(first_span));
         assert_eq!(fragments[2].hit_node, Some(second_span));
         assert!(fragments.iter().any(|fragment| fragment.y == 1));
