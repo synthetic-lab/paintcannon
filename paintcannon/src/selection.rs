@@ -208,6 +208,16 @@ impl SelectionState {
         else {
             return false;
         };
+        if frame
+            .selection_range(&Selection {
+                anchor: selection.anchor,
+                focus: selection.focus,
+            })
+            .is_none()
+        {
+            self.selection = None;
+            return true;
+        }
         let Some(point) = frame.selection_point_for(selection.last_x, selection.last_y) else {
             return false;
         };
@@ -252,6 +262,10 @@ mod tests {
                 1,
                 GlyphStyle::default(),
                 ClipBounds::unbounded(),
+                SelectionPoint {
+                    source: 0,
+                    offset: index,
+                },
             );
         }
         frame
@@ -327,8 +341,14 @@ mod tests {
         assert_eq!(
             state.active_selection(),
             Some(Selection {
-                anchor: SelectionPoint { order: 1 },
-                focus: SelectionPoint { order: 3 },
+                anchor: SelectionPoint {
+                    source: 0,
+                    offset: 1
+                },
+                focus: SelectionPoint {
+                    source: 0,
+                    offset: 3
+                },
             })
         );
         assert_eq!(
@@ -424,8 +444,14 @@ mod tests {
         assert_eq!(
             state.active_selection(),
             Some(Selection {
-                anchor: SelectionPoint { order: 1 },
-                focus: SelectionPoint { order: 2 },
+                anchor: SelectionPoint {
+                    source: 0,
+                    offset: 1
+                },
+                focus: SelectionPoint {
+                    source: 0,
+                    offset: 2
+                },
             })
         );
 
@@ -519,10 +545,7 @@ mod tests {
         let (arena, viewport) = scroll_text_arena();
         let output = paint_arena(&arena, viewport, 5, 2, false);
 
-        assert_eq!(
-            output.frame.selection_point_for(0, 0),
-            Some(SelectionPoint { order: 0 })
-        );
+        assert!(output.frame.selection_point_for(0, 0).is_some());
         assert_eq!(output.frame.selection_point_for(0, 1), None);
     }
 

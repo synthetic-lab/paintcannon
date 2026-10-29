@@ -1595,7 +1595,7 @@ impl PaintEngine {
         }
 
         let capture_hidden_selection_units =
-            force_capture_hidden_selection_units || self.selection.active_selection().is_some();
+            force_capture_hidden_selection_units || self.selection.is_selecting();
         let paint_start = Instant::now();
         let paint_options = PaintOptions {
             transitions: None,
@@ -1630,11 +1630,11 @@ impl PaintEngine {
             ],
         );
         let bookkeeping_start = Instant::now();
+        self.selection
+            .refresh_focus_from_last_pointer(&output.frame);
         output
             .frame
             .apply_selection(self.selection.active_selection().as_ref());
-        self.selection
-            .refresh_focus_from_last_pointer(&output.frame);
         self.hit_regions = output.hit_regions;
         self.current_frame = Some(output.frame.clone());
         self.refresh_link_hover();

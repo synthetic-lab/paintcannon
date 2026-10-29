@@ -868,6 +868,409 @@ fn viewport_frame_is_unchanged_when_scrolling_past_the_end() {
             .is_some_and(|cell| cell.character != ' ')));
 }
 
+fn drag_selection(engine: &mut PaintEngine, anchor: (u32, u32), focus: (u32, u32)) {
+    for (event_type, (x, y)) in [
+        (SelectionMouseEventType::Down, anchor),
+        (SelectionMouseEventType::Drag, focus),
+    ] {
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type,
+            x,
+            y,
+            button: 0,
+        });
+    }
+}
+
+#[test]
+fn selection_stays_on_relative_message_when_loading_text_below_changes_length() {
+    assert_selection_survives_unrelated_text_changes(
+        CssPosition::Relative,
+        LayoutDisplay::Flex,
+        false,
+    );
+}
+
+#[test]
+fn selection_stays_on_static_message_when_heading_above_changes_length() {
+    assert_selection_survives_unrelated_text_changes(
+        CssPosition::Static,
+        LayoutDisplay::Block,
+        true,
+    );
+}
+
+fn assert_selection_survives_unrelated_text_changes(
+    position: CssPosition,
+    display: LayoutDisplay,
+    heading_above: bool,
+) {
+    for backwards in [false, true] {
+        let mut engine = PaintEngine::new();
+        let root = engine.create_element(DivStyle {
+            display: LayoutDisplay::Flex,
+            flex_direction: LayoutFlexDirection::Column,
+            width: CssDimension::Length(80.0),
+            height: CssDimension::Length(4.0),
+            selection_background: Some(Background::Magenta),
+            ..DivStyle::default()
+        });
+        let message = engine.create_element(DivStyle {
+            position,
+            display,
+            height: CssDimension::Length(1.0),
+            ..DivStyle::default()
+        });
+        let text = engine.create_text("alpha bravo charlie delta echo foxtrot golf hotel");
+        engine.append_child(message, text);
+        let heading = engine.create_element(block_style(
+            CssDimension::Length(80.0),
+            CssDimension::Length(1.0),
+        ));
+        let changing = engine.create_text("Exploring");
+        engine.append_child(heading, changing);
+        for child in if heading_above {
+            [heading, message]
+        } else {
+            [message, heading]
+        } {
+            engine.append_child(root, child);
+        }
+        engine.set_root(root);
+        engine.render_frame(80, 4).unwrap();
+
+        let row = u32::from(heading_above);
+        let (anchor, focus) = if backwards { (18, 12) } else { (12, 18) };
+        drag_selection(&mut engine, (anchor, row), (focus, row));
+
+        for value in ["Exploring...", "Exploring", "Exploring..."] {
+            engine.set_text(changing, value);
+            let frame = engine.render_frame(80, 4).unwrap();
+            let highlighted = (0..frame.height())
+                .flat_map(|y| (0..frame.width()).map(move |x| (x, y)))
+                .filter_map(|(x, y)| {
+                    let cell = frame.cell(x, y).unwrap();
+                    (cell.background == Background::Magenta).then_some((x, y, cell.character))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                highlighted,
+                "charlie"
+                    .chars()
+                    .enumerate()
+                    .map(|(offset, character)| (12 + offset, row as usize, character))
+                    .collect::<Vec<_>>(),
+                "heading_above={heading_above}, {value}, backwards={backwards}"
+            );
+        }
+
+        assert_eq!(
+            engine.handle_selection_event(SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Up,
+                x: focus,
+                y: row,
+                button: 0,
+            }),
+            SelectionAction::CopyToClipboard("charlie".to_string())
+        );
+    }
+}
+
+#[test]
+fn selection_includes_relative_message_in_document_order() {
+    let mut engine = PaintEngine::new();
+    let root = engine.create_element(DivStyle {
+        display: LayoutDisplay::Flex,
+        flex_direction: LayoutFlexDirection::Column,
+        width: CssDimension::Length(16.0),
+        height: CssDimension::Length(3.0),
+        selection_background: Some(Background::Magenta),
+        ..DivStyle::default()
+    });
+    let [footer, message, header] = ["After", "alpha bravo", "Before"].map(|value| {
+        let row = engine.create_element(block_style(
+            CssDimension::Length(16.0),
+            CssDimension::Length(1.0),
+        ));
+        let text = engine.create_text(value);
+        engine.append_child(row, text);
+        row
+    });
+    engine.mutate_style(message, StyleMutation::Position(CssPosition::Relative));
+    for row in [header, message, footer] {
+        engine.append_child(root, row);
+    }
+    engine.set_root(root);
+    engine.render_frame(16, 3).unwrap();
+    drag_selection(&mut engine, (0, 0), (4, 2));
+
+    let frame = engine.render_frame(16, 3).unwrap();
+    for (y, expected) in ["Before", "alpha bravo", "After"].into_iter().enumerate() {
+        let highlighted = (0..frame.width())
+            .filter_map(|x| {
+                let cell = frame.cell(x, y).unwrap();
+                (cell.background == Background::Magenta).then_some(cell.character)
+            })
+            .collect::<String>();
+        assert_eq!(highlighted, expected, "row={y}");
+    }
+    assert_eq!(
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Up,
+            x: 4,
+            y: 2,
+            button: 0,
+        }),
+        SelectionAction::CopyToClipboard("Before\nalpha bravo\nAfter".to_string())
+    );
+}
+
+#[test]
+fn selection_includes_positioned_inline_text_in_document_order() {
+    let mut engine = PaintEngine::new();
+    let root = engine.create_element(DivStyle {
+        width: CssDimension::Length(24.0),
+        height: CssDimension::Length(1.0),
+        selection_background: Some(Background::Magenta),
+        ..DivStyle::default()
+    });
+    let suffix = engine.create_text(" charlie");
+    let positioned = engine.create_element(DivStyle {
+        display: LayoutDisplay::Inline,
+        position: CssPosition::Relative,
+        ..DivStyle::default()
+    });
+    let middle = engine.create_text("bravo");
+    engine.append_child(positioned, middle);
+    let prefix = engine.create_text("alpha ");
+    for node in [prefix, positioned, suffix] {
+        engine.append_child(root, node);
+    }
+    engine.set_root(root);
+    engine.render_frame(24, 1).unwrap();
+    drag_selection(&mut engine, (18, 0), (0, 0));
+
+    let frame = engine.render_frame(24, 1).unwrap();
+    for x in 0..24 {
+        assert_eq!(
+            frame.cell(x, 0).unwrap().background == Background::Magenta,
+            x < 19
+        );
+    }
+    assert_eq!(
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Up,
+            x: 0,
+            y: 0,
+            button: 0,
+        }),
+        SelectionAction::CopyToClipboard("alpha bravo charlie".to_string())
+    );
+}
+
+#[test]
+fn selection_survives_endpoint_text_shrinking_and_growing() {
+    for backwards in [false, true] {
+        let mut engine = PaintEngine::new();
+        let root = engine.create_element(DivStyle {
+            display: LayoutDisplay::Flex,
+            flex_direction: LayoutFlexDirection::Column,
+            width: CssDimension::Length(50.0),
+            height: CssDimension::Length(2.0),
+            selection_background: Some(Background::Magenta),
+            ..DivStyle::default()
+        });
+        let message = "alpha bravo charlie delta echo foxtrot golf hotel";
+        let [_, changing] = [message, "Exploring..."].map(|value| {
+            let row = engine.create_element(block_style(
+                CssDimension::Length(50.0),
+                CssDimension::Length(1.0),
+            ));
+            let text = engine.create_text(value);
+            engine.append_child(row, text);
+            engine.append_child(root, row);
+            text
+        });
+        engine.set_root(root);
+        engine.render_frame(50, 2).unwrap();
+
+        let (anchor, focus) = if backwards {
+            ((11, 1), (0, 0))
+        } else {
+            ((0, 0), (11, 1))
+        };
+        drag_selection(&mut engine, anchor, focus);
+
+        for value in ["Exploring", "Exploring...", "Exploring"] {
+            engine.set_text(changing, value);
+            let frame = engine.render_frame(50, 2).unwrap();
+            for (y, expected) in [message, value].into_iter().enumerate() {
+                let highlighted = (0..frame.width())
+                    .filter_map(|x| {
+                        let cell = frame.cell(x, y).unwrap();
+                        (cell.background == Background::Magenta).then_some(cell.character)
+                    })
+                    .collect::<String>();
+                assert_eq!(highlighted, expected, "backwards={backwards}, row={y}");
+            }
+        }
+
+        assert_eq!(
+            engine.handle_selection_event(SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Up,
+                x: focus.0,
+                y: focus.1,
+                button: 0,
+            }),
+            SelectionAction::CopyToClipboard(format!("{message}\nExploring"))
+        );
+    }
+}
+
+#[test]
+fn selection_refreshes_focus_before_highlighting_scrolled_content() {
+    let mut textarea_engine = PaintEngine::new();
+    let textarea = textarea_engine.create_textarea(
+        block_style(CssDimension::Length(6.0), CssDimension::Length(1.0)),
+        "aaaaa\nbbbbb",
+    );
+    textarea_engine.set_root(textarea);
+    let (mut engine, viewport) = scroll_engine();
+    for (engine, viewport) in [(&mut engine, viewport), (&mut textarea_engine, textarea)] {
+        engine.render_frame(6, 1).unwrap();
+        drag_selection(engine, (0, 0), (4, 0));
+        engine.set_scroll_offset(viewport, 0, 1);
+        let frame = engine.render_frame(6, 1).unwrap();
+        for x in 0..5 {
+            let cell = frame.cell(x, 0).unwrap();
+            assert_eq!(cell.character, 'b');
+            assert!(cell.reversed);
+        }
+        assert_eq!(
+            engine.handle_selection_event(SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Up,
+                x: 4,
+                y: 0,
+                button: 0,
+            }),
+            SelectionAction::CopyToClipboard("aaaaa\nbbbbb".to_string())
+        );
+    }
+}
+
+#[test]
+fn selection_copies_focused_text_control_graphemes_once() {
+    for multiline in [false, true] {
+        let mut engine = PaintEngine::new();
+        let style = DivStyle {
+            width: CssDimension::Length(8.0),
+            height: CssDimension::Length(1.0),
+            selection_background: Some(Background::Magenta),
+            ..DivStyle::default()
+        };
+        let value = "ab👩‍💻cd";
+        let control = if multiline {
+            engine.create_textarea(style, value)
+        } else {
+            engine.create_input_with_id(DomId(1), style, value)
+        };
+        engine.set_input_value(control, value, 2);
+        engine.set_input_focused(control, true);
+        engine.set_root(control);
+        engine.render_frame(8, 1).unwrap();
+        drag_selection(&mut engine, (0, 0), (5, 0));
+        let frame = engine.render_frame(8, 1).unwrap();
+        for x in 0..8 {
+            assert_eq!(
+                frame.cell(x, 0).unwrap().background == Background::Magenta,
+                x < 6
+            );
+        }
+        assert_eq!(
+            engine.handle_selection_event(SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Up,
+                x: 5,
+                y: 0,
+                button: 0,
+            }),
+            SelectionAction::CopyToClipboard(value.to_string())
+        );
+    }
+}
+
+#[test]
+fn selection_keeps_grapheme_offsets_when_wrapping_omits_a_space() {
+    let mut engine = PaintEngine::new();
+    let root = engine.create_element(DivStyle {
+        width: CssDimension::Length(6.0),
+        white_space: CssWhiteSpace::PreWrap,
+        overflow_wrap: CssOverflowWrap::Anywhere,
+        ..DivStyle::default()
+    });
+    let text = engine.create_text("aaaaa e\u{301}👩‍💻界");
+    engine.append_child(root, text);
+    engine.set_root(root);
+    engine.render_frame(8, 3).unwrap();
+    drag_selection(&mut engine, (0, 1), (4, 1));
+    for width in [6.0, 5.0, 6.0] {
+        engine.mutate_style(root, StyleMutation::Width(CssDimension::Length(width)));
+        let frame = engine.render_frame(8, 3).unwrap();
+        for y in 0..3 {
+            for x in 0..8 {
+                assert_eq!(
+                    frame.cell(x, y).unwrap().reversed,
+                    y == 1 && x < 5,
+                    "width={width}, x={x}, y={y}"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        engine.handle_selection_event(SelectionMouseEvent {
+            event_type: SelectionMouseEventType::Up,
+            x: 4,
+            y: 1,
+            button: 0,
+        }),
+        SelectionAction::CopyToClipboard("e\u{301}👩‍💻界".to_string())
+    );
+}
+
+#[test]
+fn selection_clears_when_either_endpoint_node_is_replaced() {
+    for remove_anchor in [false, true] {
+        let mut engine = PaintEngine::new();
+        let root = engine.create_element(block_style(
+            CssDimension::Length(20.0),
+            CssDimension::Length(1.0),
+        ));
+        let first = engine.create_text("alpha ");
+        let second = engine.create_text("bravo");
+        engine.append_child(root, first);
+        engine.append_child(root, second);
+        engine.set_root(root);
+        engine.render_frame(20, 1).unwrap();
+        drag_selection(&mut engine, (0, 0), (10, 0));
+        let removed = if remove_anchor { first } else { second };
+        let removed_slot = engine.node_for(removed).unwrap();
+        engine.destroy_node(removed);
+        let replacement = engine.create_text("replacement");
+        assert_eq!(engine.node_for(replacement), Some(removed_slot));
+        engine.append_child(root, replacement);
+        let frame = engine.render_frame(20, 1).unwrap();
+        assert!((0..20).all(|x| !frame.cell(x, 0).unwrap().reversed));
+        assert_eq!(
+            engine.handle_selection_event(SelectionMouseEvent {
+                event_type: SelectionMouseEventType::Up,
+                x: 10,
+                y: 0,
+                button: 0,
+            }),
+            SelectionAction::Redraw
+        );
+    }
+}
+
 #[test]
 fn selection_in_later_scroll_pane_does_not_capture_hidden_text_from_earlier_pane() {
     let mut engine = PaintEngine::new();

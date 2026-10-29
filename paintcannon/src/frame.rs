@@ -31,7 +31,8 @@ pub(crate) struct Selection {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SelectionPoint {
-    pub(crate) order: usize,
+    pub(crate) source: usize,
+    pub(crate) offset: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,7 +46,6 @@ pub(crate) struct Frame {
     selection_units: Vec<SelectionUnit>,
     grapheme_suffixes: HashMap<usize, String>,
     pub(crate) hyperlinks: HashMap<taffy::NodeId, std::sync::Arc<str>>,
-    next_selection_order: usize,
     capture_hidden_selection_units: bool,
     pub(crate) powerline_extended: bool,
     pub(crate) legacy_symbols: bool,
@@ -69,7 +69,7 @@ pub(crate) struct Cell {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SelectionUnit {
-    order: usize,
+    point: SelectionPoint,
     row: i32,
     character: char,
     suffix: Option<Box<GraphemeSuffix>>,
@@ -166,7 +166,6 @@ impl Frame {
             selection_units: Vec::new(),
             grapheme_suffixes: HashMap::new(),
             hyperlinks: HashMap::new(),
-            next_selection_order: 0,
             capture_hidden_selection_units,
             powerline_extended: false,
             legacy_symbols: false,
@@ -248,7 +247,6 @@ impl Frame {
 
         self.hyperlinks.extend(layer.hyperlinks);
         self.selection_units = layer.selection_units;
-        self.next_selection_order = layer.next_selection_order;
     }
 
     #[cfg(test)]
@@ -349,6 +347,7 @@ impl Frame {
         width: usize,
         style: GlyphStyle,
         clip: ClipBounds,
+        point: SelectionPoint,
     ) {
         self.write_grapheme(
             x,
@@ -360,6 +359,7 @@ impl Frame {
             },
             style,
             clip,
+            point,
         );
     }
 
@@ -370,6 +370,7 @@ impl Frame {
         glyph: GraphemeGlyph<'_>,
         style: GlyphStyle,
         clip: ClipBounds,
+        point: SelectionPoint,
     ) {
         if glyph.width == 0 {
             return;
@@ -380,7 +381,7 @@ impl Frame {
             return;
         }
 
-        let selection_order = self.push_selection_unit(y, glyph.character, glyph.suffix);
+        let selection_order = self.push_selection_unit(point, y, glyph.character, glyph.suffix);
         if !visible {
             return;
         }
@@ -422,7 +423,7 @@ impl Frame {
             self.grapheme_suffixes.remove(&continuation_index);
             self.cells[continuation_index].character = ' ';
             self.cells[continuation_index].foreground = style.foreground;
-            self.cells[continuation_index].selection_order = None;
+            self.cells[continuation_index].selection_order = Some(selection_order);
             self.cells[continuation_index].bold = style.bold;
             self.cells[continuation_index].italic = style.italic;
             self.cells[continuation_index].underline = style.underline;
@@ -560,16 +561,74 @@ impl Frame {
         }
     }
 
+    pub(crate) fn order_selection_units(&mut self, source_order: &HashMap<usize, usize>) {
+        if self.selection_units.is_sorted_by(|left, right| {
+            if left.point.source == right.point.source {
+                left.point.offset <= right.point.offset
+            } else {
+                source_order[&left.point.source] < source_order[&right.point.source]
+            }
+        }) {
+            return;
+        }
+
+        let mut units = std::mem::take(&mut self.selection_units)
+            .into_iter()
+            .enumerate()
+            .collect::<Vec<_>>();
+        units.sort_by_cached_key(|(_, unit)| (source_order[&unit.point.source], unit.point.offset));
+        let mut new_orders = vec![0; units.len()];
+        self.selection_units = units
+            .into_iter()
+            .enumerate()
+            .map(|(new_order, (old_order, unit))| {
+                new_orders[old_order] = new_order;
+                unit
+            })
+            .collect();
+        for cell in &mut self.cells {
+            cell.selection_order = cell.selection_order.map(|order| new_orders[order]);
+        }
+    }
+
+    pub(crate) fn selection_range(
+        &self,
+        selection: &Selection,
+    ) -> Option<std::ops::RangeInclusive<usize>> {
+        let anchor = self.selection_order_for(selection.anchor)?;
+        let focus = self.selection_order_for(selection.focus)?;
+        Some(anchor.min(focus)..=anchor.max(focus))
+    }
+
+    fn selection_order_for(&self, point: SelectionPoint) -> Option<usize> {
+        let mut closest = None;
+        for (order, unit) in self.selection_units.iter().enumerate() {
+            if unit.point.source != point.source {
+                continue;
+            }
+            let distance = unit.point.offset.abs_diff(point.offset);
+            if distance == 0 {
+                return Some(order);
+            }
+            if closest.is_none_or(|(_, best_distance)| distance < best_distance) {
+                closest = Some((order, distance));
+            }
+        }
+        closest.map(|(order, _)| order)
+    }
+
     pub(crate) fn apply_selection(&mut self, selection: Option<&Selection>) {
         let Some(selection) = selection else {
             return;
         };
 
-        let (start, end) = normalized_selection(selection);
+        let Some(range) = self.selection_range(selection) else {
+            return;
+        };
         for cell in &mut self.cells {
             if cell
                 .selection_order
-                .is_some_and(|order| order >= start.order && order <= end.order)
+                .is_some_and(|order| range.contains(&order))
             {
                 if let Some(background) = cell.selection_background {
                     cell.background = background;
@@ -582,16 +641,12 @@ impl Frame {
     }
 
     pub(crate) fn selected_text(&self, selection: &Selection) -> Option<String> {
-        let (start, end) = normalized_selection(selection);
+        let range = self.selection_range(selection)?;
         let mut lines = Vec::new();
         let mut current_row = None;
         let mut current_line = String::new();
 
-        for unit in &self.selection_units {
-            if unit.order < start.order || unit.order > end.order {
-                continue;
-            }
-
+        for unit in &self.selection_units[range] {
             match current_row {
                 Some(row) if row == unit.row => {}
                 Some(_) => {
@@ -626,7 +681,7 @@ impl Frame {
         let row_start = row * self.width;
 
         if let Some(order) = self.cells[row_start + col].selection_order {
-            return Some(SelectionPoint { order });
+            return Some(self.selection_units[order].point);
         }
 
         let selectable_cols = (0..self.width)
@@ -641,16 +696,16 @@ impl Frame {
         let (last_col, last_order) = *selectable_cols.last()?;
 
         if col <= first_col {
-            return Some(SelectionPoint { order: first_order });
+            return Some(self.selection_units[first_order].point);
         }
         if col >= last_col {
-            return Some(SelectionPoint { order: last_order });
+            return Some(self.selection_units[last_order].point);
         }
 
         selectable_cols
             .into_iter()
             .min_by_key(|(candidate_col, _)| candidate_col.abs_diff(col))
-            .map(|(_, order)| SelectionPoint { order })
+            .map(|(_, order)| self.selection_units[order].point)
     }
 
     pub(crate) fn write_diff_to(
@@ -943,11 +998,16 @@ impl Frame {
             && self.grapheme_suffixes.get(&index) == other.grapheme_suffixes.get(&index)
     }
 
-    fn push_selection_unit(&mut self, row: i32, character: char, suffix: Option<&str>) -> usize {
-        let order = self.next_selection_order;
-        self.next_selection_order += 1;
+    fn push_selection_unit(
+        &mut self,
+        point: SelectionPoint,
+        row: i32,
+        character: char,
+        suffix: Option<&str>,
+    ) -> usize {
+        let order = self.selection_units.len();
         self.selection_units.push(SelectionUnit {
-            order,
+            point,
             row,
             character,
             suffix: suffix.map(|suffix| Box::new(GraphemeSuffix::new(suffix))),
@@ -1097,14 +1157,6 @@ impl Default for Cell {
             hyperlink: None,
             wide_continuation: false,
         }
-    }
-}
-
-fn normalized_selection(selection: &Selection) -> (SelectionPoint, SelectionPoint) {
-    if selection.anchor.order <= selection.focus.order {
-        (selection.anchor, selection.focus)
-    } else {
-        (selection.focus, selection.anchor)
     }
 }
 
@@ -1365,6 +1417,10 @@ fn border_glyphs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn selection_point(offset: usize) -> SelectionPoint {
+        SelectionPoint { source: 0, offset }
+    }
 
     fn solid_border_style() -> DivStyle {
         DivStyle {
@@ -1732,6 +1788,7 @@ mod tests {
                 ..Default::default()
             },
             clip,
+            selection_point(frame.selection_units.len()),
         );
         frame.set_reversed(0, 0, true, clip);
         let style = DivStyle {
@@ -2117,6 +2174,7 @@ mod tests {
                 1,
                 glyph_style,
                 ClipBounds::unbounded(),
+                selection_point(frame.selection_units.len()),
             );
         }
         for (index, character) in "de ".chars().enumerate() {
@@ -2127,12 +2185,13 @@ mod tests {
                 1,
                 glyph_style,
                 ClipBounds::unbounded(),
+                selection_point(frame.selection_units.len()),
             );
         }
 
         let selection = Selection {
-            anchor: SelectionPoint { order: 1 },
-            focus: SelectionPoint { order: 5 },
+            anchor: selection_point(1),
+            focus: selection_point(5),
         };
 
         assert_eq!(frame.selected_text(&selection).as_deref(), Some("bc\nde"));
@@ -2159,8 +2218,17 @@ mod tests {
             },
             style,
             ClipBounds::unbounded(),
+            selection_point(frame.selection_units.len()),
         );
-        frame.write_glyph(0, 1, 'x', 1, style, ClipBounds::unbounded());
+        frame.write_glyph(
+            0,
+            1,
+            'x',
+            1,
+            style,
+            ClipBounds::unbounded(),
+            selection_point(frame.selection_units.len()),
+        );
         let mut bytes = Vec::new();
         frame
             .write_full_to(&mut bytes, TermProfile::NoColor)
@@ -2190,9 +2258,18 @@ mod tests {
                 ..Default::default()
             },
             ClipBounds::unbounded(),
+            selection_point(frame.selection_units.len()),
         );
         let mut layer = frame.layer();
-        layer.write_glyph(0, 0, 'b', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        layer.write_glyph(
+            0,
+            0,
+            'b',
+            1,
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+            selection_point(layer.selection_units.len()),
+        );
         frame.composite_layer(layer, 0.5, Background::White, Background::Black);
         assert_eq!(frame.cell(0, 0).unwrap().character, 'b');
         assert_eq!(frame.cell(0, 0).unwrap().hyperlink, None);
@@ -2208,6 +2285,7 @@ mod tests {
                 ..Default::default()
             },
             ClipBounds::unbounded(),
+            selection_point(layer.selection_units.len()),
         );
         frame.composite_layer(layer, 0.5, Background::White, Background::Black);
         assert_eq!(frame.cell(0, 0).unwrap().hyperlink, Some(id));
@@ -2227,6 +2305,7 @@ mod tests {
                 ..Default::default()
             },
             ClipBounds::unbounded(),
+            selection_point(frame.selection_units.len()),
         );
         frame.fill_rect(
             ClipRect::new(0, 0, 1, 1),
@@ -2250,10 +2329,11 @@ mod tests {
             },
             GlyphStyle::default(),
             ClipBounds::unbounded(),
+            selection_point(frame.selection_units.len()),
         );
         let selection = Selection {
-            anchor: SelectionPoint { order: 0 },
-            focus: SelectionPoint { order: 0 },
+            anchor: selection_point(0),
+            focus: selection_point(0),
         };
 
         assert_eq!(
@@ -2277,6 +2357,7 @@ mod tests {
                     },
                     GlyphStyle::default(),
                     ClipBounds::unbounded(),
+                    selection_point(frame.selection_units.len()),
                 );
                 let mut bytes = Vec::new();
                 frame
@@ -2299,17 +2380,97 @@ mod tests {
     #[test]
     fn selection_point_uses_nearest_selectable_cell_on_row() {
         let mut frame = Frame::new(8, 1, false);
-        frame.write_glyph(2, 0, 'a', 1, GlyphStyle::default(), ClipBounds::unbounded());
-        frame.write_glyph(5, 0, 'b', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        frame.write_glyph(
+            2,
+            0,
+            'a',
+            1,
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+            selection_point(frame.selection_units.len()),
+        );
+        frame.write_glyph(
+            5,
+            0,
+            'b',
+            1,
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+            selection_point(frame.selection_units.len()),
+        );
 
         assert_eq!(
             frame.selection_point_for(0, 0),
-            Some(SelectionPoint { order: 0 })
+            Some(SelectionPoint {
+                source: 0,
+                offset: 0
+            })
         );
         assert_eq!(
             frame.selection_point_for(7, 0),
-            Some(SelectionPoint { order: 1 })
+            Some(SelectionPoint {
+                source: 0,
+                offset: 1
+            })
         );
+    }
+
+    #[test]
+    fn selection_ordering_preserves_pointer_targets_and_copied_text() {
+        let [a, b, c] = [(7, 0, 'a'), (7, 1, 'b'), (3, 0, 'c')]
+            .map(|(source, offset, character)| (SelectionPoint { source, offset }, character));
+        for glyphs in [[a, b, c], [c, a, b], [b, a, c]] {
+            let mut frame = Frame::new(3, 1, true);
+            for (x, (point, character)) in glyphs.into_iter().enumerate() {
+                frame.write_glyph(
+                    x as i32,
+                    0,
+                    character,
+                    1,
+                    GlyphStyle::default(),
+                    ClipBounds::unbounded(),
+                    point,
+                );
+            }
+            frame.order_selection_units(&HashMap::from([(7, 0), (3, 1)]));
+            let selection = Selection {
+                anchor: b.0,
+                focus: c.0,
+            };
+            assert_eq!(frame.selected_text(&selection).as_deref(), Some("bc"));
+            frame.apply_selection(Some(&selection));
+            for (x, (point, character)) in glyphs.into_iter().enumerate() {
+                assert_eq!(frame.selection_point_for(x as u32, 0), Some(point));
+                assert_eq!(frame.cell(x, 0).unwrap().reversed, character != 'a');
+            }
+        }
+    }
+
+    #[test]
+    fn selection_endpoints_keep_nearest_offset_and_first_tie() {
+        let mut frame = Frame::new(3, 1, true);
+        for (x, (offset, character)) in [(2, 'a'), (4, 'b'), (8, 'c')].into_iter().enumerate() {
+            frame.write_glyph(
+                x as i32,
+                0,
+                character,
+                1,
+                GlyphStyle::default(),
+                ClipBounds::unbounded(),
+                selection_point(offset),
+            );
+        }
+        for (anchor, focus, expected) in [(3, 7, "abc"), (4, 4, "b"), (usize::MAX, 8, "c")] {
+            assert_eq!(
+                frame
+                    .selected_text(&Selection {
+                        anchor: selection_point(anchor),
+                        focus: selection_point(focus),
+                    })
+                    .as_deref(),
+                Some(expected),
+            );
+        }
     }
 
     #[test]
@@ -2323,12 +2484,13 @@ mod tests {
                 1,
                 GlyphStyle::default(),
                 ClipBounds::unbounded(),
+                selection_point(frame.selection_units.len()),
             );
         }
 
         frame.apply_selection(Some(&Selection {
-            anchor: SelectionPoint { order: 1 },
-            focus: SelectionPoint { order: 2 },
+            anchor: selection_point(1),
+            focus: selection_point(2),
         }));
 
         assert!(!frame.cell(0, 0).unwrap().reversed);
@@ -2340,7 +2502,15 @@ mod tests {
     fn diff_writes_only_changed_spans() {
         let previous = Frame::new(4, 2, false);
         let mut next = Frame::new(4, 2, false);
-        next.write_glyph(2, 1, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        next.write_glyph(
+            2,
+            1,
+            'x',
+            1,
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+            selection_point(next.selection_units.len()),
+        );
 
         let mut bytes = Vec::new();
         next.write_diff_to(&mut bytes, Some(&previous), TermProfile::NoColor, false)
@@ -2365,6 +2535,7 @@ mod tests {
             },
             GlyphStyle::default(),
             ClipBounds::unbounded(),
+            selection_point(previous.selection_units.len()),
         );
         let mut next = Frame::new(1, 1, false);
         next.write_grapheme(
@@ -2377,6 +2548,7 @@ mod tests {
             },
             GlyphStyle::default(),
             ClipBounds::unbounded(),
+            selection_point(next.selection_units.len()),
         );
 
         let mut bytes = Vec::new();
@@ -2392,7 +2564,15 @@ mod tests {
     fn changing_an_emoji_repaints_the_following_border_at_its_column() {
         for (character, suffix) in [('👍', "\u{1f3fd}"), ('👩', "\u{200d}\u{1f4bb}")] {
             let mut previous = Frame::new(6, 1, false);
-            previous.write_glyph(0, 0, '│', 1, GlyphStyle::default(), ClipBounds::unbounded());
+            previous.write_glyph(
+                0,
+                0,
+                '│',
+                1,
+                GlyphStyle::default(),
+                ClipBounds::unbounded(),
+                selection_point(previous.selection_units.len()),
+            );
             previous.write_glyph(
                 1,
                 0,
@@ -2400,9 +2580,26 @@ mod tests {
                 2,
                 GlyphStyle::default(),
                 ClipBounds::unbounded(),
+                selection_point(previous.selection_units.len()),
             );
-            previous.write_glyph(3, 0, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
-            previous.write_glyph(4, 0, '│', 1, GlyphStyle::default(), ClipBounds::unbounded());
+            previous.write_glyph(
+                3,
+                0,
+                'x',
+                1,
+                GlyphStyle::default(),
+                ClipBounds::unbounded(),
+                selection_point(previous.selection_units.len()),
+            );
+            previous.write_glyph(
+                4,
+                0,
+                '│',
+                1,
+                GlyphStyle::default(),
+                ClipBounds::unbounded(),
+                selection_point(previous.selection_units.len()),
+            );
             let mut next = previous.clone();
             next.write_grapheme(
                 1,
@@ -2414,6 +2611,7 @@ mod tests {
                 },
                 GlyphStyle::default(),
                 ClipBounds::unbounded(),
+                selection_point(next.selection_units.len()),
             );
             let mut bytes = Vec::new();
             next.write_diff_to(&mut bytes, Some(&previous), TermProfile::NoColor, false)
@@ -2438,11 +2636,28 @@ mod tests {
             2,
             GlyphStyle::default(),
             ClipBounds::unbounded(),
+            selection_point(previous.selection_units.len()),
         );
-        previous.write_glyph(2, 0, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        previous.write_glyph(
+            2,
+            0,
+            'x',
+            1,
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+            selection_point(previous.selection_units.len()),
+        );
         let mut next = previous.clone();
         next.cells[1].background = Background::Red;
-        next.write_glyph(2, 0, 'y', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        next.write_glyph(
+            2,
+            0,
+            'y',
+            1,
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+            selection_point(next.selection_units.len()),
+        );
         let mut bytes = Vec::new();
         next.write_diff_to(&mut bytes, Some(&previous), TermProfile::NoColor, false)
             .unwrap();
@@ -2467,8 +2682,17 @@ mod tests {
                 ..Default::default()
             },
             ClipBounds::unbounded(),
+            selection_point(frame.selection_units.len()),
         );
-        frame.write_glyph(1, 0, 'b', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        frame.write_glyph(
+            1,
+            0,
+            'b',
+            1,
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+            selection_point(frame.selection_units.len()),
+        );
 
         let mut bytes = Vec::new();
         frame
@@ -2484,7 +2708,15 @@ mod tests {
     #[test]
     fn diff_writes_cells_when_only_text_attributes_change() {
         let mut previous = Frame::new(1, 1, false);
-        previous.write_glyph(0, 0, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        previous.write_glyph(
+            0,
+            0,
+            'x',
+            1,
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+            selection_point(previous.selection_units.len()),
+        );
         let mut next = Frame::new(1, 1, false);
         next.write_glyph(
             0,
@@ -2496,6 +2728,7 @@ mod tests {
                 ..Default::default()
             },
             ClipBounds::unbounded(),
+            selection_point(next.selection_units.len()),
         );
 
         let mut bytes = Vec::new();
@@ -2509,7 +2742,15 @@ mod tests {
     #[test]
     fn terminal_frame_writes_disable_autowrap_while_flushing() {
         let mut next = Frame::new(4, 1, false);
-        next.write_glyph(3, 0, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        next.write_glyph(
+            3,
+            0,
+            'x',
+            1,
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+            selection_point(next.selection_units.len()),
+        );
 
         for synchronized in [false, true] {
             let mut bytes = Vec::new();
@@ -2527,7 +2768,15 @@ mod tests {
     #[test]
     fn full_frame_write_skips_trailing_empty_rows() {
         let mut frame = Frame::new(4, 4, false);
-        frame.write_glyph(0, 1, 'x', 1, GlyphStyle::default(), ClipBounds::unbounded());
+        frame.write_glyph(
+            0,
+            1,
+            'x',
+            1,
+            GlyphStyle::default(),
+            ClipBounds::unbounded(),
+            selection_point(frame.selection_units.len()),
+        );
 
         let mut bytes = Vec::new();
         frame

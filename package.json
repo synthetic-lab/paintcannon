@@ -53,6 +53,7 @@
     "demo:powerline:fallback": "npm run demo:powerline:fallback --workspace paintcannon",
     "demo:native-scroll": "npm run demo:native-scroll --workspace paintcannon",
     "demo:scroll": "npm run demo:scroll --workspace paintcannon",
+    "demo:selection-drift": "npm run demo:selection-drift --workspace paintcannon",
     "demo:scroll-percent": "npm run demo:scroll-percent --workspace paintcannon",
     "demo:scroll-percent-static": "npm run demo:scroll-percent-static --workspace paintcannon",
     "demo:span-flex": "npm run demo:span-flex --workspace paintcannon",
