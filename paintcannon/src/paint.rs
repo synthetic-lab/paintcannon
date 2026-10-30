@@ -3,7 +3,9 @@ use std::time::Instant;
 
 use taffy::{tree::Layout, NodeId};
 
-use crate::frame::{ClipBounds, ClipRect, Frame, GlyphStyle, GraphemeGlyph, SelectionPoint};
+use crate::frame::{
+    ClipBounds, ClipRect, Frame, GlyphStyle, GraphemeGlyph, LogicalLine, SelectionPoint,
+};
 use crate::layout::{
     ArenaScrollMetrics, ImageLayoutData, InlineFragmentKind, InputLayoutData, LayoutArena,
     LayoutNodeKind, TextAreaLayoutData,
@@ -769,9 +771,6 @@ impl<'a, 'out> Painter<'a, 'out> {
             .collect::<String>();
         let mut col = 0;
         for (offset, grapheme) in text_graphemes(&normalized).enumerate() {
-            if grapheme.width == 0 {
-                continue;
-            }
             let (character, suffix) = grapheme_parts(grapheme.text);
             self.output.frame.write_grapheme(
                 x + col,
@@ -787,6 +786,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                     source: self.arena.selection_source(id),
                     offset,
                 },
+                None,
             );
             col += grapheme.width as i32;
         }
@@ -822,6 +822,7 @@ impl<'a, 'out> Painter<'a, 'out> {
                     character,
                     suffix,
                     grapheme_offset,
+                    logical_line,
                 } => {
                     let fragment_state = self.inline_fragment_state(id, fragment.node, state);
                     if !fragment_state.visible {
@@ -849,6 +850,10 @@ impl<'a, 'out> Painter<'a, 'out> {
                             source: self.arena.selection_source(fragment.node),
                             offset: *grapheme_offset,
                         },
+                        Some(LogicalLine {
+                            text_flow_id: self.arena.selection_source(id),
+                            index: *logical_line,
+                        }),
                     );
                 }
                 InlineFragmentKind::Replaced => {
@@ -1273,6 +1278,7 @@ fn paint_input(
             },
             clip,
             SelectionPoint { source, offset },
+            None,
         );
     }
     if let Some(cursor_col) = cursor_col {
@@ -1366,6 +1372,10 @@ fn paint_textarea(
                 source,
                 offset: glyph.grapheme_offset,
             },
+            Some(LogicalLine {
+                text_flow_id: source,
+                index: glyph.logical_line,
+            }),
         );
     }
     if let Some((row, col)) = cursor_position.filter(|_| show_cursor) {
@@ -1378,19 +1388,26 @@ fn paint_textarea(
             if !layout
                 .glyphs
                 .iter()
-                .any(|glyph| glyph.row == row && glyph.col == col)
+                .any(|glyph| glyph.width > 0 && glyph.row == row && glyph.col == col)
             {
-                frame.write_glyph(
+                frame.write_grapheme(
                     rect.left + col as i32,
                     rect.top + visible_row as i32,
-                    ' ',
-                    1,
+                    GraphemeGlyph {
+                        character: ' ',
+                        suffix: None,
+                        width: 1,
+                    },
                     glyph_style,
                     clip,
                     SelectionPoint {
                         source,
                         offset: layout.grapheme_count,
                     },
+                    Some(LogicalLine {
+                        text_flow_id: source,
+                        index: layout.end_logical_line,
+                    }),
                 );
             }
             frame.set_reversed(
@@ -1571,6 +1588,7 @@ mod tests {
     use super::*;
     use taffy::{AvailableSpace, Size};
 
+    use crate::frame::Selection;
     use crate::style::{
         BorderStyle, CssDimension, CssFontStyle, CssFontWeight, CssLengthPercentage,
         CssLengthPercentageAuto, CssPosition, CssTextDecorationLine, CssVisibility, CssZIndex,
@@ -4627,6 +4645,92 @@ mod tests {
         assert_eq!(output.frame.cell(4, 0).unwrap().character, 'o');
         assert_eq!(output.frame.cell(0, 1).unwrap().character, 'w');
         assert!(output.frame.cell(0, 1).unwrap().reversed);
+    }
+
+    #[test]
+    fn selection_preserves_wrapped_text_and_code_newlines() {
+        for parts in [
+            vec!["hello ", "world  ", "again"],
+            vec!["hello\u{200b}", "world\u{2060}", "again"],
+            vec![
+                "function ",
+                "example() {\n",
+                "  return \"👩‍💻 hello world\";\n\n",
+                "}",
+            ],
+        ] {
+            for width in [5, 12] {
+                let mut arena = LayoutArena::new();
+                let root = arena.create_element(DivStyle {
+                    width: CssDimension::Length(width as f32),
+                    white_space: CssWhiteSpace::PreWrap,
+                    overflow_wrap: crate::style::CssOverflowWrap::Anywhere,
+                    ..DivStyle::default()
+                });
+                for part in &parts {
+                    let span = arena.create_element(DivStyle {
+                        display: LayoutDisplay::Inline,
+                        color: Background::Cyan,
+                        ..DivStyle::default()
+                    });
+                    let text = arena.create_text(*part);
+                    arena.append_child(span, text);
+                    arena.append_child(root, span);
+                }
+                arena.compute_layout(
+                    root,
+                    Size {
+                        width: AvailableSpace::Definite(width as f32),
+                        height: AvailableSpace::MaxContent,
+                    },
+                );
+                let height = arena.layout(root).size.height as usize;
+                let frame = paint_arena(&arena, root, width, height, true).frame;
+                let selection = Selection {
+                    anchor: frame.selection_point_for(0, 0).unwrap(),
+                    focus: frame
+                        .selection_point_for(width as u32 - 1, height as u32 - 1)
+                        .unwrap(),
+                };
+                assert_eq!(frame.selected_text(&selection), Some(parts.concat()));
+            }
+        }
+    }
+
+    #[test]
+    fn selection_preserves_textarea_newlines_without_copying_visual_wraps() {
+        for text in [
+            "hello world again",
+            "abcdefghij",
+            "a\n\n  b\n",
+            "hello\u{200b}world\u{2060}again",
+        ] {
+            for width in [5, 8] {
+                let mut arena = LayoutArena::new();
+                let textarea = arena.create_textarea(
+                    block_style(CssDimension::Length(width as f32), CssDimension::Auto),
+                    text,
+                );
+                arena.set_textarea_value(textarea, text, text.chars().count() as u32);
+                arena.set_textarea_focused(textarea, true);
+                arena.compute_layout(
+                    textarea,
+                    Size {
+                        width: AvailableSpace::Definite(width as f32),
+                        height: AvailableSpace::MaxContent,
+                    },
+                );
+                let height = arena.layout(textarea).size.height as usize;
+                let frame = paint_arena(&arena, textarea, width, height, true).frame;
+                let selection = Selection {
+                    anchor: frame.selection_point_for(0, 0).unwrap(),
+                    focus: frame
+                        .selection_point_for(width as u32 - 1, height as u32 - 1)
+                        .unwrap(),
+                };
+                assert_eq!(frame.selected_text(&selection).as_deref(), Some(text));
+            }
+        }
     }
 
     #[test]
