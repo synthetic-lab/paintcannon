@@ -73,6 +73,13 @@ struct SelectionUnit {
     row: i32,
     character: char,
     suffix: Option<Box<GraphemeSuffix>>,
+    logical_line: Option<LogicalLine>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LogicalLine {
+    pub(crate) text_flow_id: usize,
+    pub(crate) index: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -360,6 +367,7 @@ impl Frame {
             style,
             clip,
             point,
+            None,
         );
     }
 
@@ -371,18 +379,16 @@ impl Frame {
         style: GlyphStyle,
         clip: ClipBounds,
         point: SelectionPoint,
+        logical_line: Option<LogicalLine>,
     ) {
-        if glyph.width == 0 {
-            return;
-        }
-
         let visible = self.cell_index(x, y).is_some() && clip.contains(x, y);
         if !visible && !self.capture_hidden_selection_units {
             return;
         }
 
-        let selection_order = self.push_selection_unit(point, y, glyph.character, glyph.suffix);
-        if !visible {
+        let selection_order =
+            self.push_selection_unit(point, y, glyph.character, glyph.suffix, logical_line);
+        if !visible || glyph.width == 0 {
             return;
         }
 
@@ -643,27 +649,36 @@ impl Frame {
     pub(crate) fn selected_text(&self, selection: &Selection) -> Option<String> {
         let range = self.selection_range(selection)?;
         let mut lines = Vec::new();
-        let mut current_row = None;
+        let mut previous_unit: Option<&SelectionUnit> = None;
         let mut current_line = String::new();
 
         for unit in &self.selection_units[range] {
-            match current_row {
-                Some(row) if row == unit.row => {}
-                Some(_) => {
+            if let Some(previous) = previous_unit {
+                let line_breaks = match (previous.logical_line, unit.logical_line) {
+                    (Some(previous), Some(current))
+                        if previous.text_flow_id == current.text_flow_id =>
+                    {
+                        current.index.saturating_sub(previous.index)
+                    }
+                    _ => u32::from(previous.row != unit.row),
+                };
+                if line_breaks > 0 {
                     lines.push(current_line.trim_end().to_string());
                     current_line.clear();
-                    current_row = Some(unit.row);
+                    for _ in 1..line_breaks {
+                        lines.push(String::new());
+                    }
                 }
-                None => current_row = Some(unit.row),
             }
 
             current_line.push(unit.character);
             if let Some(suffix) = &unit.suffix {
                 current_line.push_str(suffix.as_str());
             }
+            previous_unit = Some(unit);
         }
 
-        if current_row.is_some() {
+        if previous_unit.is_some() {
             lines.push(current_line.trim_end().to_string());
         }
 
@@ -1004,6 +1019,7 @@ impl Frame {
         row: i32,
         character: char,
         suffix: Option<&str>,
+        logical_line: Option<LogicalLine>,
     ) -> usize {
         let order = self.selection_units.len();
         self.selection_units.push(SelectionUnit {
@@ -1011,6 +1027,7 @@ impl Frame {
             row,
             character,
             suffix: suffix.map(|suffix| Box::new(GraphemeSuffix::new(suffix))),
+            logical_line,
         });
         order
     }
@@ -2219,6 +2236,7 @@ mod tests {
             style,
             ClipBounds::unbounded(),
             selection_point(frame.selection_units.len()),
+            None,
         );
         frame.write_glyph(
             0,
@@ -2330,6 +2348,7 @@ mod tests {
             GlyphStyle::default(),
             ClipBounds::unbounded(),
             selection_point(frame.selection_units.len()),
+            None,
         );
         let selection = Selection {
             anchor: selection_point(0),
@@ -2358,6 +2377,7 @@ mod tests {
                     GlyphStyle::default(),
                     ClipBounds::unbounded(),
                     selection_point(frame.selection_units.len()),
+                    None,
                 );
                 let mut bytes = Vec::new();
                 frame
@@ -2536,6 +2556,7 @@ mod tests {
             GlyphStyle::default(),
             ClipBounds::unbounded(),
             selection_point(previous.selection_units.len()),
+            None,
         );
         let mut next = Frame::new(1, 1, false);
         next.write_grapheme(
@@ -2549,6 +2570,7 @@ mod tests {
             GlyphStyle::default(),
             ClipBounds::unbounded(),
             selection_point(next.selection_units.len()),
+            None,
         );
 
         let mut bytes = Vec::new();
@@ -2612,6 +2634,7 @@ mod tests {
                 GlyphStyle::default(),
                 ClipBounds::unbounded(),
                 selection_point(next.selection_units.len()),
+                None,
             );
             let mut bytes = Vec::new();
             next.write_diff_to(&mut bytes, Some(&previous), TermProfile::NoColor, false)

@@ -1168,7 +1168,7 @@ fn selection_copies_focused_text_control_graphemes_once() {
             selection_background: Some(Background::Magenta),
             ..DivStyle::default()
         };
-        let value = "ab👩‍💻cd";
+        let value = "ab\u{200b}👩‍💻\u{2060}cd";
         let control = if multiline {
             engine.create_textarea(style, value)
         } else {

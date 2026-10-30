@@ -330,6 +330,7 @@ pub(crate) enum InlineFragmentKind {
         character: char,
         suffix: Option<Box<GraphemeSuffix>>,
         grapheme_offset: usize,
+        logical_line: u32,
     },
     Replaced,
 }
@@ -3115,6 +3116,7 @@ impl LayoutArena {
         let mut cursor = InlineLayoutCursor {
             col: 0,
             row: 0,
+            logical_line: 0,
             width: width.max(1),
             max_col: 0,
             previous_character: None,
@@ -3456,6 +3458,7 @@ struct InlineMeasureCursor {
 struct InlineLayoutCursor {
     col: u32,
     row: u32,
+    logical_line: u32,
     width: u32,
     max_col: u32,
     previous_character: Option<char>,
@@ -4083,6 +4086,7 @@ fn text_content_widths(text: &str, config: TextWrapConfig) -> ContentWidths {
 struct InlineTextFlow {
     col: u32,
     row: u32,
+    logical_line: u32,
     width: u32,
     max_col: u32,
     previous_character: Option<char>,
@@ -4092,11 +4096,12 @@ fn measure_inline_text(text: &str, config: TextWrapConfig, cursor: &mut InlineMe
     let mut flow = InlineTextFlow {
         col: cursor.col,
         row: cursor.row,
+        logical_line: 0,
         width: cursor.width,
         max_col: cursor.max_col,
         previous_character: cursor.previous_character,
     };
-    flow_inline_text(text, config, &mut flow, |_, _, _, _, _| {});
+    flow_inline_text(text, config, &mut flow, |_, _, _, _| {});
     cursor.col = flow.col;
     cursor.row = flow.row;
     cursor.max_col = flow.max_col;
@@ -4113,6 +4118,7 @@ fn layout_inline_text(
     let mut flow = InlineTextFlow {
         col: cursor.col,
         row: cursor.row,
+        logical_line: cursor.logical_line,
         width: cursor.width,
         max_col: cursor.max_col,
         previous_character: cursor.previous_character,
@@ -4121,27 +4127,27 @@ fn layout_inline_text(
         text,
         config,
         &mut flow,
-        |grapheme, grapheme_offset, x, y, width| {
-            if width > 0 {
-                let (character, suffix) = grapheme_parts(grapheme);
-                cursor.fragments.push(InlineFragment {
-                    node,
-                    hit_node: hit_target,
-                    kind: InlineFragmentKind::Text {
-                        character,
-                        suffix,
-                        grapheme_offset,
-                    },
-                    x,
-                    y,
-                    width,
-                    height: 1,
-                });
-            }
+        |grapheme, grapheme_offset, flow, width| {
+            let (character, suffix) = grapheme_parts(grapheme);
+            cursor.fragments.push(InlineFragment {
+                node,
+                hit_node: hit_target,
+                kind: InlineFragmentKind::Text {
+                    character,
+                    suffix,
+                    grapheme_offset,
+                    logical_line: flow.logical_line,
+                },
+                x: flow.col,
+                y: flow.row,
+                width,
+                height: 1,
+            });
         },
     );
     cursor.col = flow.col;
     cursor.row = flow.row;
+    cursor.logical_line = flow.logical_line;
     cursor.max_col = flow.max_col;
     cursor.previous_character = flow.previous_character;
 }
@@ -4150,7 +4156,7 @@ fn flow_inline_text(
     text: &str,
     config: TextWrapConfig,
     cursor: &mut InlineTextFlow,
-    mut emit: impl FnMut(&str, usize, u32, u32, u32),
+    mut emit: impl FnMut(&str, usize, InlineTextFlow, u32),
 ) {
     let chars = parse_text_for_white_space(text, config.white_space);
     let normalized = chars.iter().collect::<String>();
@@ -4173,6 +4179,7 @@ fn flow_inline_text(
             .expect("graphemes are non-empty");
         if character == '\n' && preserve_newlines {
             inline_text_new_line(cursor);
+            cursor.logical_line += 1;
             cursor.previous_character = Some(character);
             continue;
         }
@@ -4200,17 +4207,12 @@ fn flow_inline_text(
         {
             inline_text_new_line(cursor);
             if character == ' ' {
+                emit(grapheme.text, grapheme_offset, *cursor, 0);
                 continue;
             }
         }
 
-        emit(
-            grapheme.text,
-            grapheme_offset,
-            cursor.col,
-            cursor.row,
-            width,
-        );
+        emit(grapheme.text, grapheme_offset, *cursor, width);
         cursor.col += width;
         cursor.max_col = cursor.max_col.max(cursor.col);
         cursor.previous_character = grapheme.text.chars().last();
@@ -6603,7 +6605,8 @@ mod tests {
             InlineFragmentKind::Text {
                 character: 'h',
                 suffix: None,
-                grapheme_offset: 0
+                grapheme_offset: 0,
+                ..
             }
         ));
     }
