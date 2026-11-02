@@ -16,6 +16,7 @@ mod paint;
 mod paintcannon_layer;
 mod selection;
 mod style;
+mod subprocess;
 mod terminal;
 mod text;
 mod text_wrap;
