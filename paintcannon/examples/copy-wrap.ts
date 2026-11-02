@@ -14,13 +14,13 @@ function main(): void {
   root.style.width = "100%";
   root.style.height = "100%";
   root.style.overflowY = "scroll";
-  root.style.whiteSpace = "pre-wrap";
   root.style.overflowWrap = "anywhere";
   root.style.color = "#e5e7eb";
 
   function addLine(text: string, color: string): TextNode {
     const row = pc.createElement("div");
     row.style.flexShrink = 0;
+    row.style.whiteSpace = "pre-wrap";
     row.style.color = color;
     const node = pc.createTextNode(text);
     row.appendChild(node);
@@ -29,7 +29,7 @@ function main(): void {
   }
 
   addLine("Copy wrapped text", "#93c5fd");
-  addLine("Drag across the sample, release to copy, then paste into this demo.", "#e5e7eb");
+  addLine("Drag across any sample, release to copy, then paste into this demo.", "#e5e7eb");
   addLine("r: plain text   c: blockquote   t: textarea", "#94a3b8");
   addLine("p: paragraph   b: real line breaks   u: unbroken text   k: code", "#94a3b8");
   addLine("n: narrow   w: wide   f: full width   q / Esc / Ctrl-C: quit", "#94a3b8");
@@ -46,6 +46,7 @@ function main(): void {
   sample.style.paddingLeft = 2;
   sample.style.width = 40;
   sample.style.maxWidth = "100%";
+  sample.style.whiteSpace = "pre-wrap";
   const marker = pc.createElement("span");
   marker.style.flexShrink = 0;
   marker.style.color = "gray";
@@ -61,6 +62,25 @@ function main(): void {
   sample.appendChild(marker);
   sample.appendChild(content);
   root.appendChild(sample);
+
+  const whiteSpaceSampleText =
+    "These words\ncome from separate source lines.\n\nThis sentence has   extra spaces and is long enough to wrap in a narrow view.";
+  addLine("Default whiteSpace: source newlines and extra spaces copy as single spaces.", "#93c5fd");
+  const defaultWhiteSpaceSample = pc.createElement("div");
+  defaultWhiteSpaceSample.style.flexShrink = 0;
+  defaultWhiteSpaceSample.style.width = 40;
+  defaultWhiteSpaceSample.style.maxWidth = "100%";
+  defaultWhiteSpaceSample.appendChild(pc.createTextNode(whiteSpaceSampleText));
+  root.appendChild(defaultWhiteSpaceSample);
+
+  addLine("pre-wrap: source newlines, blank lines, and extra spaces survive copying.", "#93c5fd");
+  const preWrapSample = pc.createElement("div");
+  preWrapSample.style.flexShrink = 0;
+  preWrapSample.style.width = 40;
+  preWrapSample.style.maxWidth = "100%";
+  preWrapSample.style.whiteSpace = "pre-wrap";
+  preWrapSample.appendChild(pc.createTextNode(whiteSpaceSampleText));
+  root.appendChild(preWrapSample);
 
   addLine("Escaped output below shows actual newlines as \\n.", "#94a3b8");
   const copied = addLine("Last copy: (select some sample text)", "#86efac");

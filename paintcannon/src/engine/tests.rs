@@ -1199,6 +1199,46 @@ fn selection_copies_focused_text_control_graphemes_once() {
 }
 
 #[test]
+fn selection_collapses_newlines_with_default_white_space() {
+    for parts in [
+        &["hello\n \tworld\r\n\r\nagain"][..],
+        &["hello\n \t", "world\r\n\r\n", "again"][..],
+    ] {
+        for (width, height) in [(5, 3), (40, 1)] {
+            let mut engine = PaintEngine::new();
+            let root = engine.create_element(block_style(
+                CssDimension::Length(width as f32),
+                CssDimension::Auto,
+            ));
+            for part in parts {
+                let span = engine.create_element(DivStyle {
+                    display: LayoutDisplay::Inline,
+                    ..DivStyle::default()
+                });
+                let text = engine.create_text(*part);
+                engine.append_child(span, text);
+                engine.append_child(root, span);
+            }
+            engine.set_root(root);
+            engine.render_frame(width, height).unwrap();
+            let focus = (width as u32 - 1, height as u32 - 1);
+            drag_selection(&mut engine, (0, 0), focus);
+
+            assert_eq!(
+                engine.handle_selection_event(SelectionMouseEvent {
+                    event_type: SelectionMouseEventType::Up,
+                    x: focus.0,
+                    y: focus.1,
+                    button: 0,
+                }),
+                SelectionAction::CopyToClipboard("hello world again".to_string()),
+                "width={width}, parts={parts:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn selection_keeps_grapheme_offsets_when_wrapping_omits_a_space() {
     let mut engine = PaintEngine::new();
     let root = engine.create_element(DivStyle {
