@@ -1323,6 +1323,101 @@ describe("IntersectionObserver", () => {
     paintCannon.stop();
   });
 
+  it.each([false, true])(
+    "releases disconnected observer registrations (explicit root: %s)",
+    explicitRoot => {
+      const { paintCannon, mockNative, root, child } = createPaintTree();
+      try {
+        for (let index = 0; index < 3; index += 1) {
+          const observer = new IntersectionObserver(vi.fn(), {
+            root: explicitRoot ? root : null,
+          });
+          observer.observe(child);
+          // Check the retaining reference directly, without depending on GC timing.
+          expect(paintCannon["intersectionObservers"].get(index + 1)).toBe(observer);
+          observer.disconnect();
+          expect(paintCannon["intersectionObservers"].size).toBe(0);
+          observer.disconnect();
+        }
+        expect(mockNative.disconnectedIntersectionObservers).toEqual([1, 2, 3]);
+      } finally {
+        paintCannon.stop();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "can observe again after disconnect without delivering old entries (explicit root: %s)",
+    async explicitRoot => {
+      const { paintCannon, mockNative, root, child } = createPaintTree();
+      const callback = vi.fn();
+      const observer = new IntersectionObserver(callback, {
+        root: explicitRoot ? root : null,
+        rootMargin: "1px 25%",
+        threshold: [0, 0.5, 1],
+      });
+      try {
+        observer.observe(child);
+        mockNative.events.push(intersectionEvent(1, child.id, 0.5));
+        notifyNativeEvents(paintCannon);
+        observer.disconnect();
+        expect(observer.takeRecords()).toEqual([]);
+        observer.observe(child);
+
+        // An old native entry can still be queued when observation restarts.
+        mockNative.events.push(
+          intersectionEvent(1, child.id, 0.75),
+          intersectionEvent(2, child.id, 1),
+        );
+        notifyNativeEvents(paintCannon);
+        await Promise.resolve();
+
+        expect(callback).toHaveBeenCalledExactlyOnceWith(
+          [expect.objectContaining({ target: child, intersectionRatio: 1 })],
+          observer,
+        );
+        expect(mockNative.intersectionObservations).toEqual(
+          [1, 2].map(observerId => ({
+            observerId,
+            targetId: child.id,
+            rootId: explicitRoot ? root.id : undefined,
+            rootMargin: ["1px", "25%", "1px", "25%"],
+            thresholds: [0, 0.5, 1],
+          })),
+        );
+      } finally {
+        paintCannon.stop();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "cleans up pending transaction observations on disconnect (reobserve: %s)",
+    reobserve => {
+      const { paintCannon, mockNative, root } = createPaintTree();
+      const observer = new IntersectionObserver(vi.fn(), { root });
+      try {
+        paintCannon.transaction(() => {
+          const target = paintCannon.createElement("div");
+          root.appendChild(target);
+          observer.observe(target);
+          expect(paintCannon["pendingIntersectionTargets"].has(observer)).toBe(true);
+          observer.disconnect();
+          expect(paintCannon["pendingIntersectionTargets"].size).toBe(0);
+          expect(paintCannon["intersectionObservers"].size).toBe(0);
+          if (reobserve) observer.observe(target);
+        });
+
+        expect(mockNative.intersectionObservations).toEqual(
+          reobserve ? [expect.objectContaining({ observerId: 2, rootId: root.id })] : [],
+        );
+        expect(mockNative.disconnectedIntersectionObservers).toEqual([1]);
+      } finally {
+        paintCannon.stop();
+      }
+    },
+  );
+
   it("observes elements created inside a transaction after native ids are assigned", () => {
     const paintCannon = new PaintCannon();
     const observer = new IntersectionObserver(() => {});

@@ -596,6 +596,7 @@ export class IntersectionObserver {
     this.records.length = 0;
     if (this.ownerDocument !== undefined && this.observerId !== undefined) {
       this.ownerDocument[disconnectNativeIntersectionObserver](this.observerId);
+      this.observerId = undefined;
     }
   }
 
@@ -656,9 +657,9 @@ export class IntersectionObserver {
         "an IntersectionObserver cannot observe elements from different PaintCannons",
       );
     }
-    if (this.ownerDocument === undefined) {
-      this.ownerDocument = ownerDocument;
+    if (this.observerId === undefined) {
       this.observerId = ownerDocument[registerIntersectionObserver](this);
+      this.ownerDocument = ownerDocument;
     }
   }
 }
@@ -1039,6 +1040,7 @@ export class PaintCannon {
     if (observer !== undefined) {
       this.pendingIntersectionTargets.delete(observer);
     }
+    this.intersectionObservers.delete(observerId);
     this.binding.disconnectIntersectionObserver(observerId);
   }
 
