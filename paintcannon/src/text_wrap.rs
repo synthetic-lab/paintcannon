@@ -9,6 +9,7 @@ use crate::text::{
 pub(crate) struct WrappedText {
     pub(crate) glyphs: Vec<TextGlyph>,
     pub(crate) grapheme_count: usize,
+    pub(crate) end_logical_line: u32,
     cursor_positions: Vec<(usize, usize)>,
     visual_line_ranges: Vec<Range<usize>>,
     end_position: (usize, usize),
@@ -20,6 +21,7 @@ pub(crate) struct TextGlyph {
     pub(crate) character: char,
     pub(crate) suffix: Option<Box<GraphemeSuffix>>,
     pub(crate) row: usize,
+    pub(crate) logical_line: u32,
     pub(crate) col: usize,
     pub(crate) width: usize,
 }
@@ -34,6 +36,7 @@ impl WrappedText {
         let mut glyphs = Vec::new();
         let mut parsed_cursor_positions = vec![(0, 0); chars.len() + 1];
         let mut row = 0;
+        let mut logical_line = 0;
         let mut col = 0;
         let mut grapheme_count = 0;
 
@@ -53,6 +56,7 @@ impl WrappedText {
                     normalize_cursor_position(row, col, wrap_width),
                 );
                 row += 1;
+                logical_line += 1;
                 col = 0;
                 continue;
             }
@@ -64,18 +68,12 @@ impl WrappedText {
                     col = 0;
                 }
             }
-            let width = grapheme.width;
+            let mut width = grapheme.width;
             if col > 0 && width > 0 && col + width > wrap_width {
                 row += 1;
                 col = 0;
-                if character == ' ' || character == '\t' {
-                    set_cursor_positions(
-                        &mut parsed_cursor_positions,
-                        grapheme.character_start,
-                        grapheme.character_end,
-                        (row, col),
-                    );
-                    continue;
+                if character == ' ' {
+                    width = 0;
                 }
             }
             set_cursor_positions(
@@ -84,17 +82,16 @@ impl WrappedText {
                 grapheme.character_end,
                 normalize_cursor_position(row, col, wrap_width),
             );
-            if width > 0 {
-                let (character, suffix) = grapheme_parts(grapheme.text);
-                glyphs.push(TextGlyph {
-                    grapheme_offset,
-                    character,
-                    suffix,
-                    row,
-                    col,
-                    width,
-                });
-            }
+            let (character, suffix) = grapheme_parts(grapheme.text);
+            glyphs.push(TextGlyph {
+                grapheme_offset,
+                character,
+                suffix,
+                row,
+                logical_line,
+                col,
+                width,
+            });
             col += width;
         }
         let end_position = normalize_cursor_position(row, col, wrap_width);
@@ -115,6 +112,7 @@ impl WrappedText {
         Self {
             glyphs,
             grapheme_count,
+            end_logical_line: logical_line,
             cursor_positions,
             visual_line_ranges,
             end_position,
