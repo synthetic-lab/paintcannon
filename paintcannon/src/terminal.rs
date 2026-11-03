@@ -1,9 +1,10 @@
 use std::env;
 use std::io::{self, IsTerminal, Write};
-use std::process::{Command, Output, Stdio};
+use std::process::Command;
+#[cfg(target_os = "macos")]
+use std::process::Stdio;
 use std::sync::OnceLock;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(any(target_os = "macos", test))]
 use std::ffi::OsStr;
@@ -13,8 +14,10 @@ use std::os::fd::AsRawFd;
 
 use napi_derive::napi;
 use terminal_colorsaurus::{color_palette, Color, QueryOptions};
+use termprofile::{DetectorSettings, EnvVarSource, TermProfile, TermVars};
 
 use crate::style::Background;
+use crate::subprocess::command_output_with_timeout;
 
 #[napi(object)]
 #[derive(Clone, Copy)]
@@ -221,29 +224,34 @@ fn allow_tmux_passthrough() -> bool {
     })
 }
 
-fn command_output_with_timeout(
-    mut command: Command,
-    timeout: Duration,
-) -> io::Result<Option<Output>> {
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let start = Instant::now();
-
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output().map(Some);
+pub(crate) fn query_terminal_profile() -> TermProfile {
+    // termprofile 0.2.4/0.2.5 wait before draining `tmux info`, deadlocking
+    // when its output fills a pipe. Keep all other detection (including terminfo)
+    // intact, but supply this query ourselves with bounded, concurrently drained I/O.
+    let mut vars = TermVars::from_env(
+        &io::stdout(),
+        DetectorSettings::default().enable_tmux_info(false),
+    );
+    if is_tmux_environment(&termprofile::Env) {
+        let mut command = Command::new("tmux");
+        command.arg("info");
+        if let Ok(Some(output)) = command_output_with_timeout(command, Duration::from_millis(300)) {
+            vars.tmux.tmux_info = String::from_utf8(output.stdout).unwrap_or_default();
         }
-
-        if start.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Ok(None);
-        }
-
-        thread::sleep(Duration::from_millis(10));
     }
+    TermProfile::detect_with_vars(vars)
+}
+
+fn is_tmux_environment(source: &impl EnvVarSource) -> bool {
+    // Match termprofile's tmux signals, including TERM-only sessions over SSH.
+    source
+        .var("TMUX")
+        .is_some_and(|value| !value.trim_ascii().is_empty())
+        || ["TERM", "TERM_PROGRAM"].iter().any(|name| {
+            source.var(name).is_some_and(|value| {
+                value.trim_ascii().to_lowercase().split(['-', '.']).next() == Some("tmux")
+            })
+        })
 }
 
 fn inside_tmux() -> bool {
@@ -351,10 +359,28 @@ fn query_terminal_size_from<T>(_stream: T) -> Option<TerminalSize> {
 mod tests {
     use super::{
         copy_text_to_clipboard, encode_tmux_passthrough, is_local_apple_terminal,
-        parse_tmux_pane_active, terminal_color_to_background, write_terminal_reset, Background,
-        Color,
+        is_tmux_environment, parse_tmux_pane_active, terminal_color_to_background,
+        write_terminal_reset, Background, Color,
     };
     use std::ffi::OsStr;
+
+    #[test]
+    fn is_tmux_environment_matches_termprofile_environment_signals() {
+        for (name, value, expected) in [
+            ("TMUX", "/tmp/tmux-1000/default,123,0", true),
+            ("TMUX", "  ", false),
+            ("TERM", "tmux-256color", true),
+            ("TERM", " TMUX.3 ", true),
+            ("TERM_PROGRAM", "tmux", true),
+            ("TERM", "xterm-256color", false),
+            ("TERM", "screen-256color", false),
+            ("TERM_PROGRAM", "not-tmux", false),
+            ("TERM_PROGRAM", "tmuxish", false),
+        ] {
+            let source = std::collections::HashMap::from([(name, value)]);
+            assert_eq!(is_tmux_environment(&source), expected, "{name}={value}");
+        }
+    }
 
     #[test]
     fn terminal_colors_are_scaled_to_eight_bit_rgb() {

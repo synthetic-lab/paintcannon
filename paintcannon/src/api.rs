@@ -11,7 +11,6 @@ use crossbeam_channel::{bounded, Sender};
 use napi::bindgen_prelude::Function;
 use napi::{Error, Result};
 use napi_derive::napi;
-use termprofile::{DetectorSettings, TermProfile};
 
 use crate::engine::{
     apply_style_mutation, engine_loop, ClickEvent as EngineClickEvent, DomId, EngineCommand,
@@ -34,7 +33,10 @@ use crate::style::{
     parse_scrollbar_gutter, parse_text_decoration_line, parse_transition, parse_visibility,
     parse_white_space, parse_word_break, parse_z_index, Background,
 };
-use crate::terminal::{query_terminal_colors, query_terminal_size, reset_terminal, TerminalSize};
+use crate::terminal::{
+    query_terminal_colors, query_terminal_profile, query_terminal_size, reset_terminal,
+    TerminalSize,
+};
 
 const RENDER_QUEUE_CAPACITY: usize = 32 * 1024;
 const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
@@ -167,7 +169,7 @@ impl PaintCannon {
         }
         let (tx, rx) = bounded(RENDER_QUEUE_CAPACITY);
         termprofile::set_color_cache_enabled(true);
-        let color_profile = TermProfile::detect(&io::stdout(), DetectorSettings::default());
+        let color_profile = query_terminal_profile();
         let size = query_terminal_size();
         let (terminal_foreground, terminal_background) = query_terminal_colors();
         let event_notifier = Arc::new(EventNotifier::new(on_events_available)?);
