@@ -232,7 +232,7 @@ pub(crate) fn query_terminal_profile() -> TermProfile {
         &io::stdout(),
         DetectorSettings::default().enable_tmux_info(false),
     );
-    if color_profile_uses_tmux(&termprofile::Env) {
+    if is_tmux_environment(&termprofile::Env) {
         let mut command = Command::new("tmux");
         command.arg("info");
         if let Ok(Some(output)) = command_output_with_timeout(command, Duration::from_millis(300)) {
@@ -242,7 +242,7 @@ pub(crate) fn query_terminal_profile() -> TermProfile {
     TermProfile::detect_with_vars(vars)
 }
 
-fn color_profile_uses_tmux(source: &impl EnvVarSource) -> bool {
+fn is_tmux_environment(source: &impl EnvVarSource) -> bool {
     // Match termprofile's tmux signals, including TERM-only sessions over SSH.
     source
         .var("TMUX")
@@ -358,14 +358,14 @@ fn query_terminal_size_from<T>(_stream: T) -> Option<TerminalSize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        color_profile_uses_tmux, copy_text_to_clipboard, encode_tmux_passthrough,
-        is_local_apple_terminal, parse_tmux_pane_active, terminal_color_to_background,
+        copy_text_to_clipboard, encode_tmux_passthrough, is_local_apple_terminal,
+        is_tmux_environment, parse_tmux_pane_active, terminal_color_to_background,
         write_terminal_reset, Background, Color,
     };
     use std::ffi::OsStr;
 
     #[test]
-    fn color_profile_tmux_query_matches_termprofile_environment_signals() {
+    fn is_tmux_environment_matches_termprofile_environment_signals() {
         for (name, value, expected) in [
             ("TMUX", "/tmp/tmux-1000/default,123,0", true),
             ("TMUX", "  ", false),
@@ -378,7 +378,7 @@ mod tests {
             ("TERM_PROGRAM", "tmuxish", false),
         ] {
             let source = std::collections::HashMap::from([(name, value)]);
-            assert_eq!(color_profile_uses_tmux(&source), expected, "{name}={value}");
+            assert_eq!(is_tmux_environment(&source), expected, "{name}={value}");
         }
     }
 
