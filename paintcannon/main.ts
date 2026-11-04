@@ -2,6 +2,16 @@ import { performance } from "node:perf_hooks";
 import { registry } from "antipattern";
 import { PaintCannon as NativePaintCannonClass } from "#paintcannon-native";
 import { filesFromTerminalPaste, type PaintFileList } from "./terminal-files.ts";
+import { NotificationController, type NotificationConstructor } from "./notifications.ts";
+export { NotificationEvent, NOTIFICATION_EVENT_TYPES } from "./notifications.ts";
+export type {
+  Notification,
+  NotificationConstructor,
+  NotificationOptions,
+  NotificationPermission,
+  NotificationEventType,
+  NotificationEventListener,
+} from "./notifications.ts";
 import type {
   BatchCommand as NativeBatchCommand,
   BatchIdMapping as NativeBatchIdMapping,
@@ -665,6 +675,8 @@ export class IntersectionObserver {
 }
 
 export class PaintCannon {
+  readonly Notification: NotificationConstructor;
+  private readonly notifications: NotificationController;
   private readonly binding: NativePaintCannon;
   private animationFrameIntervalMs: number;
   private stopped = false;
@@ -754,6 +766,8 @@ export class PaintCannon {
       () => this.handleNativeEventNotification(),
     );
     this.captureCtrlZ = options.captureCtrlZ ?? false;
+    this.notifications = new NotificationController(this.binding);
+    this.Notification = this.notifications.Notification;
     this.captureMouse = options.captureMouse ?? false;
     if (alternateScreen) {
       const viewport = this.createDivElement();
@@ -1229,6 +1243,7 @@ export class PaintCannon {
   }
 
   stop(): void {
+    this.notifications.stop();
     if (this.stopped) {
       return;
     }
@@ -1266,6 +1281,7 @@ export class PaintCannon {
   }
 
   releaseForProcessExit(): void {
+    this.notifications.stop();
     if (this.stopped) {
       return;
     }
@@ -1823,6 +1839,12 @@ export class PaintCannon {
     const events: NativeQueuedEvent[] = this.binding.drainEvents();
     for (const nativeEvent of events) {
       switch (nativeEvent.kind) {
+        case "notification": {
+          if (nativeEvent.notification === undefined)
+            throw new Error("native notification event is missing its payload");
+          this.notifications.dispatch(nativeEvent.notification);
+          break;
+        }
         case "keyboard": {
           const input = nativeEvent.keyboard;
           if (input === undefined) throw new Error("native keyboard event is missing its payload");

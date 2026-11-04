@@ -1,5 +1,6 @@
 // NAPI's type generator must see Task implementations before their return types.
 mod glyph_detection;
+mod notifications;
 
 mod api;
 mod engine;
@@ -18,6 +19,7 @@ mod selection;
 mod style;
 mod subprocess;
 mod terminal;
+mod terminal_capabilities;
 mod text;
 mod text_wrap;
 mod transition;

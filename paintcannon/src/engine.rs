@@ -8,7 +8,6 @@ use taffy::{AvailableSpace, NodeId, Size};
 use termprofile::TermProfile;
 
 use crate::frame::Frame;
-use crate::glyph_detection::HyperlinkCapability;
 use crate::image::load_png_image;
 use crate::layout::{
     AbsoluteRect, ArenaScrollAdjustment, ArenaScrollMetrics, ArenaScrollbarHit,
@@ -29,6 +28,7 @@ use crate::style::{
     TransitionSpec,
 };
 use crate::terminal::{query_terminal_size, write_pointer_shape};
+use crate::terminal_capabilities::HyperlinkCapability;
 use crate::transition::{TransitionEvent, TransitionEventType, TransitionState};
 
 mod runtime;

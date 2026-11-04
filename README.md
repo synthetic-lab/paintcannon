@@ -122,6 +122,20 @@ PaintCannon will automatically render `<a>` tags in supported terminals using
 the OSC 8 clickable link standard, and will fall back to Markdown-style
 `[label](url)` rendering in unsupported terminals.
 
+#### Desktop notifications
+
+Paintcannon attempts to detect various OSC standards for terminal
+notifications: it queries for OSC99 support and hardcodes a list of terminals
+with OSC9/OSC777 support, and falling back to local `osascript` on macOS or
+`notify-send` on Linux/Wayland/X11 for non-SSH clients.
+
+Not all clients support _closing_ notifications;
+
+Notifications are behind a standard DOM notification API: query `await
+pc.Notification.supportsClose()` before offering a dismiss button.
+
+Try `npm run demo:notifications` for a demo.
+
 ## React support
 
 We also ship `paintcannon-react`, a React reconciler that sits on top of

@@ -27,6 +27,8 @@
     "dist/main.d.ts",
     "dist/terminal-files.js",
     "dist/terminal-files.d.ts",
+    "dist/notifications.js",
+    "dist/notifications.d.ts",
     "dist/napi/index.js",
     "dist/napi/index.d.ts"
   ],
@@ -41,6 +43,7 @@
     "create-npm-dirs": "napi create-npm-dirs",
     "napi:prepublish": "napi prepublish -t npm --no-gh-release",
     "demo": "npm run build:debug && node dist/examples/basic.js",
+    "demo:notifications": "npm run build:debug && node dist/examples/notifications.js",
     "demo:alt-restart": "npm run build:debug && node dist/examples/alt-screen-restart.js",
     "demo:borders": "npm run build:debug && node dist/examples/borders.js",
     "demo:counter": "npm run build:debug && node dist/examples/counter-button.js",

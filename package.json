@@ -22,6 +22,7 @@
     "format:check": "prettier --check .",
     "prepare": "husky && node scripts/install-husky-reference-transaction.mjs",
     "demo": "npm run demo --workspace paintcannon",
+    "demo:notifications": "npm run demo:notifications --workspace paintcannon",
     "demo:alt-restart": "npm run demo:alt-restart --workspace paintcannon",
     "demo:borders": "npm run demo:borders --workspace paintcannon",
     "demo:counter": "npm run demo:counter --workspace paintcannon",

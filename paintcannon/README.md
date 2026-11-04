@@ -265,6 +265,110 @@ Inside tmux, enable focus reporting in tmux first:
 set -g focus-events on
 ```
 
+## Desktop Notifications
+
+Use the instance-scoped `Notification` constructor, with the same basic shape as
+the browser API:
+
+```ts
+const permission = await pc.Notification.requestPermission(); // No prompt.
+if (permission === "denied") {
+  // No supported terminal protocol or safe local command backend is available.
+}
+
+const notification = new pc.Notification("Build complete", {
+  body: "All tests passed.",
+  tag: "build-status",
+  data: { buildId: 42 },
+});
+
+notification.addEventListener("click", event => {
+  console.log(event.target.data);
+});
+notification.addEventListener("error", event => {
+  console.error(event.error);
+});
+```
+
+PaintCannon is a native application, not a browser permission sandbox.
+`requestPermission()` automatically resolves to `"granted"` if a supported
+terminal protocol or safe local command backend is available, and `"denied"`
+otherwise. It never prompts. `pc.Notification.permission` starts as `"default"`
+and records that result. This checks backend availability, not the OS's privacy
+settings: OS and terminal policy can still suppress notifications. Delivery
+failures are reported through the notification's `error` event.
+
+Options are `body`, `tag`, `data` (structured-cloned), `silent`, and
+`requireInteraction`. They are also readable on the notification, along with
+`title`. Use `addEventListener`/`removeEventListener` or `onshow`, `onclick`,
+`onclose`, and `onerror`. Service workers, actions (`maxActions` is `0`), images,
+and custom notification icons are not supported.
+
+Rust chooses a backend automatically:
+
+- Rust queries OSC 99 support and uses only the features advertised in the reply,
+  including dismissal, body payloads, click/close reports, sound, and expiry.
+  This works for unknown terminals too; a terminal name alone never enables OSC 99.
+  Missing replies fall back to OSC 777 or OSC 9 using the terminal capability table,
+  then to local commands. Legacy support includes kitty, Otty, foot, Ghostty,
+  WezTerm, Rio, hterm, and AbsoluteTelnet 14.03+ (both formats), iTerm2 (OSC 9),
+  and Konsole, Terminology, and Secure ShellFish (OSC 777). Optional plugins,
+  distribution patches, and disabled-by-default handlers are not assumed present.
+- Queries use the existing input reader, not a second stdin consumer. A device
+  attributes heartbeat usually ends an unanswered query quickly; a two-second
+  deadline bounds waiting for an unresponsive terminal. Concurrent callers share
+  results, cached per environment snapshot and refreshed every two seconds.
+  Queries are lazy: idle applications do not continually probe notifications.
+- Inside tmux, the query and heartbeat both use passthrough to reach the outer
+  terminal. With multiple attached clients, OSC 99 is disabled because replies
+  do not identify which client answered. OSC 777/9 must be supported by every
+  attached client. Client changes are included in the shared capability refresh.
+- Otherwise, local macOS sessions use `osascript`; local Linux desktops use
+  `notify-send` over the session D-Bus, on both Wayland and X11. The commands must
+  be available in `PATH`. Calls run off the rendering thread with a bounded timeout.
+- SSH sessions never fall back to notifying the remote server's desktop. The
+  same applies to tmux when any attached client's locality is remote or unknown.
+  No safe backend, missing commands, and failed commands produce an `error` event.
+
+Terminal protocols cannot provide all browser lifecycle guarantees. `show` means
+the request was handed to the backend, not that the OS displayed it. Clicks and
+desktop-dismissal events are available with OSC 99 when the terminal reports
+them; OSC 9/777 and the command fallbacks cannot report those events. Notifications
+do not automatically focus the application when clicked.
+
+Nonempty `tag` values replace the previous notification handle. Replacement of
+the actual desktop banner is supported by OSC 99 and `notify-send`; other backends
+may show another banner. `close()` dismisses notifications when the OSC 99 reply
+advertises the `close` payload, or on Linux command backends when `gdbus` is
+available. Elsewhere it releases the handle without being able to dismiss the
+banner. `silent` and `requireInteraction` are best-effort when advertised by OSC 99
+or on Linux; other backends cannot express them. Stopping PaintCannon releases
+its notification handles and listeners without removing desktop banners.
+
+Use `pc.Notification.supportsClose(): Promise<boolean>` to progressively enable
+dismiss buttons independently of permission to send notifications:
+
+```ts
+closeButton.style.display = (await pc.Notification.supportsClose()) ? "flex" : "none";
+closeButton.addEventListener("click", () => notification.close());
+```
+
+This queries the currently selected backend; it returns `false` after `pc.stop()`.
+For OSC 99, dismissal support comes from the actual reply, not terminal identity
+or the separate close-event reporting flag. OS and terminal policy can still
+prevent a supported operation from taking effect.
+
+[Otty](https://docs.otty.sh/vt/osc/osc-99) currently replies with a bare `ok`
+acknowledgement instead of a feature list. PaintCannon enables basic delivery and
+tag replacement, combining title and body into the title payload. It does not
+infer optional features from that acknowledgement, so `supportsClose()` returns
+`false`. A future feature-list reply can enable those features without updating
+PaintCannon. Legacy protocol detection recognizes `TERM_PROGRAM=otty` and
+tmux's `otty(version)` report; generic `TERM=xterm-256color` alone is not sufficient.
+
+Run `npm run demo:notifications` to send immediately, send after a delay, and see
+the lifecycle events supported by your terminal.
+
 ## Nerd Font Detection
 
 Use `pc.font.hasNerdFontSet()` to choose icons or plain-text fallbacks:
@@ -315,6 +419,7 @@ Detection tries these sources in order:
 2. Many popular terminal emulators bundle Nerd Font symbols; we attempt to
    detect them when the terminal can be identified. Detected terminals are:
    - Ghostty
+   - Otty
    - Wezterm
    - Rio
    - Kitty
@@ -416,7 +521,7 @@ override it. If support remains unconfirmed, the Glyph Protocol probes a
 sextant and all four border corners. Unconfirmed support and stopped instances
 return `false`.
 
-The [Rust capability table](src/glyph_detection/terminals.rs) links to the
+The [Rust capability table](src/terminal_capabilities/terminals.rs) links to the
 upstream implementations. As with Nerd Font detection, tmux's outer
 `TERM_PROGRAM` and `TERM` are checked; no local font or terminal configuration is inspected.
 
