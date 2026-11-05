@@ -3223,9 +3223,11 @@ impl LayoutArena {
             LayoutNodeKind::Image(image) => image_natural_size(image),
             LayoutNodeKind::Input(input) => input_natural_size(input),
             LayoutNodeKind::TextArea(textarea) => {
-                let wrap_width = known_dimensions
+                // compute_leaf_layout passes border-box known dimensions during sizing,
+                // but available space already excludes border, padding, and scrollbars.
+                let wrap_width = available_space
                     .width
-                    .or_else(|| available_space.width.into_option())
+                    .into_option()
                     .map(float_to_cells)
                     // Zero cells is an intrinsic sizing query, not a one-cell wrap width.
                     .filter(|width| *width > 0);
@@ -6017,6 +6019,152 @@ mod tests {
         );
         assert_eq!(arena.textarea_visual_line_range(textarea, 0), Some((0, 6)));
         assert_eq!(arena.textarea_visual_line_range(textarea, 1), Some((6, 7)));
+    }
+
+    #[test]
+    fn bordered_percent_width_flex_textarea_grows_at_content_wrap_boundary() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(8.0), CssDimension::Length(12.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = arena.create_element(root_style);
+
+        let mut style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        style.white_space = CssWhiteSpace::PreWrap;
+        style.border_top = BorderStyle::ChunkyBestEffort;
+        style.border_right = BorderStyle::ChunkyBestEffort;
+        style.border_bottom = BorderStyle::ChunkyBestEffort;
+        style.border_left = BorderStyle::ChunkyBestEffort;
+        let textarea = arena.create_textarea(style, "abcdefg");
+        arena.set_textarea_focused(textarea, true);
+        arena.append_child(root, textarea);
+
+        // Include initial layout, typing through two wrap boundaries, and deletion.
+        for (value, expected_height) in [
+            ("abcdefg", 4.0),
+            ("abcde", 3.0),
+            ("abcdef", 4.0),
+            ("abcdefg", 4.0),
+            ("abcdefgh", 4.0),
+            ("abcdefghijk", 4.0),
+            ("abcdefghijkl", 5.0),
+            ("abcdefghijklm", 5.0),
+            ("abcde", 3.0),
+        ] {
+            arena.set_textarea_value(textarea, value, value.len() as u32);
+            arena.compute_layout(
+                root,
+                Size {
+                    width: AvailableSpace::Definite(8.0),
+                    height: AvailableSpace::Definite(12.0),
+                },
+            );
+            let layout = arena.layout(textarea);
+            assert_eq!(layout.size.width, 8.0, "value: {value}");
+            assert_eq!(layout.size.height, expected_height, "value: {value}");
+            assert_eq!(arena.scroll_offset(textarea), (0, 0), "value: {value}");
+
+            let output = crate::paint::paint_arena(&arena, root, 8, 12, false);
+            for (offset, character) in value.chars().enumerate() {
+                assert_eq!(
+                    output
+                        .frame
+                        .cell(1 + offset % 6, 1 + offset / 6)
+                        .unwrap()
+                        .character,
+                    character,
+                    "value: {value}, offset: {offset}"
+                );
+            }
+            assert!(
+                output
+                    .frame
+                    .cell(1 + value.len() % 6, 1 + value.len() / 6)
+                    .unwrap()
+                    .reversed
+            );
+            assert_eq!(
+                output
+                    .frame
+                    .cell(1, expected_height as usize - 1)
+                    .unwrap()
+                    .character,
+                '█'
+            );
+        }
+    }
+
+    #[test]
+    fn padded_percent_width_flex_textarea_measures_content_not_border_box() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(12.0), CssDimension::Length(16.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = arena.create_element(root_style);
+        let mut style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        style.border_top = BorderStyle::Solid;
+        style.border_right = BorderStyle::Solid;
+        style.border_bottom = BorderStyle::Solid;
+        style.border_left = BorderStyle::Solid;
+        style.padding_left = CssLengthPercentage::Percent(1.0 / 6.0);
+        style.padding_right = CssLengthPercentage::Percent(1.0 / 6.0);
+        style.padding_top = CssLengthPercentage::Length(1.0);
+        style.padding_bottom = CssLengthPercentage::Length(1.0);
+        let textarea = arena.create_textarea(style, "abcdefg");
+        arena.append_child(root, textarea);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(12.0),
+                height: AvailableSpace::Definite(16.0),
+            },
+        );
+        let layout = arena.layout(textarea);
+        assert_eq!(layout.padding.left, 2.0);
+        assert_eq!(layout.padding.right, 2.0);
+        assert_eq!(layout.size.width, 12.0);
+        assert_eq!(layout.size.height, 6.0);
+        let output = crate::paint::paint_arena(&arena, root, 12, 16, false);
+        assert_eq!(output.frame.cell(3, 2).unwrap().character, 'a');
+        assert_eq!(output.frame.cell(8, 2).unwrap().character, 'f');
+        assert_eq!(output.frame.cell(3, 3).unwrap().character, 'g');
+        assert_eq!(output.frame.cell(3, 5).unwrap().character, '─');
+    }
+
+    #[test]
+    fn stable_gutter_percent_width_flex_textarea_reserves_wrapped_caret_row() {
+        let mut arena = LayoutArena::new();
+        let mut root_style = block_style(CssDimension::Length(8.0), CssDimension::Length(12.0));
+        root_style.display = LayoutDisplay::Flex;
+        root_style.flex_direction = LayoutFlexDirection::Column;
+        let root = arena.create_element(root_style);
+        let mut style = block_style(CssDimension::Percent(1.0), CssDimension::Auto);
+        style.border_top = BorderStyle::Solid;
+        style.border_right = BorderStyle::Solid;
+        style.border_bottom = BorderStyle::Solid;
+        style.border_left = BorderStyle::Solid;
+        style.overflow_y = LayoutOverflow::Scroll;
+        style.scrollbar_gutter = ScrollbarGutter::Stable;
+        let textarea = arena.create_textarea(style, "abcde");
+        arena.set_textarea_value(textarea, "abcde", 5);
+        arena.set_textarea_focused(textarea, true);
+        arena.append_child(root, textarea);
+        arena.compute_layout(
+            root,
+            Size {
+                width: AvailableSpace::Definite(8.0),
+                height: AvailableSpace::Definite(12.0),
+            },
+        );
+        let layout = arena.layout(textarea);
+        assert_eq!(layout.scrollbar_size.width, 1.0);
+        assert_eq!(layout.size.width, 8.0);
+        assert_eq!(layout.size.height, 4.0);
+        let output = crate::paint::paint_arena(&arena, root, 8, 12, false);
+        assert_eq!(output.frame.cell(1, 1).unwrap().character, 'a');
+        assert_eq!(output.frame.cell(5, 1).unwrap().character, 'e');
+        assert!(output.frame.cell(1, 2).unwrap().reversed);
+        assert_eq!(output.frame.cell(1, 3).unwrap().character, '─');
     }
 
     #[test]
