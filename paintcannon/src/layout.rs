@@ -25,6 +25,10 @@ use crate::text::{
 };
 use crate::text_wrap::WrappedText;
 
+#[cfg(test)]
+#[path = "layout/nested_flex_tests.rs"]
+mod nested_flex_tests;
+
 #[derive(Clone)]
 pub(crate) enum LayoutNodeKind {
     Element,
@@ -3311,8 +3315,22 @@ impl LayoutPartialTree for LayoutArena {
     fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
         if self.should_store_layout() {
             let item = &mut self.nodes[node_index(node_id)];
+            let changed = item.layout != *layout;
             item.layout = *layout;
             item.layout_dirty = false;
+            if changed {
+                // Flex/grid can resize or move a clean sibling subtree. Its derived
+                // overflow bounds must follow the new geometry without clearing layout caches.
+                let mut current = Some(node_id);
+                while let Some(node) = current {
+                    let item = &mut self.nodes[node_index(node)];
+                    if item.visible_overflow_dirty {
+                        break;
+                    }
+                    item.visible_overflow_dirty = true;
+                    current = item.parent;
+                }
+            }
         }
     }
 
