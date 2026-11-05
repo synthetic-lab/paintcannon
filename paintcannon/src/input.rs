@@ -54,6 +54,7 @@ pub(crate) struct TerminalInput {
     mouse_capture_enabled: Arc<Mutex<bool>>,
     focus_change_enabled: Arc<Mutex<bool>>,
     bracketed_paste_enabled: Arc<Mutex<bool>>,
+    clipboard_mode: Arc<Mutex<crate::clipboard::PasteMode>>,
     terminal_captured: Arc<Mutex<bool>>,
     thread: JoinHandle<()>,
 }
@@ -134,6 +135,11 @@ impl TerminalInput {
         let stop = Arc::new(AtomicBool::new(false));
         let synthetic_keyup_delay_ms = Arc::new(Mutex::new(synthetic_keyup_delay_ms));
         let terminal_captured = Arc::new(Mutex::new(true));
+        let clipboard_tmux = std::env::var_os("TMUX").is_some();
+        if clipboard_tmux {
+            let _ = crate::terminal::allow_tmux_passthrough();
+        }
+        let clipboard_mode = Arc::new(Mutex::new(crate::clipboard::PasteMode::new(clipboard_tmux)));
         let thread_event_queue = event_queue;
         let thread_focused = Arc::clone(&focused);
         let thread_interrupted_by_ctrl_c = Arc::clone(&interrupted_by_ctrl_c);
@@ -146,8 +152,10 @@ impl TerminalInput {
         let thread_mouse_capture_enabled = Arc::clone(&mouse_capture_enabled);
         let thread_focus_change_enabled = Arc::clone(&focus_change_enabled);
         let thread_bracketed_paste_enabled = Arc::clone(&bracketed_paste_enabled);
+        let thread_clipboard_mode = Arc::clone(&clipboard_mode);
         let thread_terminal_captured = Arc::clone(&terminal_captured);
         let thread = thread::spawn(move || {
+            let mut clipboard_pastes = crate::clipboard::Pastes::new(clipboard_tmux);
             let mut pressed_keys: HashMap<String, PressedKey> = HashMap::new();
             let mut mouse_down: Option<MouseDown> = None;
             let mut awaiting_initial_focus_report = true;
@@ -162,6 +170,23 @@ impl TerminalInput {
                     let captured = captured_guard.as_deref().copied().unwrap_or(false);
                     reader.poll_glyph_queries(captured);
                     reader.poll_notification_queries(captured);
+                    let mut clipboard_enabled = false;
+                    if captured {
+                        if let Ok(mut mode) = thread_clipboard_mode.lock() {
+                            let mut stdout = io::stdout().lock();
+                            let _ = mode
+                                .set_focused(thread_focused.load(Ordering::Relaxed), &mut stdout);
+                            let _ = mode.query(&mut stdout);
+                            clipboard_enabled = mode.enabled;
+                        }
+                    }
+                    if clipboard_pastes.expire(
+                        &thread_event_queue,
+                        Instant::now(),
+                        clipboard_enabled,
+                    ) {
+                        thread_event_notifier.notify();
+                    }
                     // iTerm2 3.6.6 rebuilds mouse tracking in a deferred screen callback:
                     // https://github.com/gnachman/iTerm2/blob/v3.6.6/sources/VT100ScreenMutableState%2BTerminalDelegate.m#L1434-L1440
                     if reader.take_device_attributes_reply()
@@ -173,6 +198,36 @@ impl TerminalInput {
                 }
                 match reader.read(Duration::from_millis(25)) {
                     Ok(Some(event)) => match event {
+                        TerminalEvent::ClipboardMode(status) => {
+                            let captured = thread_terminal_captured.lock().ok();
+                            if captured.as_deref().copied().unwrap_or(false) {
+                                if let Ok(mut mode) = thread_clipboard_mode.lock() {
+                                    let _ = mode.report(status, &mut io::stdout().lock());
+                                }
+                            }
+                        }
+                        TerminalEvent::Clipboard(packet) => {
+                            let captured = thread_terminal_captured.lock().ok();
+                            if captured.as_deref().copied().unwrap_or(false)
+                                && thread_clipboard_mode.lock().is_ok_and(|mode| mode.enabled)
+                            {
+                                if let Some(packet) = packet {
+                                    clipboard_pastes.receive(
+                                        packet,
+                                        &thread_event_queue,
+                                        &mut io::stdout().lock(),
+                                        Instant::now(),
+                                    );
+                                } else {
+                                    clipboard_pastes.expire(
+                                        &thread_event_queue,
+                                        Instant::now(),
+                                        false,
+                                    );
+                                }
+                                thread_event_notifier.notify();
+                            }
+                        }
                         TerminalEvent::Notification(reply) => notification_reports.reply(reply),
                         TerminalEvent::Key(event) => {
                             if !capture_ctrl_c && is_ctrl_c_event(&event) {
@@ -184,6 +239,7 @@ impl TerminalInput {
                                     &thread_mouse_capture_enabled,
                                     &thread_focus_change_enabled,
                                     &thread_bracketed_paste_enabled,
+                                    &thread_clipboard_mode,
                                     &thread_keyboard_enhancement_pushed,
                                     &thread_alternate_screen_entered,
                                 );
@@ -308,6 +364,9 @@ impl TerminalInput {
                 }
             }
 
+            if clipboard_pastes.expire(&thread_event_queue, Instant::now(), false) {
+                thread_event_notifier.notify();
+            }
             for (_, pressed_key) in pressed_keys {
                 push_keyboard_event(
                     &thread_event_queue,
@@ -336,6 +395,7 @@ impl TerminalInput {
             mouse_capture_enabled,
             focus_change_enabled,
             bracketed_paste_enabled,
+            clipboard_mode,
             terminal_captured,
             thread,
         })
@@ -343,6 +403,10 @@ impl TerminalInput {
 
     pub(crate) fn has_focus(&self) -> bool {
         self.focused.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn rich_paste_support(&self) -> Option<Arc<crate::clipboard::Support>> {
+        self.clipboard_mode.lock().ok().map(|mode| mode.support())
     }
 
     pub(crate) fn glyph_queries(
@@ -377,6 +441,7 @@ impl TerminalInput {
             &self.mouse_capture_enabled,
             &self.focus_change_enabled,
             &self.bracketed_paste_enabled,
+            &self.clipboard_mode,
             &self.keyboard_enhancement_pushed,
             &self.alternate_screen_entered,
         );
@@ -487,6 +552,7 @@ fn release_terminal_state(
     mouse_capture_enabled: &Arc<Mutex<bool>>,
     focus_change_enabled: &Arc<Mutex<bool>>,
     bracketed_paste_enabled: &Arc<Mutex<bool>>,
+    clipboard_mode: &Arc<Mutex<crate::clipboard::PasteMode>>,
     keyboard_enhancement_pushed: &Arc<Mutex<bool>>,
     alternate_screen_entered: &Arc<Mutex<bool>>,
 ) {
@@ -503,6 +569,9 @@ fn release_terminal_state(
     }
     if swap_bool(bracketed_paste_enabled, false) {
         let _ = execute!(io::stdout(), DisableBracketedPaste);
+    }
+    if let Ok(mut mode) = clipboard_mode.lock() {
+        let _ = mode.restore(&mut io::stdout().lock());
     }
     if swap_bool(keyboard_enhancement_pushed, false) {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);

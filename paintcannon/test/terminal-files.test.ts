@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { PaintClipboardEvent, type PaintFileList } from "../main.ts";
-import { parseImagePaths, separateFilePaths } from "../terminal-files.ts";
+import { filesFromClipboardImage, parseImagePaths, separateFilePaths } from "../terminal-files.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -56,6 +56,24 @@ describe("parseImagePaths", () => {
 });
 
 describe("terminal image files", () => {
+  it.each([
+    ["image/png", "clipboard.png"],
+    ["image/jpeg", "clipboard.jpg"],
+    ["image/webp", "clipboard.webp"],
+    ["image/gif", "clipboard.gif"],
+  ])("creates an immutable in-memory file for %s", async (mimeType, name) => {
+    const data = Buffer.from("clipboard bytes");
+    const files = filesFromClipboardImage({ mimeType, data });
+    const file = files[0];
+    data.fill(0);
+    expect(file).toMatchObject({ name, type: mimeType, size: 15, webkitRelativePath: "" });
+    expect(files.item(0)).toBe(file);
+    expect(files.item(1)).toBeNull();
+    expect(Array.from(files)).toEqual([file]);
+    expect(await file.text()).toBe("clipboard bytes");
+    expect(Object.isFrozen(file)).toBe(true);
+  });
+
   it("creates browser-shaped files without eagerly reading their contents", async () => {
     const directory = temporaryDirectory();
     const filePath = path.join(directory, "my image (1).png");

@@ -8,6 +8,7 @@ import {
   PaintCannon,
   paintCannonDeps,
   type NativeEvent,
+  type PaintClipboardEvent,
   type PaintClipboardWriteEvent,
   type PaintElement,
 } from "../main.ts";
@@ -619,6 +620,62 @@ describe("textarea cursor APIs", () => {
 });
 
 describe("core paste events", () => {
+  it.each([false, true])("reports native rich-paste support: %s", async supported => {
+    const { paintCannon, mockNative } = createPaintTree();
+    mockNative.richPasteSupported = supported;
+    try {
+      await expect(paintCannon.supportsRichPaste()).resolves.toBe(supported);
+    } finally {
+      paintCannon.stop();
+    }
+  });
+
+  it("reports no rich-paste support after stopping", async () => {
+    const { paintCannon, mockNative } = createPaintTree();
+    mockNative.richPasteSupported = true;
+    paintCannon.stop();
+    await expect(paintCannon.supportsRichPaste()).resolves.toBe(false);
+  });
+
+  it("delivers clipboard image bytes as files without a backing path", async () => {
+    const { paintCannon, mockNative, root } = createPaintTree();
+    const input = paintCannon.createElement("input");
+    root.appendChild(input);
+    input.focus();
+    const received: string[] = [];
+    const listener = vi.fn((event: PaintClipboardEvent) => {
+      received.push("paste");
+      return event.clipboardData;
+    });
+    input.addEventListener("paste", listener);
+    input.addEventListener("keydown", event => received.push(event.key));
+    const contents = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0xff]);
+    const nativePaste = {
+      kind: "paste",
+      paste: "",
+      pasteImage: { mimeType: "image/png", data: contents },
+    };
+    mockNative.events.push(keyboardInput(keyDown("a")), nativePaste, keyboardInput(keyDown("b")));
+    notifyNativeEvents(paintCannon);
+    paintCannon.stop();
+
+    expect(received).toEqual(["a", "paste", "b"]);
+    expect(input.value).toBe("ab");
+    const clipboard = listener.mock.results[0]?.value;
+    expect(clipboard.files).toHaveLength(1);
+    expect(clipboard.types).toEqual(["Files"]);
+    expect(clipboard.getData("text/plain")).toBe("");
+    const file = clipboard.files[0];
+    expect(file).toMatchObject({ name: "clipboard.png", type: "image/png", size: contents.length });
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(Uint8Array.from(contents));
+    const bytes = await file.bytes();
+    bytes[0] = 0;
+    expect((await file.bytes())[0]).toBe(0x89);
+    expect(new Uint8Array(await new Response(file.stream()).arrayBuffer())).toEqual(
+      Uint8Array.from(contents),
+    );
+  });
+
   it("preserves ordering with keyboard events and inserts pasted text by default", () => {
     const { paintCannon, mockNative, root } = createPaintTree();
     const input = paintCannon.createElement("input");

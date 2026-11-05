@@ -52,6 +52,10 @@ export function createMockNativeBinding(instances: MockNativePaintCannon[] = [])
 }
 
 export class MockNativePaintCannon implements NativePaintCannon {
+  richPasteSupported = false;
+  async supportsRichPaste(): Promise<boolean> {
+    return this.richPasteSupported;
+  }
   notificationsSupported = true;
   notificationsCanClose = false;
   async notificationSupportsClose(): Promise<boolean> {

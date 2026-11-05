@@ -147,8 +147,15 @@ All host components accept these event props:
 - `onTransitionEnd`
 - `onScroll`
 
-`onPaste` receives the same `PaintClipboardEvent` as core, including detected terminal image paths
-through `event.clipboardData.files`.
+`onPaste` receives the same `PaintClipboardEvent` as core, including image files through
+`event.clipboardData.files`. This also handles images copied from browsers or screenshot tools
+without a backing file on terminals supporting Kitty's rich-paste protocol. Image pastes have
+empty text data; no React-specific handling is needed.
+Use `await paintCannon.supportsRichPaste()` on the core instance to detect copied-image paste
+support before offering it in your UI.
+Inside tmux, core uses DCS passthrough only after confirming `focus-events` is on, so rich-paste
+mode can be released when switching away from the app's pane. Otherwise `supportsRichPaste()`
+returns `false`, leaving ordinary text and file-path paste available.
 
 `style` accepts the following CSS property names. Kebab-case and camelCase are
 both supported:

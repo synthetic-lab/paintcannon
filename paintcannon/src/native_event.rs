@@ -109,6 +109,12 @@ pub struct ClipboardWritePayload {
     pub success: bool,
 }
 
+#[napi(object)]
+pub struct ClipboardImage {
+    pub mime_type: String,
+    pub data: napi::bindgen_prelude::Buffer,
+}
+
 #[derive(Clone)]
 #[napi(object)]
 pub struct FontChangeEvent {
@@ -117,12 +123,12 @@ pub struct FontChangeEvent {
     pub supported: bool,
 }
 
-#[derive(Clone)]
 #[napi(object)]
 pub struct NativeEvent {
     pub kind: String,
     pub keyboard: Option<KeyboardEvent>,
     pub paste: Option<String>,
+    pub paste_image: Option<ClipboardImage>,
     pub clipboard_write: Option<ClipboardWritePayload>,
     pub mouse: Option<TerminalMouseEvent>,
     pub resize: Option<TerminalResizeEvent>,
@@ -222,6 +228,7 @@ impl NativeEvent {
             kind: kind.to_string(),
             keyboard: None,
             paste: None,
+            paste_image: None,
             clipboard_write: None,
             mouse: None,
             resize: None,
@@ -252,13 +259,40 @@ fn intersection_rect(rect: AbsoluteRect) -> IntersectionRect {
 
 #[derive(Default)]
 pub(crate) struct NativeEventQueue {
-    events: Mutex<VecDeque<NativeEvent>>,
+    events: Mutex<VecDeque<QueuedEvent>>,
+}
+
+enum QueuedEvent {
+    Ready(Box<NativeEvent>),
+    PendingPaste(u64),
 }
 
 impl NativeEventQueue {
     pub(crate) fn push(&self, event: NativeEvent) {
         if let Ok(mut events) = self.events.lock() {
-            events.push_back(event);
+            events.push_back(QueuedEvent::Ready(Box::new(event)));
+        }
+    }
+
+    // Reserve the paste's position before fetching its bytes. Later keys and
+    // renderer events must not overtake it while JS drains the same queue.
+    pub(crate) fn reserve_paste(&self, id: u64) {
+        if let Ok(mut events) = self.events.lock() {
+            events.push_back(QueuedEvent::PendingPaste(id));
+        }
+    }
+
+    pub(crate) fn finish_paste(&self, id: u64, event: Option<NativeEvent>) {
+        if let Ok(mut events) = self.events.lock() {
+            if let Some(index) = events.iter().position(
+                |entry| matches!(entry, QueuedEvent::PendingPaste(pending) if *pending == id),
+            ) {
+                if let Some(event) = event {
+                    events[index] = QueuedEvent::Ready(Box::new(event));
+                } else {
+                    events.remove(index);
+                }
+            }
         }
     }
 
@@ -266,7 +300,17 @@ impl NativeEventQueue {
         let Ok(mut events) = self.events.lock() else {
             return Vec::new();
         };
-        events.drain(..).collect()
+        let count = events
+            .iter()
+            .take_while(|event| matches!(event, QueuedEvent::Ready(_)))
+            .count();
+        events
+            .drain(..count)
+            .filter_map(|event| match event {
+                QueuedEvent::Ready(event) => Some(*event),
+                QueuedEvent::PendingPaste(_) => None,
+            })
+            .collect()
     }
 }
 

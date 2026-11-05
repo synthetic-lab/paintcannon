@@ -4,6 +4,7 @@ use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
+use crate::clipboard::RichPasteSupport;
 use crate::glyph_detection::{HasNerdFontSet, HasSymbolsForLegacyComputing, NerdFontSet};
 use crossbeam_channel::{bounded, Sender};
 use napi::bindgen_prelude::Function;
@@ -133,6 +134,16 @@ pub struct PaintCannon {
 
 #[napi]
 impl PaintCannon {
+    #[napi]
+    pub fn supports_rich_paste(&self) -> napi::bindgen_prelude::AsyncTask<RichPasteSupport> {
+        napi::bindgen_prelude::AsyncTask::new(RichPasteSupport {
+            support: self
+                .input
+                .as_ref()
+                .and_then(TerminalInput::rich_paste_support),
+        })
+    }
+
     #[napi]
     pub fn notification_permission(&self) -> napi::bindgen_prelude::AsyncTask<NotificationSupport> {
         napi::bindgen_prelude::AsyncTask::new(NotificationSupport {

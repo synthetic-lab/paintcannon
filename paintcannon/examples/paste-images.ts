@@ -24,10 +24,10 @@ pc.setRoot(root);
 const title = pc.createElement("div");
 title.style.fontWeight = "bold";
 title.style.color = "#7dd3fc";
-title.appendChild(pc.createTextNode("Paste or drag PNG files into the input"));
+title.appendChild(pc.createTextNode("Image clipboard"));
 
 const input = pc.createElement("input");
-input.placeholder = "drop a PNG path here";
+input.placeholder = "PNG image";
 input.style.width = "80%";
 input.style.height = 3;
 input.style.padding = "0px 1px";
@@ -54,6 +54,10 @@ images.style.flexGrow = 1;
 images.style.overflow = "hidden";
 
 root.appendChild(title);
+const capabilityText = pc.createTextNode("Copied-image paste: checking terminal support...");
+const capability = pc.createElement("div");
+capability.appendChild(capabilityText);
+root.appendChild(capability);
 root.appendChild(input);
 root.appendChild(status);
 root.appendChild(images);
@@ -65,7 +69,7 @@ let pasteGeneration = 0;
 input.addEventListener("paste", event => {
   const pastedFiles = Array.from(event.clipboardData.files);
   if (pastedFiles.length === 0) {
-    statusText.nodeValue = "No accessible image paths were detected in that paste.";
+    statusText.nodeValue = "That paste contained no images.";
     return;
   }
 
@@ -93,6 +97,12 @@ function tick(): void {
 }
 
 tick();
+
+const richPasteSupported = await pc.supportsRichPaste();
+capabilityText.nodeValue = richPasteSupported
+  ? "Copied-image paste: supported"
+  : "Copied-image paste: unsupported; PNG file-path paste is still available";
+capability.style.color = richPasteSupported ? "#86efac" : "#fbbf24";
 
 async function renderPastedImages(files: PaintFile[]): Promise<void> {
   const unsupported = files.filter(file => file.type !== "image/png");

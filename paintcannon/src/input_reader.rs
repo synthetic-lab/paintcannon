@@ -21,6 +21,8 @@ pub(crate) enum Event {
     FocusGained,
     FocusLost,
     Paste(String),
+    ClipboardMode(u8),
+    Clipboard(Option<crate::clipboard::protocol::Packet>),
     Notification(crate::notifications::protocol::Reply),
 }
 
@@ -73,6 +75,19 @@ impl Parser {
             if let Some(kind) = self.control_string {
                 let terminated =
                     (self.control_escape && byte == b'\\') || (kind == b']' && byte == 7);
+                let cancelled = matches!(byte, 0x18 | 0x1a);
+                if (terminated || cancelled)
+                    && kind == b']'
+                    && self.control_bytes.starts_with(b"5522;")
+                {
+                    let packet = if self.control_overflow || cancelled {
+                        None
+                    } else {
+                        let end = self.control_bytes.len() - usize::from(self.control_escape);
+                        crate::clipboard::protocol::parse_packet(&self.control_bytes[..end])
+                    };
+                    self.events.push_back(Event::Clipboard(packet));
+                }
                 if terminated && !self.control_overflow {
                     if self.control_escape {
                         self.control_bytes.pop();
@@ -99,11 +114,15 @@ impl Parser {
                     self.control_string = None;
                 }
                 if matches!(kind, b'_' | b']') && !self.control_overflow {
-                    if self.control_bytes.len() < MAX_SEQUENCE {
+                    let limit = if kind == b']' && self.control_bytes.starts_with(b"5522;") {
+                        crate::clipboard::protocol::MAX_PACKET
+                    } else {
+                        MAX_SEQUENCE
+                    };
+                    if self.control_bytes.len() < limit {
                         self.control_bytes.push(byte);
                     } else {
                         self.control_overflow = true;
-                        self.control_bytes.clear();
                     }
                 }
                 self.control_escape = byte == 0x1b;
@@ -156,6 +175,11 @@ impl Parser {
                     if len >= MAX_SEQUENCE {
                         self.sequence.clear();
                     }
+                    continue;
+                }
+                if let Some(status) = crate::clipboard::protocol::parse_mode(&self.sequence) {
+                    self.events.push_back(Event::ClipboardMode(status));
+                    self.sequence.clear();
                     continue;
                 }
                 if let Some(flags) = self
@@ -924,6 +948,146 @@ mod tests {
             parse(&chunks),
             vec![Event::Paste(payload), Event::Key(KeyCode::Char('z').into())]
         );
+    }
+
+    #[test]
+    fn kitty_clipboard_packets_survive_fragmented_input() {
+        let wire = b"\x1b]5522;type=read:status=OK\x1b\\\x1b]5522;type=read:status=DATA:mime=Lg==;aW1hZ2UvcG5n\x1b\\\x1b]5522;type=read:status=DONE\x1b\\";
+        for split in 0..=wire.len() {
+            let events = parse(&[&wire[..split], &wire[split..]]);
+            assert_eq!(events.len(), 3);
+            let Event::Clipboard(Some(packet)) = &events[1] else {
+                panic!("expected clipboard data");
+            };
+            assert_eq!(packet.mime.as_deref(), Some("."));
+            assert_eq!(packet.data.as_deref(), Some(b"image/png".as_slice()));
+        }
+    }
+
+    #[test]
+    fn kitty_clipboard_full_sized_chunks_are_not_limited_to_4096_encoded_bytes() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let data = vec![0xa5; 4096];
+        for terminator in ["\x1b\\", "\x07"] {
+            let wire = format!(
+                "a\x1b]5522;type=read:id=pc-paste-1:status=DATA:mime=aW1hZ2UvcG5n;{}{terminator}b",
+                STANDARD.encode(&data)
+            );
+            for size in [1, 2, 3, 5, 7, 8192] {
+                let events = parse(&wire.as_bytes().chunks(size).collect::<Vec<_>>());
+                assert_eq!(events.len(), 3);
+                assert_eq!(events[0], Event::Key(KeyCode::Char('a').into()));
+                assert_eq!(events[2], Event::Key(KeyCode::Char('b').into()));
+                let Event::Clipboard(Some(packet)) = &events[1] else {
+                    panic!("expected clipboard data");
+                };
+                assert_eq!(packet.data.as_ref(), Some(&data));
+            }
+        }
+    }
+
+    #[test]
+    fn kitty_clipboard_query_and_paste_use_the_existing_input_reader() {
+        let (mut reader, mut terminal) = connected_reader();
+        let mut mode = crate::clipboard::PasteMode::default();
+        let mut pastes = crate::clipboard::Pastes::default();
+        let queue = crate::native_event::NativeEventQueue::default();
+        let mut output = Vec::new();
+        let now = Instant::now();
+        mode.query(&mut output).unwrap();
+        assert_eq!(output, b"\x1b[?5522$p");
+        terminal.write_all(b"\x1b[?5522;2$y").unwrap();
+        let Event::ClipboardMode(status) =
+            reader.read(Duration::from_millis(100)).unwrap().unwrap()
+        else {
+            panic!("expected clipboard mode reply");
+        };
+        output.clear();
+        mode.report(status, &mut output).unwrap();
+        assert!(mode.enabled);
+        assert_eq!(output, b"\x1b[?5522h");
+        output.clear();
+        terminal.write_all(b"\x1b]5522;type=read:status=OK:pw=eA==\x07\x1b]5522;type=read:status=DATA:mime=Lg==;aW1hZ2UvcG5n\x07\x1b]5522;type=read:status=DONE\x07b").unwrap();
+        for _ in 0..3 {
+            let Event::Clipboard(Some(packet)) =
+                reader.read(Duration::from_millis(100)).unwrap().unwrap()
+            else {
+                panic!("expected paste packet");
+            };
+            pastes.receive(packet, &queue, &mut output, now);
+        }
+        let request = String::from_utf8(output.clone()).unwrap();
+        assert!(request.contains("pw=eA==:name=UGFzdGUgZXZlbnQ="));
+        let id = request
+            .split_once("id=")
+            .unwrap()
+            .1
+            .split(':')
+            .next()
+            .unwrap();
+        assert_eq!(
+            reader.read(Duration::from_millis(100)).unwrap(),
+            Some(Event::Key(KeyCode::Char('b').into()))
+        );
+        queue.push(crate::native_event::NativeEvent::paste(
+            "later input".into(),
+        ));
+        assert!(queue.drain().is_empty());
+        terminal.write_all(format!("\x1b]5522;type=read:id={id}:status=OK\x07\x1b]5522;type=read:id={id}:status=DATA:mime=aW1hZ2UvcG5n;iVBORw==\x07\x1b]5522;type=read:id={id}:status=DONE\x07").as_bytes()).unwrap();
+        for _ in 0..3 {
+            let Event::Clipboard(Some(packet)) =
+                reader.read(Duration::from_millis(100)).unwrap().unwrap()
+            else {
+                panic!("expected image packet");
+            };
+            pastes.receive(packet, &queue, &mut output, now);
+        }
+        let events = queue.drain();
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].paste_image.as_ref().unwrap().data.as_ref(),
+            b"\x89PNG"
+        );
+        assert_eq!(events[1].paste.as_deref(), Some("later input"));
+    }
+
+    #[test]
+    fn kitty_clipboard_sequences_in_bracketed_paste_are_literal_text() {
+        let text = "\x1b[?5522;2$y\x1b]5522;type=read:status=OK\x07";
+        assert_eq!(
+            parse(&[format!("\x1b[200~{text}\x1b[201~").as_bytes()]),
+            vec![Event::Paste(text.into())]
+        );
+    }
+
+    #[test]
+    fn oversized_kitty_clipboard_packets_signal_failure_without_leaking_keys() {
+        let wire = format!(
+            "\x1b]5522;type=read:status=DATA;{}\x1b\\z",
+            "A".repeat(crate::clipboard::protocol::MAX_PACKET + 1)
+        );
+        assert_eq!(
+            parse(&[wire.as_bytes()]),
+            vec![
+                Event::Clipboard(None),
+                Event::Key(KeyCode::Char('z').into())
+            ]
+        );
+    }
+
+    #[test]
+    fn cancelled_kitty_clipboard_packets_signal_failure() {
+        for cancel in [0x18, 0x1a] {
+            let mut wire = b"\x1b]5522;type=read:status=DATA;AAAA".to_vec();
+            wire.extend([cancel, b'z']);
+            assert_eq!(
+                parse(&[&wire]),
+                vec![
+                    Event::Clipboard(None),
+                    Event::Key(KeyCode::Char('z').into())
+                ]
+            );
+        }
     }
 
     fn parse(chunks: &[&[u8]]) -> Vec<Event> {

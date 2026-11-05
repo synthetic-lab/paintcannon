@@ -186,7 +186,40 @@ input.addEventListener("paste", async event => {
 PaintCannon detects PNG, JPEG, WebP, and GIF files. For a text-only paste,
 `clipboardData.files` is empty.
 
-Run `npm run demo:paste-images` from the workspace root to paste or drag PNG files into a live
+Terminals supporting Kitty's rich-paste protocol can also paste images copied directly from a
+browser or screenshot tool, without a saved file. PaintCannon automatically detects support and
+delivers an in-memory file (for example, `clipboard.png`) through the same `clipboardData.files`
+API. It selects one image format, preferring PNG; alternate formats of the same image do not
+produce duplicate files. Image pastes still have empty text data.
+
+Use `await pc.supportsRichPaste()` to detect whether the current terminal connection supports
+these copied-image paste events. This waits for native capability negotiation and resolves to a
+boolean; it does not access clipboard contents. An unsupported terminal, missing terminal input,
+or an unanswered query (after at most two seconds of waiting) resolves to `false`. Inside tmux,
+PaintCannon uses DCS passthrough to query the outer terminal and read pasted images. It attempts
+to enable `allow-passthrough` for its pane. Ordinary text and file-path paste remain available
+when this returns `false`.
+
+This only reads clipboard data in response to a user paste, using the terminal's one-use paste
+token when supplied. It does not poll clipboard contents or request general clipboard access.
+Without a token, the terminal may ask permission for that paste. Unsupported terminals retain
+ordinary text and image-file pasting. Incomplete, denied, or malformed reads are discarded;
+stalled reads time out after five seconds without
+data, and image transfers are limited to 64 MiB in total.
+
+Inside tmux, rich paste requires `set -s focus-events on`. Before negotiating, PaintCannon checks
+the server's setting with `tmux show-options -sv focus-events`. If it is off or the check fails
+or times out, `supportsRichPaste()` resolves to `false` and PaintCannon leaves the outer paste
+mode untouched. Ordinary text and file-path paste still work. PaintCannon does not enable focus
+events on your behalf. After changing the setting, detach/reattach the tmux client and restart
+the app, as [tmux recommends reattaching after changing focus-events](https://man.openbsd.org/tmux#focus-events).
+
+With focus events enabled, PaintCannon releases the outer rich-paste mode when its pane loses
+focus and rechecks the setting before negotiating on return or resume. It also restores the
+mode when stopping or suspending. This is an outer-terminal mode, not a mode managed per pane
+by tmux; switching panes during an image transfer can interrupt the paste.
+
+Run `npm run demo:paste-images` from the workspace root to paste copied PNG images or drag PNG files into a live
 PaintCannon image renderer.
 
 When `captureMouse` is enabled, releasing a dragged text selection requests a clipboard copy and

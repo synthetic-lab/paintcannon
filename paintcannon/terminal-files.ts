@@ -2,6 +2,7 @@ import { createReadStream, promises as fs, statSync } from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { parse } from "shell-quote";
+import type { ClipboardImage } from "#paintcannon-native";
 
 const CHARACTER_PLACEHOLDER = "_";
 
@@ -34,6 +35,30 @@ export type PaintFileList = {
   item(index: number): PaintFile | null;
   [Symbol.iterator](): Iterator<PaintFile>;
 };
+
+export function filesFromClipboardImage(image: ClipboardImage): PaintFileList {
+  const format = Object.entries(IMAGE_MIME_TYPES_BY_EXTENSION).find(
+    ([, mime]) => mime === image.mimeType,
+  );
+  if (format === undefined) {
+    throw new Error(`Unsupported native clipboard image type: ${image.mimeType}`);
+  }
+  const [extension, type] = format;
+  const blob = new Blob([Uint8Array.from(image.data)], { type });
+  return createPaintFileList([
+    Object.freeze({
+      name: `clipboard${extension}`,
+      size: blob.size,
+      type,
+      lastModified: Date.now(),
+      webkitRelativePath: "",
+      arrayBuffer: () => blob.arrayBuffer(),
+      bytes: async () => new Uint8Array(await blob.arrayBuffer()),
+      text: () => blob.text(),
+      stream: () => blob.stream(),
+    }),
+  ]);
+}
 
 export function filesFromTerminalPaste(input: string): PaintFileList {
   const filePaths = parseImagePaths(input);
