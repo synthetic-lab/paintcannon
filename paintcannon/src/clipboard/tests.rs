@@ -33,6 +33,91 @@ fn listing(
 }
 
 #[test]
+fn shutdown_resets_inherited_rich_paste_mode() {
+    for tmux in [false, true] {
+        let mut mode = PasteMode::new(tmux);
+        let mut out = Vec::new();
+        mode.query_with_focus_events(&mut out, || true).unwrap();
+        // A previous process crashed with rich paste enabled.
+        mode.report(1, &mut out).unwrap();
+        assert!(mode.enabled);
+        out.clear();
+        mode.restore(&mut out).unwrap();
+        let mut expected = Vec::new();
+        write_sequence(&mut expected, protocol::DISABLE, tmux).unwrap();
+        assert_eq!(out, expected, "tmux={tmux}");
+        assert!(!mode.enabled);
+    }
+}
+
+#[test]
+fn shutdown_resets_rich_paste_even_without_a_query_reply() {
+    for tmux in [false, true] {
+        for query in [false, true] {
+            let mut mode = PasteMode::new(tmux);
+            let mut out = Vec::new();
+            if query {
+                mode.query_with_focus_events(&mut out, || true).unwrap();
+            }
+            let mut expected = Vec::new();
+            write_sequence(&mut expected, protocol::DISABLE, tmux).unwrap();
+            for _ in 0..2 {
+                out.clear();
+                mode.restore(&mut out).unwrap();
+                assert_eq!(out, expected, "tmux={tmux}, query={query}");
+                mode.report(2, &mut out).unwrap();
+                assert_eq!(out, expected, "late reply re-enabled paste after shutdown");
+            }
+        }
+    }
+}
+
+#[test]
+fn shutdown_retries_a_failed_rich_paste_reset() {
+    let mut mode = PasteMode::default();
+    mode.query(&mut Vec::new()).unwrap();
+    mode.report(2, &mut Vec::new()).unwrap();
+    let mut full_buffer = &mut [][..];
+    assert!(mode.restore(&mut full_buffer).is_err());
+    let mut out = Vec::new();
+    mode.restore(&mut out).unwrap();
+    assert_eq!(out, protocol::DISABLE);
+}
+
+#[test]
+fn focus_return_reenables_rich_paste_after_another_program_resets_it() {
+    for tmux in [false, true] {
+        let mut mode = PasteMode::new(tmux);
+        let mut out = Vec::new();
+        mode.query_with_focus_events(&mut out, || true).unwrap();
+        mode.report(2, &mut out).unwrap();
+        mode.set_focused(false, &mut out).unwrap();
+        // Another program resets the terminal mode while we are unfocused.
+        out.clear();
+        mode.set_focused(true, &mut out).unwrap();
+        mode.query_with_focus_events(&mut out, || true).unwrap();
+        let mut expected = Vec::new();
+        write_sequence(&mut expected, protocol::QUERY, tmux).unwrap();
+        assert_eq!(
+            out, expected,
+            "tmux={tmux}: must query the current terminal mode"
+        );
+        mode.report(2, &mut out).unwrap();
+        write_sequence(&mut expected, protocol::ENABLE, tmux).unwrap();
+        assert_eq!(out, expected);
+        assert!(mode.enabled);
+        out.clear();
+        // The input thread checks the focus state on every iteration.
+        for _ in 0..3 {
+            mode.set_focused(true, &mut out).unwrap();
+            mode.query_with_focus_events(&mut out, || panic!("repeated query"))
+                .unwrap();
+        }
+        assert!(out.is_empty());
+    }
+}
+
+#[test]
 fn tmux_mode_queries_and_changes_reach_the_outer_terminal() {
     let mut mode = PasteMode {
         tmux: true,
@@ -91,7 +176,7 @@ fn tmux_focus_loss_releases_mode_and_focus_gain_renegotiates() {
 }
 
 #[test]
-fn direct_terminal_focus_does_not_change_its_paste_mode() {
+fn direct_terminal_blur_keeps_mode_active_but_ignores_late_reports() {
     let mut mode = PasteMode::new(false);
     let mut out = Vec::new();
     mode.query_with_focus_events(&mut out, || panic!("tmux queried outside tmux"))
@@ -100,12 +185,13 @@ fn direct_terminal_focus_does_not_change_its_paste_mode() {
     out.clear();
     mode.set_focused(false, &mut out).unwrap();
     mode.query(&mut out).unwrap();
+    mode.report(2, &mut out).unwrap();
     assert!(out.is_empty());
     assert!(mode.enabled);
 }
 
 #[test]
-fn tmux_without_confirmed_focus_events_does_not_query_or_change_outer_paste_mode() {
+fn tmux_without_confirmed_focus_events_does_not_query_or_enable_outer_paste_mode() {
     let mut mode = PasteMode::new(true);
     let mut out = Vec::new();
     mode.query_with_focus_events(&mut out, || false).unwrap();
@@ -117,7 +203,7 @@ fn tmux_without_confirmed_focus_events_does_not_query_or_change_outer_paste_mode
     assert!(!mode.enabled);
     assert!(out.is_empty());
     mode.restore(&mut out).unwrap();
-    assert!(out.is_empty());
+    assert_eq!(out, b"\x1bPtmux;\x1b\x1b[?5522l\x1b\\");
     // A resume may happen after the user changes the server option.
     mode.query_with_focus_events(&mut out, || true).unwrap();
     mode.report(2, &mut out).unwrap();
@@ -154,7 +240,7 @@ fn queries_support_without_reading_the_clipboard_and_restores_mode() {
         assert_eq!(out, if status == 2 { protocol::ENABLE } else { b"" });
         out.clear();
         mode.restore(&mut out).unwrap();
-        assert_eq!(out, if status == 2 { protocol::DISABLE } else { b"" });
+        assert_eq!(out, protocol::DISABLE);
         assert!(!mode.enabled);
         out.clear();
         mode.report(2, &mut out).unwrap(); // Late response while suspended.
@@ -230,6 +316,9 @@ fn output_failures_and_missing_input_do_not_claim_rich_paste_support() {
     mode.query(&mut Vec::new()).unwrap();
     assert!(mode.report(2, &mut BrokenOutput).is_err());
     assert!(!mode.support().wait(Duration::ZERO));
+    let mut out = Vec::new();
+    mode.restore(&mut out).unwrap();
+    assert_eq!(out, protocol::DISABLE);
     assert!(!napi::Task::compute(&mut RichPasteSupport { support: None }).unwrap());
 }
 

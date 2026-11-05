@@ -37,7 +37,6 @@ pub(crate) struct PasteMode {
     queried: bool,
     blocked: bool,
     pub(crate) enabled: bool,
-    changed: bool,
     support: Arc<Support>,
 }
 
@@ -87,10 +86,7 @@ impl PasteMode {
             return Ok(());
         }
         let result = if status == 2 {
-            write_sequence(out, protocol::ENABLE, self.tmux).and_then(|()| {
-                self.changed = true;
-                out.flush()
-            })
+            write_sequence(out, protocol::ENABLE, self.tmux).and_then(|()| out.flush())
         } else {
             Ok(())
         };
@@ -105,28 +101,29 @@ impl PasteMode {
     }
 
     pub(crate) fn set_focused(&mut self, focused: bool, out: &mut impl Write) -> io::Result<()> {
-        // Passthrough changes the outer terminal's mode, not a pane-local mode.
-        // Release it when tmux reports blur so other panes can paste normally.
-        if self.tmux && self.unfocused == focused {
+        if self.unfocused == focused {
             self.unfocused = !focused;
-            if !focused {
+            // Passthrough changes the outer terminal's mode, not a pane-local mode.
+            // Release even an inherited mode so other panes can paste normally.
+            if self.tmux && !focused && (self.queried || self.enabled) {
                 return self.deactivate(out);
             }
+            // Another program may have reset the mode while we were unfocused.
+            // Re-query on focus return; ignore outstanding replies while blurred.
+            self.queried = false;
+            self.blocked = false;
         }
         Ok(())
     }
 
     fn deactivate(&mut self, out: &mut impl Write) -> io::Result<()> {
-        let changed = self.changed;
-        self.changed = false;
         self.queried = false;
         self.blocked = false;
         self.enabled = false;
-        if changed {
-            write_sequence(out, protocol::DISABLE, self.tmux)?;
-            out.flush()?;
-        }
-        Ok(())
+        // Always leave normal paste behind, including a mode inherited from a
+        // crashed process, an unanswered query, or a partially failed write.
+        write_sequence(out, protocol::DISABLE, self.tmux)?;
+        out.flush()
     }
 }
 
