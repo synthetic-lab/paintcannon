@@ -1,7 +1,11 @@
 import { performance } from "node:perf_hooks";
 import { registry } from "antipattern";
 import { PaintCannon as NativePaintCannonClass } from "#paintcannon-native";
-import { filesFromTerminalPaste, type PaintFileList } from "./terminal-files.ts";
+import {
+  filesFromClipboardImage,
+  filesFromTerminalPaste,
+  type PaintFileList,
+} from "./terminal-files.ts";
 import { NotificationController, type NotificationConstructor } from "./notifications.ts";
 export { NotificationEvent, NOTIFICATION_EVENT_TYPES } from "./notifications.ts";
 export type {
@@ -332,8 +336,8 @@ export class PaintDataTransfer {
   readonly files: PaintFileList;
   private readonly text: string;
 
-  constructor(text: string) {
-    this.files = filesFromTerminalPaste(text);
+  constructor(text: string, files?: PaintFileList) {
+    this.files = files ?? filesFromTerminalPaste(text);
     this.text = this.files.length > 0 ? "" : text;
     this.types = Object.freeze(this.files.length > 0 ? ["Files"] : ["text/plain"]);
   }
@@ -355,10 +359,10 @@ export class PaintClipboardEvent {
   defaultPrevented = false;
   propagationStopped = false;
 
-  constructor(data: string, target?: PaintElement) {
+  constructor(data: string, target?: PaintElement, files?: PaintFileList) {
     this.target = target;
     this.currentTarget = target;
-    this.clipboardData = new PaintDataTransfer(data);
+    this.clipboardData = new PaintDataTransfer(data, files);
   }
 
   preventDefault(): void {
@@ -939,6 +943,12 @@ export class PaintCannon {
 
   get kittyKeyboardEnabled(): boolean {
     return this.binding.kittyKeyboardEnabled;
+  }
+
+  /** Whether terminal paste events can provide image bytes without a backing file. */
+  supportsRichPaste(): Promise<boolean> {
+    if (this.stopped) return Promise.resolve(false);
+    return this.binding.supportsRichPaste();
   }
 
   readonly font = {
@@ -1859,7 +1869,13 @@ export class PaintCannon {
             throw new Error("native paste event is missing its payload");
           }
           this.dispatchPasteInputEvent(
-            new PaintClipboardEvent(nativeEvent.paste, this.keyboardEventTarget()),
+            new PaintClipboardEvent(
+              nativeEvent.paste,
+              this.keyboardEventTarget(),
+              nativeEvent.pasteImage === undefined
+                ? undefined
+                : filesFromClipboardImage(nativeEvent.pasteImage),
+            ),
           );
           break;
         }

@@ -1,4 +1,5 @@
 // NAPI's type generator must see Task implementations before their return types.
+mod clipboard;
 mod glyph_detection;
 mod notifications;
 
