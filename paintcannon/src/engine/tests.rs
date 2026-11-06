@@ -28,6 +28,86 @@ fn intersection_margin(cells: f32) -> IntersectionRootMargin {
 }
 
 #[test]
+fn pinning_nested_flex_transcript_after_textarea_growth_does_not_create_blank_rows() {
+    let mut engine = PaintEngine::new();
+    let column = DivStyle {
+        display: LayoutDisplay::Flex,
+        flex_direction: LayoutFlexDirection::Column,
+        ..DivStyle::default()
+    };
+    let root = engine.create_element(DivStyle {
+        width: CssDimension::Length(80.0),
+        height: CssDimension::Length(30.0),
+        ..column.clone()
+    });
+    let transcript = engine.create_element(DivStyle {
+        flex_basis: CssDimension::Length(0.0),
+        flex_grow: 1.0,
+        flex_shrink: 1.0,
+        min_height: CssDimension::Length(0.0),
+        overflow_y: LayoutOverflow::Scroll,
+        scrollbar_gutter: crate::style::ScrollbarGutter::Stable,
+        overflow_anchor: CssOverflowAnchor::None,
+        ..column.clone()
+    });
+    let inner = engine.create_element(DivStyle {
+        min_height: CssDimension::Percent(1.0),
+        flex_shrink: 0.0,
+        ..column.clone()
+    });
+    let boot = engine.create_element(DivStyle {
+        flex_grow: 1.0,
+        justify_content: Some(crate::style::LayoutJustifyContent::Center),
+        ..column.clone()
+    });
+    let boot_text = engine.create_text("BOOT");
+    let slogan = engine.create_element(DivStyle::default());
+    let slogan_text = engine.create_text("Octo is your friend. Tell Octo what you want to do.");
+    let textarea = engine.create_textarea(
+        DivStyle {
+            width: CssDimension::Percent(1.0),
+            border_top: BorderStyle::Solid,
+            border_right: BorderStyle::Solid,
+            border_bottom: BorderStyle::Solid,
+            border_left: BorderStyle::Solid,
+            ..column
+        },
+        "x",
+    );
+    engine.append_child(root, transcript);
+    engine.append_child(root, textarea);
+    engine.append_child(transcript, inner);
+    engine.append_child(inner, boot);
+    engine.append_child(inner, slogan);
+    engine.append_child(boot, boot_text);
+    engine.append_child(slogan, slogan_text);
+    engine.set_root(root);
+
+    for newlines in 0..=8 {
+        let value = format!("x{}", "\n".repeat(newlines));
+        engine.set_input_value(textarea, &value, value.len() as u32);
+        engine.render_frame(80, 30).unwrap();
+        let metrics = engine.scroll_metrics(transcript).unwrap();
+        // Secondary reproduction: consume the native metrics exactly as a pinned client does.
+        engine.set_scroll_offset(
+            transcript,
+            0,
+            metrics.scroll_height.saturating_sub(metrics.client_height),
+        );
+        let frame = engine.render_frame(80, 30).unwrap();
+        assert_eq!(
+            frame
+                .cell(0, metrics.client_height as usize - 1)
+                .unwrap()
+                .character,
+            'O',
+            "newlines={newlines}"
+        );
+        assert_eq!(engine.scroll_metrics(transcript).unwrap().scroll_top, 0);
+    }
+}
+
+#[test]
 fn intersection_observer_reports_initial_geometry_and_threshold_crossing_after_scroll() {
     let mut engine = PaintEngine::new();
     let mut viewport_style = block_style(CssDimension::Length(5.0), CssDimension::Length(2.0));
