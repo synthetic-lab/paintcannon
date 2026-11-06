@@ -9,10 +9,10 @@ use super::{
     profile_log, scrollbar_suppresses_selection, EngineCommand, PaintEngine, SelectionAction,
 };
 use crate::event_notification::EventNotification;
-use crate::glyph_detection::HyperlinkCapability;
 use crate::native_event::{NativeEvent, NativeEventQueue};
 use crate::style::Background;
 use crate::terminal::copy_text_to_clipboard;
+use crate::terminal_capabilities::HyperlinkCapability;
 
 pub(crate) struct EngineLoopOptions {
     pub(crate) width: usize,

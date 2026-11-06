@@ -52,6 +52,28 @@ export function createMockNativeBinding(instances: MockNativePaintCannon[] = [])
 }
 
 export class MockNativePaintCannon implements NativePaintCannon {
+  notificationsSupported = true;
+  notificationsCanClose = false;
+  async notificationSupportsClose(): Promise<boolean> {
+    return this.notificationsCanClose;
+  }
+  async notificationPermission(): Promise<boolean> {
+    return this.notificationsSupported;
+  }
+  notifications: Array<{
+    id: number;
+    options: Parameters<NativePaintCannon["showNotification"]>[1];
+  }> = [];
+  closedNotifications: number[] = [];
+  showNotification(
+    id: number,
+    options: Parameters<NativePaintCannon["showNotification"]>[1],
+  ): void {
+    this.notifications.push({ id, options });
+  }
+  closeNotification(id: number): void {
+    this.closedNotifications.push(id);
+  }
   symbolsForLegacyComputing = false;
   async hasSymbolsForLegacyComputing(): Promise<boolean> {
     return this.symbolsForLegacyComputing;

@@ -1,4 +1,5 @@
-use super::{protocol::Request, Detection};
+use super::protocol::Request;
+use crate::terminal_capabilities::Detection;
 use crossbeam_channel::Sender;
 use napi::{Env, Result, Task};
 use std::sync::Arc;
@@ -32,7 +33,7 @@ impl Task for HasSymbolsForLegacyComputing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::glyph_detection::environment::Environment;
+    use crate::terminal_capabilities::environment::Environment;
     use std::sync::OnceLock;
 
     fn resolve(env: Environment) -> bool {

@@ -1,10 +1,9 @@
-use super::{
-    environment::Environment, protocol::Request, Detection, HyperlinkCapability, ProbeReport,
-    SAMPLES,
-};
+use super::{environment::Environment, Detection, HyperlinkCapability};
 use crate::engine::EngineCommand;
 use crate::event_notification::EventNotification;
+use crate::glyph_detection::{protocol::Request, ProbeReport, SAMPLES};
 use crate::native_event::{NativeEvent, NativeEventQueue};
+use crate::notifications::query;
 use crossbeam_channel::{bounded, select, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::thread::{self, JoinHandle};
@@ -12,24 +11,33 @@ use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
-pub(crate) struct FontMonitor {
+pub(crate) struct CapabilityMonitor {
     current: Arc<RwLock<Arc<Detection>>>,
     stop: Option<Sender<()>>,
     thread: Option<JoinHandle<()>>,
 }
 
-impl FontMonitor {
+impl CapabilityMonitor {
     pub(crate) fn start(
         queries: Option<Sender<Request>>,
+        notification_queries: Option<Sender<query::Request>>,
         commands: Sender<EngineCommand>,
         events: Arc<NativeEventQueue>,
         notifier: Arc<dyn EventNotification>,
     ) -> Self {
-        Self::start_with_environment(queries, commands, events, notifier, Environment::current)
+        Self::start_with_environment(
+            queries,
+            notification_queries,
+            commands,
+            events,
+            notifier,
+            Environment::current,
+        )
     }
 
     fn start_with_environment(
         queries: Option<Sender<Request>>,
+        notification_queries: Option<Sender<query::Request>>,
         commands: Sender<EngineCommand>,
         events: Arc<NativeEventQueue>,
         notifier: Arc<dyn EventNotification>,
@@ -38,6 +46,7 @@ impl FontMonitor {
         let (stop, stopping) = bounded(0);
         let current = Arc::new(RwLock::new(Arc::new(Detection {
             stop: stopping.clone(),
+            notification_queries: notification_queries.clone(),
             ..Detection::default()
         })));
         let shared = current.clone();
@@ -84,6 +93,7 @@ impl FontMonitor {
                 let next = Arc::new(Detection {
                     environment: OnceLock::from(environment()),
                     stop: stopping.clone(),
+                    notification_queries: notification_queries.clone(),
                     ..Detection::default()
                 });
                 *shared.write().unwrap() = next;
@@ -110,7 +120,7 @@ impl FontMonitor {
     }
 }
 
-impl Drop for FontMonitor {
+impl Drop for CapabilityMonitor {
     fn drop(&mut self) {
         self.shutdown();
     }
@@ -186,8 +196,8 @@ impl Published {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{NerdFontSet, NerdFontSupport};
     use super::*;
+    use crate::glyph_detection::{NerdFontSet, NerdFontSupport};
     use crossbeam_channel::{never, unbounded};
 
     struct Notify(Sender<()>);
@@ -331,7 +341,8 @@ mod tests {
         let (wake, _wakes) = unbounded();
         let events = Arc::new(NativeEventQueue::default());
         let mut pass = 0;
-        let mut monitor = FontMonitor::start_with_environment(
+        let mut monitor = CapabilityMonitor::start_with_environment(
+            None,
             None,
             commands,
             events,
@@ -375,7 +386,8 @@ mod tests {
         let (wake, wakes) = unbounded();
         let events = Arc::new(NativeEventQueue::default());
         let mut pass = 0;
-        let mut monitor = FontMonitor::start_with_environment(
+        let mut monitor = CapabilityMonitor::start_with_environment(
+            None,
             None,
             commands,
             events.clone(),
@@ -407,12 +419,77 @@ mod tests {
     }
 
     #[test]
+    fn notification_queries_are_shared_then_refreshed_with_the_environment() {
+        let (commands, rx) = unbounded();
+        let (queries, requests) = bounded::<query::Request>(1);
+        let (wake, _wakes) = unbounded();
+        let mut pass = 0;
+        let mut monitor = CapabilityMonitor::start_with_environment(
+            None,
+            Some(queries),
+            commands,
+            Arc::new(NativeEventQueue::default()),
+            Arc::new(Notify(wake)),
+            move || {
+                pass += 1;
+                Environment::from_pairs(&[(
+                    "TERM_PROGRAM",
+                    if pass == 1 {
+                        "ghostty"
+                    } else {
+                        "Apple_Terminal"
+                    },
+                )])
+            },
+        );
+        let mut previous = None;
+        for expected in [
+            Some(query::Support {
+                close: true,
+                ..query::Support::default()
+            }),
+            None,
+        ] {
+            // OSC 8 changes notify us that the new environment is published.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if matches!(
+                    rx.recv_deadline(deadline).unwrap(),
+                    EngineCommand::SetHyperlinkSupport { .. }
+                ) {
+                    break;
+                }
+            }
+            let snapshot = monitor.detection();
+            if let Some(ref previous) = previous {
+                assert!(!Arc::ptr_eq(previous, &snapshot));
+            }
+            assert!(
+                requests.is_empty(),
+                "queries are lazy, not emitted while idle"
+            );
+            let worker = {
+                let snapshot = snapshot.clone();
+                std::thread::spawn(move || snapshot.notification_support())
+            };
+            let request = requests.recv_timeout(Duration::from_secs(1)).unwrap();
+            request.reply.send(expected).unwrap();
+            assert_eq!(worker.join().unwrap(), expected);
+            assert_eq!(snapshot.notification_support(), expected);
+            assert!(requests.is_empty());
+            previous = Some(snapshot);
+        }
+        monitor.shutdown();
+    }
+
+    #[test]
     fn shutdown_interrupts_an_unanswered_probe() {
         let (commands, _rx) = unbounded();
         let (queries, requests) = bounded(1);
         let (wake, wakes) = unbounded();
-        let mut monitor = FontMonitor::start_with_environment(
+        let mut monitor = CapabilityMonitor::start_with_environment(
             Some(queries),
+            None,
             commands,
             Arc::new(NativeEventQueue::default()),
             Arc::new(Notify(wake)),

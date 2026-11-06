@@ -197,7 +197,7 @@ pub(crate) fn encode_tmux_passthrough(out: &mut impl Write, sequence: &[u8]) -> 
     out.write_all(b"\x1b\\")
 }
 
-fn allow_tmux_passthrough() -> bool {
+pub(crate) fn allow_tmux_passthrough() -> bool {
     static ALLOWED: OnceLock<bool> = OnceLock::new();
     *ALLOWED.get_or_init(|| {
         if !inside_tmux() {

@@ -17,12 +17,12 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use terminput::{
-    Event as TerminalEvent, KeyCode, KeyEvent as TerminalKeyEvent, KeyEventKind, KeyModifiers,
-    MediaKeyCode, ModifierDirection, ModifierKeyCode, MouseButton, MouseEvent as InputMouseEvent,
-    MouseEventKind, ScrollDirection,
+    KeyCode, KeyEvent as TerminalKeyEvent, KeyEventKind, KeyModifiers, MediaKeyCode,
+    ModifierDirection, ModifierKeyCode, MouseButton, MouseEvent as InputMouseEvent, MouseEventKind,
+    ScrollDirection,
 };
 
-use crate::input_reader::InputReader;
+use crate::input_reader::{Event as TerminalEvent, InputReader};
 
 use crate::engine::EngineCommand;
 use crate::event_notification::EventNotification;
@@ -40,6 +40,7 @@ const TERMINAL_SIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) struct TerminalInput {
     glyph_queries: crossbeam_channel::Sender<crate::glyph_detection::protocol::Request>,
+    notification_queries: crossbeam_channel::Sender<crate::notifications::query::Request>,
     focused: Arc<AtomicBool>,
     interrupted_by_ctrl_c: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
@@ -72,6 +73,7 @@ impl TerminalInput {
         renderer_tx: Option<crossbeam_channel::Sender<EngineCommand>>,
         event_queue: Arc<NativeEventQueue>,
         event_notifier: Arc<dyn EventNotification>,
+        notification_reports: Arc<crate::notifications::Reports>,
     ) -> Option<Self> {
         let TerminalInputOptions {
             synthetic_keyup_delay_ms,
@@ -83,6 +85,7 @@ impl TerminalInput {
         } = options;
         let mut reader = InputReader::open().ok()?;
         let glyph_queries = reader.enable_glyph_queries();
+        let notification_queries = reader.enable_notification_queries();
         if enable_raw_mode().is_err() {
             return None;
         }
@@ -158,6 +161,7 @@ impl TerminalInput {
                     let captured_guard = thread_terminal_captured.lock().ok();
                     let captured = captured_guard.as_deref().copied().unwrap_or(false);
                     reader.poll_glyph_queries(captured);
+                    reader.poll_notification_queries(captured);
                     // iTerm2 3.6.6 rebuilds mouse tracking in a deferred screen callback:
                     // https://github.com/gnachman/iTerm2/blob/v3.6.6/sources/VT100ScreenMutableState%2BTerminalDelegate.m#L1434-L1440
                     if reader.take_device_attributes_reply()
@@ -169,6 +173,7 @@ impl TerminalInput {
                 }
                 match reader.read(Duration::from_millis(25)) {
                     Ok(Some(event)) => match event {
+                        TerminalEvent::Notification(reply) => notification_reports.reply(reply),
                         TerminalEvent::Key(event) => {
                             if !capture_ctrl_c && is_ctrl_c_event(&event) {
                                 thread_interrupted_by_ctrl_c.store(true, Ordering::Release);
@@ -317,6 +322,7 @@ impl TerminalInput {
 
         Some(Self {
             glyph_queries,
+            notification_queries,
             focused,
             interrupted_by_ctrl_c,
             stop,
@@ -343,6 +349,12 @@ impl TerminalInput {
         &self,
     ) -> crossbeam_channel::Sender<crate::glyph_detection::protocol::Request> {
         self.glyph_queries.clone()
+    }
+
+    pub(crate) fn notification_queries(
+        &self,
+    ) -> crossbeam_channel::Sender<crate::notifications::query::Request> {
+        self.notification_queries.clone()
     }
 
     pub(crate) fn interrupted_by_ctrl_c(&self) -> bool {

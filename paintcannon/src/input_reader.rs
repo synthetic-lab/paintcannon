@@ -11,7 +11,31 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use crate::glyph_detection::protocol::{Queries, Request};
-use terminput::{Event, KeyCode};
+use terminput::KeyCode;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    Key(terminput::KeyEvent),
+    Mouse(terminput::MouseEvent),
+    Resize { cols: u32, rows: u32 },
+    FocusGained,
+    FocusLost,
+    Paste(String),
+    Notification(crate::notifications::protocol::Reply),
+}
+
+impl From<terminput::Event> for Event {
+    fn from(event: terminput::Event) -> Self {
+        match event {
+            terminput::Event::Key(key) => Self::Key(key),
+            terminput::Event::Mouse(mouse) => Self::Mouse(mouse),
+            terminput::Event::Resize { cols, rows } => Self::Resize { cols, rows },
+            terminput::Event::FocusGained => Self::FocusGained,
+            terminput::Event::FocusLost => Self::FocusLost,
+            terminput::Event::Paste(text) => Self::Paste(text),
+        }
+    }
+}
 
 const ESCAPE_DELAY: Duration = Duration::from_millis(25);
 const MAX_SEQUENCE: usize = 4096;
@@ -26,6 +50,7 @@ struct Parser {
     control_bytes: Vec<u8>,
     control_overflow: bool,
     glyph_queries: Option<Queries>,
+    notification_queries: Option<crate::notifications::query::Queries>,
     escape_since: Option<Instant>,
     events: VecDeque<Event>,
     kitty: Option<bool>,
@@ -46,10 +71,25 @@ impl Parser {
                 continue;
             }
             if let Some(kind) = self.control_string {
-                if self.control_escape && byte == b'\\' && kind == b'_' && !self.control_overflow {
-                    self.control_bytes.pop(); // The ESC preceding ST is not part of the body.
-                    if let Some(queries) = &mut self.glyph_queries {
-                        queries.reply(&self.control_bytes);
+                let terminated =
+                    (self.control_escape && byte == b'\\') || (kind == b']' && byte == 7);
+                if terminated && !self.control_overflow {
+                    if self.control_escape {
+                        self.control_bytes.pop();
+                    }
+                    if kind == b'_' {
+                        if let Some(queries) = &mut self.glyph_queries {
+                            queries.reply(&self.control_bytes);
+                        }
+                    } else if kind == b']' {
+                        if let Some(queries) = &mut self.notification_queries {
+                            queries.reply(&self.control_bytes);
+                        }
+                        if let Some(reply) =
+                            crate::notifications::protocol::parse_reply(&self.control_bytes)
+                        {
+                            self.events.push_back(Event::Notification(reply));
+                        }
                     }
                 }
                 if (self.control_escape && byte == b'\\')
@@ -58,7 +98,7 @@ impl Parser {
                 {
                     self.control_string = None;
                 }
-                if kind == b'_' && !self.control_overflow {
+                if matches!(kind, b'_' | b']') && !self.control_overflow {
                     if self.control_bytes.len() < MAX_SEQUENCE {
                         self.control_bytes.push(byte);
                     } else {
@@ -134,6 +174,9 @@ impl Parser {
                     continue;
                 }
                 if self.sequence.starts_with(b"\x1b[?") && byte == b'c' {
+                    if let Some(queries) = &mut self.notification_queries {
+                        queries.heartbeat(now);
+                    }
                     self.kitty.get_or_insert(false);
                     self.device_attributes_received = true;
                     self.sequence.clear();
@@ -147,9 +190,9 @@ impl Parser {
                     continue;
                 }
             }
-            match Event::parse_from(&self.sequence) {
+            match terminput::Event::parse_from(&self.sequence) {
                 Ok(Some(event)) => {
-                    self.events.push_back(event);
+                    self.events.push_back(event.into());
                     self.sequence.clear();
                 }
                 Ok(None) if self.sequence.len() < MAX_SEQUENCE => {}
@@ -186,6 +229,27 @@ impl InputReader {
         let (sender, queries) = Queries::new();
         self.parser.glyph_queries = Some(queries);
         sender
+    }
+
+    pub(crate) fn enable_notification_queries(
+        &mut self,
+    ) -> crossbeam_channel::Sender<crate::notifications::query::Request> {
+        let (sender, queries) = crate::notifications::query::Queries::new();
+        self.parser.notification_queries = Some(queries);
+        sender
+    }
+
+    pub(crate) fn poll_notification_queries(&mut self, captured: bool) {
+        if let Some(queries) = &mut self.parser.notification_queries {
+            if queries.has_work() {
+                queries.poll(
+                    captured && io::stdout().is_terminal(),
+                    &mut io::stdout().lock(),
+                    std::env::var_os("TMUX").is_some(),
+                    Instant::now(),
+                );
+            }
+        }
     }
 
     pub(crate) fn poll_glyph_queries(&mut self, captured: bool) {
@@ -310,6 +374,219 @@ mod tests {
     use std::os::fd::{FromRawFd, OwnedFd};
     use std::os::unix::net::UnixStream;
     use terminput::{KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind, ScrollDirection};
+
+    fn pending_notification_query() -> (
+        crate::notifications::query::Queries,
+        String,
+        crossbeam_channel::Receiver<Option<crate::notifications::query::Support>>,
+    ) {
+        use crate::notifications::query::{Queries, Request, QUERY_TIMEOUT};
+        let (tx, mut queries) = Queries::new();
+        let (reply, response) = crossbeam_channel::bounded(1);
+        let now = Instant::now();
+        tx.send(Request {
+            deadline: now + QUERY_TIMEOUT,
+            reply,
+        })
+        .unwrap();
+        let mut bytes = Vec::new();
+        queries.poll(true, &mut bytes, false, now);
+        let query = String::from_utf8(bytes).unwrap();
+        let id = query
+            .strip_prefix("\x1b]99;i=")
+            .unwrap()
+            .split_once(":p=?;")
+            .unwrap()
+            .0
+            .to_string();
+        (queries, id, response)
+    }
+
+    #[test]
+    fn notification_query_replies_are_fragment_safe_and_preserve_user_event_order() {
+        use crate::notifications::query::Support;
+        for terminator in ["\x07", "\x1b\\"] {
+            // Fragment the entire stream at every byte, including OSC and ST.
+            for split in 0.. {
+                let (queries, id, response) = pending_notification_query();
+                let bytes = format!("a\x1b]99;i={id}:p=?;p=title,body,close:c=1{terminator}\x1b[?1;2c\x1b[200~paste\x1b[201~\x1b[O\x1b]99;i=pc-live;{terminator}b");
+                if split > bytes.len() {
+                    break;
+                }
+                let mut parser = Parser {
+                    notification_queries: Some(queries),
+                    ..Default::default()
+                };
+                let now = Instant::now();
+                parser.feed(&bytes.as_bytes()[..split], now);
+                parser.feed(&bytes.as_bytes()[split..], now);
+                assert_eq!(
+                    response.try_recv().unwrap(),
+                    Some(Support {
+                        body: true,
+                        close: true,
+                        close_events: true,
+                        ..Support::default()
+                    })
+                );
+                assert_eq!(
+                    parser.events.into_iter().collect::<Vec<_>>(),
+                    vec![
+                        Event::Key(KeyCode::Char('a').into()),
+                        Event::Paste("paste".into()),
+                        Event::FocusLost,
+                        Event::Notification(crate::notifications::protocol::Reply {
+                            id: "pc-live".into(),
+                            kind: "click"
+                        }),
+                        Event::Key(KeyCode::Char('b').into()),
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pasted_and_oversized_notification_query_replies_do_not_enable_support() {
+        let (queries, id, response) = pending_notification_query();
+        let mut parser = Parser {
+            notification_queries: Some(queries),
+            ..Default::default()
+        };
+        let reply = format!("\x1b]99;i={id}:p=?;p=title,close\x1b\\");
+        let now = Instant::now();
+        parser.feed(
+            format!("\x1b[200~{reply}\x1b[?1;2c\x1b[201~").as_bytes(),
+            now,
+        );
+        assert!(response.is_empty());
+        parser.feed(
+            format!(
+                "\x1b]99;i={id}:p=?;p=title,close:extra={}\x1b\\",
+                "x".repeat(MAX_SEQUENCE)
+            )
+            .as_bytes(),
+            now,
+        );
+        assert!(response.is_empty());
+        parser.feed(format!("\x1b]99;i={id}:p=?;p=title\x1b\\").as_bytes(), now);
+        assert_eq!(
+            response.try_recv().unwrap(),
+            Some(crate::notifications::query::Support::default())
+        );
+        assert_eq!(parser.events.len(), 1);
+        assert!(matches!(parser.events[0], Event::Paste(_)));
+    }
+
+    #[test]
+    fn device_attributes_end_unanswered_notification_queries_but_paste_does_not() {
+        let (queries, _id, response) = pending_notification_query();
+        let mut parser = Parser {
+            notification_queries: Some(queries),
+            ..Default::default()
+        };
+        let now = Instant::now();
+        parser.feed(b"\x1b[200~\x1b[?1;2c\x1b[201~", now);
+        parser.notification_queries.as_mut().unwrap().poll(
+            true,
+            &mut Vec::new(),
+            false,
+            now + Duration::from_millis(100),
+        );
+        assert!(response.is_empty(), "pasted DA cannot complete the probe");
+        parser.feed(b"\x1b[?1;", now + Duration::from_millis(100));
+        parser.feed(b"2c", now + Duration::from_millis(100));
+        parser.notification_queries.as_mut().unwrap().poll(
+            true,
+            &mut Vec::new(),
+            false,
+            now + Duration::from_millis(199),
+        );
+        assert_eq!(response.try_recv().unwrap(), None);
+        assert_eq!(parser.events.len(), 1);
+        assert!(matches!(parser.events[0], Event::Paste(_)));
+    }
+
+    #[test]
+    fn notification_probe_round_trip_uses_the_existing_reader() {
+        use crate::notifications::query::{Request, Support, QUERY_TIMEOUT};
+        let (mut reader, mut terminal) = connected_reader();
+        let tx = reader.enable_notification_queries();
+        let (reply, response) = crossbeam_channel::bounded(1);
+        let now = Instant::now();
+        tx.send(Request {
+            deadline: now + QUERY_TIMEOUT,
+            reply,
+        })
+        .unwrap();
+        let mut bytes = Vec::new();
+        reader
+            .parser
+            .notification_queries
+            .as_mut()
+            .unwrap()
+            .poll(true, &mut bytes, false, now);
+        let query = String::from_utf8(bytes).unwrap();
+        let id = query
+            .strip_prefix("\x1b]99;i=")
+            .unwrap()
+            .split_once(":p=?;")
+            .unwrap()
+            .0;
+        terminal
+            .write_all(format!("a\x1b]99;i={id}:p=?;p=title,close\x1b\\b").as_bytes())
+            .unwrap();
+        assert_eq!(
+            reader.read(Duration::from_millis(100)).unwrap(),
+            Some(Event::Key(KeyCode::Char('a').into()))
+        );
+        assert_eq!(
+            reader.read(Duration::from_millis(100)).unwrap(),
+            Some(Event::Key(KeyCode::Char('b').into()))
+        );
+        assert_eq!(
+            response.try_recv().unwrap(),
+            Some(Support {
+                close: true,
+                ..Support::default()
+            })
+        );
+    }
+
+    #[test]
+    fn notification_replies_preserve_input_order_across_every_fragment_boundary() {
+        for terminator in ["\x07", "\x1b\\"] {
+            let bytes = format!("a\x1b]99;i=pc-1;{terminator}\x1b[200~paste\x1b[201~\x1b]99;i=pc-1:p=close;{terminator}b");
+            for split in 0..=bytes.len() {
+                let events = parse(&[&bytes.as_bytes()[..split], &bytes.as_bytes()[split..]]);
+                assert_eq!(
+                    events,
+                    vec![
+                        Event::Key(KeyCode::Char('a').into()),
+                        Event::Notification(crate::notifications::protocol::Reply {
+                            id: "pc-1".into(),
+                            kind: "click"
+                        }),
+                        Event::Paste("paste".into()),
+                        Event::Notification(crate::notifications::protocol::Reply {
+                            id: "pc-1".into(),
+                            kind: "close"
+                        }),
+                        Event::Key(KeyCode::Char('b').into()),
+                    ]
+                );
+            }
+        }
+        assert_eq!(
+            parse(&[b"\x1b[200~\x1b]99;i=pc-1;\x07\x1b[201~"]),
+            vec![Event::Paste("\x1b]99;i=pc-1;\x07".into())]
+        );
+        let oversized = format!("\x1b]99;i={};\x07x", "a".repeat(MAX_SEQUENCE));
+        assert_eq!(
+            parse(&[oversized.as_bytes()]),
+            vec![Event::Key(KeyCode::Char('x').into())]
+        );
+    }
 
     fn connected_reader() -> (InputReader, UnixStream) {
         let (input, terminal) = UnixStream::pair().unwrap();

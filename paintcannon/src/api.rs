@@ -4,9 +4,7 @@ use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
-use crate::glyph_detection::{
-    FontMonitor, HasNerdFontSet, HasSymbolsForLegacyComputing, NerdFontSet,
-};
+use crate::glyph_detection::{HasNerdFontSet, HasSymbolsForLegacyComputing, NerdFontSet};
 use crossbeam_channel::{bounded, Sender};
 use napi::bindgen_prelude::Function;
 use napi::{Error, Result};
@@ -22,6 +20,9 @@ use crate::layout::{
     ArenaScrollMetrics, IntersectionMarginValue, IntersectionRootMargin, ScrollbarAxis,
 };
 use crate::native_event::{NativeEvent, NativeEventQueue};
+use crate::notifications::{
+    NotificationCapability, NotificationOptions, NotificationSupport, Notifications,
+};
 use crate::style::{
     parse_align_items, parse_border_style, parse_box_lengths, parse_cursor, parse_dimension,
     parse_display, parse_flex_direction, parse_flex_flow, parse_flex_shorthand, parse_flex_wrap,
@@ -37,6 +38,7 @@ use crate::terminal::{
     query_terminal_colors, query_terminal_profile, query_terminal_size, reset_terminal,
     TerminalSize,
 };
+use crate::terminal_capabilities::CapabilityMonitor;
 
 const RENDER_QUEUE_CAPACITY: usize = 32 * 1024;
 const DEFAULT_SYNTHETIC_KEYUP_MS: u32 = 180;
@@ -125,17 +127,46 @@ pub struct PaintCannon {
     events: Arc<NativeEventQueue>,
     kitty_keyboard_enabled: bool,
     next_dom_id: u32,
-    fonts: FontMonitor,
+    capabilities: CapabilityMonitor,
+    notifications: Notifications,
 }
 
 #[napi]
 impl PaintCannon {
     #[napi]
+    pub fn notification_permission(&self) -> napi::bindgen_prelude::AsyncTask<NotificationSupport> {
+        napi::bindgen_prelude::AsyncTask::new(NotificationSupport {
+            detection: self.capabilities.detection(),
+            capability: NotificationCapability::Delivery,
+        })
+    }
+
+    #[napi]
+    pub fn notification_supports_close(
+        &self,
+    ) -> napi::bindgen_prelude::AsyncTask<NotificationSupport> {
+        napi::bindgen_prelude::AsyncTask::new(NotificationSupport {
+            detection: self.capabilities.detection(),
+            capability: NotificationCapability::Close,
+        })
+    }
+
+    #[napi]
+    pub fn show_notification(&self, id: u32, options: NotificationOptions) -> Result<()> {
+        self.notifications
+            .show(id, options, self.capabilities.detection())
+    }
+
+    #[napi]
+    pub fn close_notification(&self, id: u32) -> Result<()> {
+        self.notifications.close(id)
+    }
+    #[napi]
     pub fn has_symbols_for_legacy_computing(
         &self,
     ) -> napi::bindgen_prelude::AsyncTask<HasSymbolsForLegacyComputing> {
         napi::bindgen_prelude::AsyncTask::new(HasSymbolsForLegacyComputing {
-            detection: self.fonts.detection(),
+            detection: self.capabilities.detection(),
             queries: self.input.as_ref().map(TerminalInput::glyph_queries),
         })
     }
@@ -147,7 +178,7 @@ impl PaintCannon {
     ) -> napi::bindgen_prelude::AsyncTask<HasNerdFontSet> {
         napi::bindgen_prelude::AsyncTask::new(HasNerdFontSet::new(
             set,
-            self.fonts.detection(),
+            self.capabilities.detection(),
             self.input.as_ref().map(TerminalInput::glyph_queries),
         ))
     }
@@ -187,6 +218,7 @@ impl PaintCannon {
             event_notifier: engine_event_notifier.clone(),
         };
         let thread = thread::spawn(move || engine_loop(rx, loop_options));
+        let notifications = Notifications::start(events.clone(), engine_event_notifier.clone());
         let input = TerminalInput::start(
             TerminalInputOptions {
                 synthetic_keyup_delay_ms: DEFAULT_SYNTHETIC_KEYUP_MS,
@@ -199,14 +231,16 @@ impl PaintCannon {
             Some(tx.clone()),
             Arc::clone(&events),
             engine_event_notifier.clone(),
+            notifications.reports.clone(),
         );
         let kitty_keyboard_enabled = input
             .as_ref()
             .map(TerminalInput::kitty_keyboard_enabled)
             .unwrap_or(false);
 
-        let fonts = FontMonitor::start(
+        let capabilities = CapabilityMonitor::start(
             input.as_ref().map(TerminalInput::glyph_queries),
+            input.as_ref().map(TerminalInput::notification_queries),
             tx.clone(),
             events.clone(),
             engine_event_notifier,
@@ -219,7 +253,8 @@ impl PaintCannon {
             events,
             kitty_keyboard_enabled,
             next_dom_id: 1,
-            fonts,
+            capabilities,
+            notifications,
         })
     }
 
@@ -1036,7 +1071,8 @@ impl PaintCannon {
     }
 
     fn shutdown(&mut self) {
-        self.fonts.shutdown();
+        self.capabilities.shutdown();
+        self.notifications.shutdown();
         let _ = self.tx.send(EngineCommand::Shutdown { response: None });
 
         if let Some(thread) = self.thread.take() {

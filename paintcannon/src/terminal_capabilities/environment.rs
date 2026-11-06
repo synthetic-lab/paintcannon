@@ -8,7 +8,7 @@ use super::{
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum ClientPlatform {
+pub(crate) enum ClientPlatform {
     #[default]
     Unknown,
     MacOs,
@@ -16,7 +16,7 @@ pub(super) enum ClientPlatform {
 }
 
 impl ClientPlatform {
-    pub(super) fn local() -> Self {
+    pub(crate) fn local() -> Self {
         if cfg!(target_os = "macos") {
             Self::MacOs
         } else if cfg!(target_os = "linux") {
@@ -41,14 +41,14 @@ pub(super) fn resolve_hyperlink_support(
     HyperlinkCapability::Confirmed { open_hint }
 }
 
-pub(super) struct Environment {
+pub(crate) struct Environment {
     values: HashMap<String, String>,
     clients: Option<Vec<Capabilities>>,
     platform: ClientPlatform,
 }
 
 impl Environment {
-    pub(super) fn current() -> Self {
+    pub(crate) fn current() -> Self {
         let mut environment = Self {
             values: std::env::vars_os()
                 .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
@@ -62,7 +62,7 @@ impl Environment {
         environment
     }
 
-    pub(super) fn from_pairs(pairs: &[(&str, &str)]) -> Self {
+    pub(crate) fn from_pairs(pairs: &[(&str, &str)]) -> Self {
         Self {
             values: pairs
                 .iter()
@@ -73,7 +73,7 @@ impl Environment {
         }
     }
 
-    pub(super) fn with_platform(mut self, platform: ClientPlatform) -> Self {
+    pub(crate) fn with_platform(mut self, platform: ClientPlatform) -> Self {
         self.platform = platform;
         self
     }
@@ -89,33 +89,42 @@ impl Environment {
     }
 
     #[cfg(test)]
-    pub(super) fn with_clients(mut self, clients: Vec<Capabilities>) -> Self {
+    pub(crate) fn with_clients(mut self, clients: Vec<Capabilities>) -> Self {
         self.clients = Some(clients);
         self
     }
 
-    pub(super) fn can_probe(&self) -> bool {
+    pub(crate) fn can_probe(&self) -> bool {
+        self.has_single_terminal() && self.capabilities().supports_apc
+    }
+
+    pub(crate) fn has_single_terminal(&self) -> bool {
         // Passthrough replies carry no client identity. One positive reply cannot
         // prove support in every attached client; no clients cannot answer at all.
         self.clients
             .as_ref()
             .is_none_or(|clients| clients.len() == 1)
-            && self.capabilities().supports_apc
     }
 
     fn get(&self, key: &str) -> &str {
         self.values.get(key).map(String::as_str).unwrap_or("")
     }
 
-    pub(super) fn nerd_font_override(&self) -> Option<bool> {
+    pub(crate) fn nerd_font_override(&self) -> Option<bool> {
         self.values.get("NERD_FONT").map(|value| value != "0")
     }
 
-    pub(super) fn capabilities(&self) -> Capabilities {
+    pub(crate) fn capabilities(&self) -> Capabilities {
         if let Some(clients) = &self.clients {
             // Never use the pane's inherited terminal identifiers or markers:
             // they describe the terminal that started it, not today's clients.
             return Capabilities {
+                notifications: clients
+                    .iter()
+                    .map(|client| client.notifications)
+                    .reduce(|a, b| a.intersect(b))
+                    .unwrap_or_default(),
+                local: !clients.is_empty() && clients.iter().all(|client| client.local),
                 supports_apc: !clients.is_empty()
                     && clients.iter().all(|client| client.supports_apc),
                 osc8: match clients.as_slice() {
@@ -143,6 +152,8 @@ impl Environment {
             .or_else(|| terminals::from_term(self.get("TERM")))
         {
             return Capabilities {
+                notifications: terminal.capabilities.notifications,
+                local: self.client_platform() != ClientPlatform::Unknown,
                 osc8: resolve_hyperlink_support(terminal.capabilities.osc8, self.client_platform()),
                 supports_apc: terminal.capabilities.supports_apc,
                 nerd_font: terminal.capabilities.nerd_font,
@@ -150,16 +161,122 @@ impl Environment {
             };
         }
 
-        MARKERS
+        let mut capabilities = MARKERS
             .iter()
             .find_map(|marker| (marker.detect)(self.get(marker.name)))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        capabilities.local = self.client_platform() != ClientPlatform::Unknown;
+        capabilities
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn otty_is_identified_by_term_program_not_generic_term() {
+        for program in ["otty", "Otty"] {
+            let capabilities = Environment::from_pairs(&[
+                ("TERM", "xterm-256color"),
+                ("TERM_PROGRAM", program),
+                ("SSH_CONNECTION", "remote client"),
+            ])
+            .with_platform(ClientPlatform::Linux)
+            .capabilities();
+            assert!(capabilities.notifications.osc777);
+            assert!(capabilities.notifications.osc9);
+            assert!(capabilities.nerd_font);
+            assert!(capabilities.supports_apc);
+            assert!(!capabilities.symbols_for_legacy_computing);
+            assert!(!capabilities.local);
+            assert_eq!(
+                capabilities.osc8,
+                HyperlinkCapability::Confirmed {
+                    open_hint: "Cmd-Click to open",
+                }
+            );
+        }
+        assert_eq!(
+            Environment::from_pairs(&[("TERM", "xterm-256color")]).capabilities(),
+            Capabilities::default(),
+        );
+    }
+
+    #[test]
+    fn notification_protocols_follow_outer_terminal_and_common_client_support() {
+        let ghostty = Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")]).capabilities();
+        let kitty = Environment::from_pairs(&[("TERM", "xterm-kitty")]).capabilities();
+        let iterm = Environment::from_pairs(&[("TERM_PROGRAM", "iTerm.app")]).capabilities();
+        assert!(ghostty.notifications.osc777);
+        assert!(kitty.notifications.osc9);
+        assert!(iterm.notifications.osc9);
+        let mixed = Environment::from_pairs(&[]).with_clients(vec![ghostty, kitty]);
+        assert_eq!(
+            mixed.capabilities().notifications,
+            super::super::NotificationProtocols::SIMPLE
+        );
+        let mixed = Environment::from_pairs(&[]).with_clients(vec![ghostty, iterm]);
+        assert_eq!(
+            mixed.capabilities().notifications,
+            super::super::NotificationProtocols::ITERM
+        );
+        let konsole = Environment::from_pairs(&[("TERM_PROGRAM", "konsole")]).capabilities();
+        let mixed = Environment::from_pairs(&[]).with_clients(vec![ghostty, konsole]);
+        assert_eq!(
+            mixed.capabilities().notifications,
+            super::super::NotificationProtocols::URXVT
+        );
+        let mixed = Environment::from_pairs(&[]).with_clients(vec![iterm, konsole]);
+        assert_eq!(mixed.capabilities().notifications, Default::default());
+        let unknown = Environment::from_pairs(&[]).with_clients(vec![ghostty, Default::default()]);
+        assert_eq!(unknown.capabilities().notifications, Default::default());
+        let detached = Environment::from_pairs(&[("TERM_PROGRAM", "ghostty")]).with_clients(vec![]);
+        assert_eq!(detached.capabilities().notifications, Default::default());
+        assert!(!detached.capabilities().local);
+    }
+
+    #[test]
+    fn multiple_clients_keep_common_delivery_protocols_but_cannot_be_probed() {
+        let otty = Environment::from_pairs(&[("TERM_PROGRAM", "otty")]).capabilities();
+        let kitty = Environment::from_pairs(&[("TERM", "xterm-kitty")]).capabilities();
+        for clients in [vec![otty, kitty], vec![kitty, otty]] {
+            let mixed = Environment::from_pairs(&[]).with_clients(clients);
+            assert!(!mixed.has_single_terminal());
+            assert!(mixed.capabilities().notifications.osc9);
+            assert!(mixed.capabilities().notifications.osc777);
+        }
+        assert!(!Environment::from_pairs(&[])
+            .with_clients(vec![kitty, kitty])
+            .has_single_terminal());
+        assert!(Environment::from_pairs(&[])
+            .with_clients(vec![otty])
+            .has_single_terminal());
+    }
+
+    #[test]
+    fn local_notification_fallback_requires_every_client_to_be_known_local() {
+        let local = Environment::from_pairs(&[])
+            .with_platform(ClientPlatform::Linux)
+            .capabilities();
+        let remote = Environment::from_pairs(&[("SSH_CONNECTION", "connection")])
+            .with_platform(ClientPlatform::Linux)
+            .capabilities();
+        assert!(local.local);
+        assert!(!remote.local);
+        assert!(
+            !Environment::from_pairs(&[])
+                .with_clients(vec![local, remote])
+                .capabilities()
+                .local
+        );
+        assert!(
+            Environment::from_pairs(&[])
+                .with_clients(vec![local, local])
+                .capabilities()
+                .local
+        );
+    }
 
     #[test]
     fn fallback_markers_identify_apc_support_without_overriding_known_terminals() {
@@ -473,6 +590,14 @@ mod tests {
                         .with_platform(ClientPlatform::Linux)
                         .capabilities(),
                     Capabilities {
+                        notifications: match term {
+                            "xterm-ghostty" | "wezterm" | "xterm-kitty" | "rio" =>
+                                super::super::NotificationProtocols::SIMPLE,
+                            "foot" | "foot-extra" | "foot-direct" =>
+                                super::super::NotificationProtocols::SIMPLE,
+                            _ => Default::default(),
+                        },
+                        local: false,
                         supports_apc,
                         nerd_font,
                         symbols_for_legacy_computing,
@@ -524,6 +649,8 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    notifications: super::super::NotificationProtocols::SIMPLE,
+                    local: false,
                     supports_apc: true,
                     nerd_font: true,
                     symbols_for_legacy_computing: true,
@@ -576,6 +703,12 @@ mod tests {
                 assert_eq!(
                     env.capabilities(),
                     Capabilities {
+                        notifications: match marker.0 {
+                            "KITTY_WINDOW_ID" => super::super::NotificationProtocols::SIMPLE,
+                            "KONSOLE_DBUS_SESSION" => super::super::NotificationProtocols::URXVT,
+                            _ => Default::default(),
+                        },
+                        local: false,
                         supports_apc: true,
                         nerd_font: false,
                         symbols_for_legacy_computing: true,
@@ -632,6 +765,13 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    notifications: match term {
+                        "xterm-ghostty" | "wezterm" | "xterm-kitty" | "rio" =>
+                            super::super::NotificationProtocols::SIMPLE,
+                        "foot-direct" => super::super::NotificationProtocols::SIMPLE,
+                        _ => Default::default(),
+                    },
+                    local: false,
                     supports_apc: true,
                     nerd_font,
                     symbols_for_legacy_computing,
@@ -678,6 +818,12 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    notifications: if matches!(program, "WezTerm" | "ghostty" | "unrecognized") {
+                        super::super::NotificationProtocols::SIMPLE
+                    } else {
+                        Default::default()
+                    },
+                    local: false,
                     supports_apc,
                     nerd_font,
                     symbols_for_legacy_computing,
@@ -718,6 +864,12 @@ mod tests {
             assert_eq!(
                 env.capabilities(),
                 Capabilities {
+                    notifications: if matches!(program, "WezTerm" | "ghostty") {
+                        super::super::NotificationProtocols::SIMPLE
+                    } else {
+                        Default::default()
+                    },
+                    local: false,
                     supports_apc,
                     nerd_font,
                     symbols_for_legacy_computing,

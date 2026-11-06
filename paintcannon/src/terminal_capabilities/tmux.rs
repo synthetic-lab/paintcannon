@@ -170,6 +170,29 @@ mod tests {
     }
 
     #[test]
+    fn otty_live_clients_are_identified_from_environment_or_version_reply() {
+        let version = client("%1 ", "xterm-256color", "").replacen(
+            "xterm-256color\t",
+            "xterm-256color\totty(1.6.4)",
+            1,
+        );
+        for output in [client("%1 ", "xterm-256color", "otty"), version] {
+            let clients = super::parse_clients(&output, "%1", |_| Some(true)).unwrap();
+            let pane = Environment::from_pairs(&[("TERM_PROGRAM", "tmux")]).with_clients(clients);
+            let capabilities = pane.capabilities();
+            assert!(capabilities.notifications.osc777);
+            assert!(capabilities.nerd_font);
+            assert!(!capabilities.local);
+            assert_eq!(
+                capabilities.osc8,
+                HyperlinkCapability::Confirmed {
+                    open_hint: "Cmd-Click to open",
+                }
+            );
+        }
+    }
+
+    #[test]
     fn local_ghostty_uses_host_platform_without_tmux_environment_support() {
         let local = client("%1 ", "xterm-ghostty", "");
         let expected = match ClientPlatform::local() {
@@ -311,6 +334,8 @@ mod tests {
             parse_clients(&output, "%1"),
             Some(vec![
                 Capabilities {
+                    notifications: super::super::NotificationProtocols::SIMPLE,
+                    local: true,
                     osc8: HyperlinkCapability::Confirmed {
                         open_hint: LOCAL_GHOSTTY_HINT
                     },
@@ -319,6 +344,8 @@ mod tests {
                     symbols_for_legacy_computing: true
                 },
                 Capabilities {
+                    notifications: super::super::NotificationProtocols::SIMPLE,
+                    local: true,
                     osc8: HyperlinkCapability::Confirmed {
                         open_hint: "Shift-Click to open"
                     },
@@ -337,7 +364,10 @@ mod tests {
             + &client("%1 ", "xterm-ghostty", "").replacen("0\t", "1\t", 1);
         assert_eq!(
             parse_clients(&output, "%1"),
-            Some(vec![Capabilities::default()])
+            Some(vec![Capabilities {
+                local: true,
+                ..Default::default()
+            }])
         );
         assert_eq!(parse_clients("truncated reply", "%1"), None);
     }
@@ -374,6 +404,12 @@ mod tests {
             ("COLORTERM", "truecolor", None, false, false),
         ] {
             let expected = Capabilities {
+                notifications: match name {
+                    "KITTY_WINDOW_ID" => super::super::NotificationProtocols::SIMPLE,
+                    "KONSOLE_DBUS_SESSION" => super::super::NotificationProtocols::URXVT,
+                    _ => Default::default(),
+                },
+                local: true,
                 osc8: hint.map_or(HyperlinkCapability::Unconfirmed, |open_hint| {
                     HyperlinkCapability::Confirmed { open_hint }
                 }),
@@ -385,7 +421,9 @@ mod tests {
             let output = client_with_environment("%1 ", "xterm-256color", &environment);
             assert_eq!(parse_clients(&output, "%1"), Some(vec![expected]), "{name}");
             assert_eq!(
-                Environment::from_pairs(&environment).capabilities(),
+                Environment::from_pairs(&environment)
+                    .with_platform(ClientPlatform::local())
+                    .capabilities(),
                 expected,
                 "local: {name}"
             );
@@ -434,6 +472,15 @@ mod tests {
             assert_eq!(
                 parse_clients(&output, "%1"),
                 Some(vec![Capabilities {
+                    notifications: if report.starts_with("WezTerm ")
+                        || report.starts_with("ghostty ")
+                        || report.starts_with("foot(")
+                    {
+                        super::super::NotificationProtocols::SIMPLE
+                    } else {
+                        Default::default()
+                    },
+                    local: true,
                     osc8: if legacy || nerd {
                         HyperlinkCapability::Confirmed { open_hint: hint }
                     } else {

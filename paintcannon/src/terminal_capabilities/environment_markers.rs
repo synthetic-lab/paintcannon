@@ -8,6 +8,8 @@ pub(super) struct EnvironmentMarker {
 
 const LEGACY_SYMBOLS: Capabilities = Capabilities {
     osc8: HyperlinkCapability::Unconfirmed,
+    notifications: super::NotificationProtocols::NONE,
+    local: false,
     supports_apc: true,
     nerd_font: false,
     symbols_for_legacy_computing: true,
@@ -24,6 +26,7 @@ pub(super) const MARKERS: &[EnvironmentMarker] = &[
         name: "KITTY_WINDOW_ID",
         detect: |value| {
             (!value.is_empty()).then_some(Capabilities {
+                notifications: super::NotificationProtocols::SIMPLE,
                 osc8: HyperlinkCapability::Confirmed {
                     open_hint: "Ctrl-Shift-Click to open",
                 },
@@ -58,7 +61,12 @@ pub(super) const MARKERS: &[EnvironmentMarker] = &[
     },
     EnvironmentMarker {
         name: "KONSOLE_DBUS_SESSION",
-        detect: legacy_symbols,
+        detect: |value| {
+            (!value.is_empty()).then_some(Capabilities {
+                notifications: super::NotificationProtocols::URXVT,
+                ..LEGACY_SYMBOLS
+            })
+        },
     },
     EnvironmentMarker {
         name: "GNOME_TERMINAL_SCREEN",

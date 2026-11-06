@@ -131,9 +131,13 @@ pub struct NativeEvent {
     pub intersection: Option<IntersectionEvent>,
     pub scroll: Option<ScrollEvent>,
     pub font: Option<FontChangeEvent>,
+    pub notification: Option<crate::notifications::NotificationEvent>,
 }
 
 impl NativeEvent {
+    pub(crate) fn notification(event: crate::notifications::NotificationEvent) -> Self {
+        Self::with_kind("notification", |native| native.notification = Some(event))
+    }
     pub(crate) fn font(set: Option<NerdFontSet>, supported: bool) -> Self {
         Self::with_kind("font", |native| {
             native.font = Some(FontChangeEvent { set, supported })
@@ -226,6 +230,7 @@ impl NativeEvent {
             intersection: None,
             scroll: None,
             font: None,
+            notification: None,
         };
         set_payload(&mut event);
         event

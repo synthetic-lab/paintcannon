@@ -1,23 +1,19 @@
 //! Font-set detection. Each polling pass shares a probe across callers.
 //! Samples indicate a patched font, not full coverage
 //! of every Nerd Fonts version or shaping sequence.
-mod capabilities;
-mod environment;
-mod environment_markers;
 mod legacy;
-mod monitor;
-mod ssh;
-mod terminals;
-mod tmux;
-pub(crate) use capabilities::HyperlinkCapability;
 pub(crate) use legacy::HasSymbolsForLegacyComputing;
-pub(crate) use monitor::FontMonitor;
 pub(crate) mod protocol;
+#[cfg(test)]
+use crate::terminal_capabilities::environment;
+use crate::terminal_capabilities::Detection;
 
-use crossbeam_channel::{bounded, never, select, Receiver, Sender};
+use crossbeam_channel::{bounded, select, Sender};
 use napi::{Env, Result, Task};
 use protocol::{Request, QUERY_TIMEOUT};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::time::Instant;
 
 #[napi_derive::napi(string_enum = "kebab-case")]
@@ -40,7 +36,7 @@ pub(crate) struct NerdFontSupport {
 }
 
 impl NerdFontSupport {
-    fn uniform(supported: bool) -> Self {
+    pub(crate) fn uniform(supported: bool) -> Self {
         Self {
             powerline: supported,
             powerline_extended: supported,
@@ -50,7 +46,7 @@ impl NerdFontSupport {
         }
     }
 
-    fn supports(self, set: NerdFontSet) -> bool {
+    pub(crate) fn supports(self, set: NerdFontSet) -> bool {
         match set {
             NerdFontSet::Powerline => self.powerline,
             NerdFontSet::PowerlineExtended => self.powerline_extended,
@@ -62,7 +58,7 @@ impl NerdFontSupport {
 }
 
 // Stable representatives from Nerd Fonts v3.3.0 glyphnames.json.
-const SAMPLES: &[(NerdFontSet, &[char])] = &[
+pub(crate) const SAMPLES: &[(NerdFontSet, &[char])] = &[
     (
         NerdFontSet::Powerline,
         &['\u{e0a0}', '\u{e0a1}', '\u{e0b0}'],
@@ -88,34 +84,13 @@ fn sample_characters() -> impl Iterator<Item = char> {
         .flat_map(|(_, samples)| samples.iter().copied())
 }
 
-pub(crate) struct Detection {
-    environment: OnceLock<environment::Environment>,
-    probed: OnceLock<ProbeReport>,
-    stop: Receiver<()>,
-}
-
-impl Default for Detection {
-    fn default() -> Self {
-        Self {
-            environment: OnceLock::new(),
-            probed: OnceLock::new(),
-            stop: never(),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct ProbeReport {
-    nerd_fonts: NerdFontSupport,
-    legacy_symbols: bool,
+pub(crate) struct ProbeReport {
+    pub(crate) nerd_fonts: NerdFontSupport,
+    pub(crate) legacy_symbols: bool,
 }
 
 impl Detection {
-    fn environment(&self) -> &environment::Environment {
-        self.environment
-            .get_or_init(environment::Environment::current)
-    }
-
     pub(crate) fn known_nerd_fonts(&self) -> Option<NerdFontSupport> {
         let env = self.environment();
         env.nerd_font_override()

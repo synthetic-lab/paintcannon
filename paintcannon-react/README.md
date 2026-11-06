@@ -256,6 +256,38 @@ both supported:
 - `useAnimation()` for requestAnimationFrame-driven animations that share a
   single render cycle.
 
+## Desktop Notifications
+
+Use the core API through `useApp().paintCannon`; no notification-specific React
+wrapper is needed:
+
+```tsx
+function NotifyButton() {
+  const { paintCannon } = useApp();
+  return (
+    <Button
+      onClick={() => {
+        new paintCannon.Notification("Build complete", { body: "All tests passed." });
+      }}
+    >
+      Notify
+    </Button>
+  );
+}
+```
+
+`requestPermission()` automatically grants when a backend is available, or returns
+`"denied"` otherwise, without a prompt. Rust selects OSC 99/777/9 or a local macOS/Linux command fallback;
+it never invokes a remote desktop fallback over SSH. Notification lifecycle
+feedback varies by backend. See [the core notification API](../paintcannon/README.md#desktop-notifications)
+for options, events, replacement, and dismissal limitations.
+
+Use `await paintCannon.Notification.supportsClose()` to decide whether to render a
+dismiss button. Permission to deliver notifications does not imply dismissal
+support. OSC 99 features, including dismissal, are queried from the terminal at
+runtime. OSC 9/777 and the macOS command fallback cannot dismiss notifications
+programmatically; Otty's current acknowledgement also does not advertise dismissal.
+
 ## Core Runtime
 
 This package depends on `paintcannon`, which provides the NAPI-RS native
