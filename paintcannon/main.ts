@@ -241,7 +241,7 @@ type EventListenerForTuple<
   TType extends ElementEventType,
 > = Extract<TEvents, readonly [TType, ElementEventListenerFunction]>[1];
 export type ClickEventListener = MouseEventListener;
-export type ImageRendering = "ascii" | "half-block";
+export type ImageRendering = "auto" | "ascii" | "half-block";
 export type CSSVisibility = "visible" | "hidden";
 export type CSSPosition = "static" | "relative" | "absolute";
 export type CSSWhiteSpace = "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";

@@ -30,7 +30,8 @@
     "demo:spinner": "npm run build && node dist/examples/spinner.js",
     "demo:todo": "npm run build && node dist/examples/todo.js",
     "test": "vitest run",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "demo:image-preview": "npm run build && node dist/examples/image-preview.js"
   },
   "dependencies": {
     "react-reconciler": "^0.31.0",

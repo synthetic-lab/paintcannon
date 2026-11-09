@@ -44,7 +44,7 @@ pub(crate) struct ImageLayoutData {
     pub(crate) height_px: u32,
     pub(crate) cell_width_px: u32,
     pub(crate) cell_height_px: u32,
-    pub(crate) rgb: Option<Vec<u8>>,
+    pub(crate) rgba: Option<std::sync::Arc<[u8]>>,
 }
 
 #[derive(Clone)]
@@ -479,7 +479,7 @@ impl LayoutArena {
                 height_px,
                 cell_width_px,
                 cell_height_px,
-                rgb: None,
+                rgba: None,
             }),
             style,
         )
@@ -518,7 +518,11 @@ impl LayoutArena {
         height_px: u32,
         rgb: Vec<u8>,
     ) {
-        self.set_image_pixels_and_cell_size(node, width_px, height_px, 1, 1, rgb);
+        let rgba = rgb
+            .chunks_exact(3)
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect();
+        self.set_image_pixels_and_cell_size(node, width_px, height_px, 1, 1, rgba);
     }
 
     pub(crate) fn set_image_pixels_and_cell_size(
@@ -528,7 +532,7 @@ impl LayoutArena {
         height_px: u32,
         cell_width_px: u32,
         cell_height_px: u32,
-        rgb: Vec<u8>,
+        rgba: Vec<u8>,
     ) {
         let item = &mut self.nodes[node_index(node)];
         if let LayoutNodeKind::Image(image) = &mut item.kind {
@@ -536,7 +540,7 @@ impl LayoutArena {
             image.height_px = height_px;
             image.cell_width_px = cell_width_px.max(1);
             image.cell_height_px = cell_height_px.max(1);
-            image.rgb = Some(rgb);
+            image.rgba = Some(rgba.into());
             self.clear_cache_from(node);
         }
     }

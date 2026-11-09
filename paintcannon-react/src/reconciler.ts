@@ -349,6 +349,13 @@ function createHostElement(
       applyCommonProps,
     );
   }
+  if (type === hostComponents.img.type) {
+    return hostComponents.reconcileImg.create(
+      paintCannon,
+      hostComponents.castHostProps(type, props),
+      applyCommonProps,
+    );
+  }
   if (type === hostComponents.input.type) {
     return hostComponents.reconcileInput.create(
       paintCannon,
@@ -370,14 +377,14 @@ function createHostElement(
 
 function appendPaintChild(parent: PaintElement, child: PaintNode): void {
   if (!canHaveChildren(parent)) {
-    throw new Error("Input and Textarea cannot have children");
+    throw new Error("Input, Textarea, and Img cannot have children");
   }
   parent.appendChild(child);
 }
 
 function insertPaintChild(parent: PaintElement, child: PaintNode, before: PaintNode): void {
   if (!canHaveChildren(parent)) {
-    throw new Error("Input and Textarea cannot have children");
+    throw new Error("Input, Textarea, and Img cannot have children");
   }
   parent.insertBefore(child, before);
 }
@@ -410,6 +417,11 @@ function applyHostElementProps(host: HostElement, newProps: HostProps): HostProp
   if (host.type === hostComponents.button.type) {
     const props = hostComponents.castHostProps(host.type, newProps);
     hostComponents.reconcileButton.applyProps(host.node, host.props, props, applyCommonProps);
+    return props;
+  }
+  if (host.type === hostComponents.img.type) {
+    const props = hostComponents.castHostProps(host.type, newProps);
+    hostComponents.reconcileImg.applyProps(host.node, host.props, props, applyCommonProps);
     return props;
   }
   if (host.type === hostComponents.input.type) {

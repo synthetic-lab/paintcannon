@@ -1,4 +1,4 @@
-import React from "react";
+import React, { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mock } from "antipattern";
 import {
@@ -6,13 +6,14 @@ import {
   PaintKeyboardEvent,
   paintCannonDeps,
   type AnchorElement,
+  type ImageElement,
   type InputElement,
   type DivElement,
   type PaintElement,
   type PaintResizeEvent,
   type TextAreaElement,
 } from "paintcannon";
-import { A, Div, Input, Textarea, render } from "../src/index.ts";
+import { A, Div, Img, Input, Textarea, render } from "../src/index.ts";
 import {
   createMockNativeBinding,
   keyboardInput,
@@ -550,4 +551,24 @@ describe("anchors", () => {
     expect(mockNativeInstances.at(-1)?.anchorHrefs.get(anchor!.id)).toBe("");
     root.paintCannon.stop();
   });
+});
+
+it("updates an image source in place and destroys it when the preview is removed", async () => {
+  const ref = createRef<ImageElement>();
+  const root = render(<Img ref={ref} src="first.png" style={{ width: 12, height: 6 }} />);
+  try {
+    await commit();
+    const original = ref.current;
+    expect(original?.src).toBe("first.png");
+    root.render(<Img ref={ref} src="second.png" style={{ width: 12, height: 6 }} />);
+    await commit();
+    expect(ref.current).toBe(original);
+    expect(original?.src).toBe("second.png");
+    root.render(null);
+    await commit();
+    expect(ref.current).toBeNull();
+    expect(mockNativeInstances.at(-1)?.destroyedNodes).toContain(original?.id);
+  } finally {
+    root.paintCannon.stop();
+  }
 });

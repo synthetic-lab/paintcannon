@@ -3,6 +3,7 @@ import * as a from "./a/a.ts";
 import * as button from "./button/button.ts";
 import * as div from "./div/div.ts";
 import * as form from "./form/form.ts";
+import * as img from "./img/img.ts";
 import * as input from "./input/input.ts";
 import * as span from "./span/span.ts";
 import * as textarea from "./textarea/textarea.ts";
@@ -14,6 +15,7 @@ export type HostProps =
   | span.Props
   | form.Props
   | button.Props
+  | img.Props
   | input.Props
   | textarea.Props;
 
@@ -39,6 +41,7 @@ export type HostElement =
   | MountedComponent<typeof span>
   | MountedComponent<typeof form>
   | MountedComponent<typeof button>
+  | MountedComponent<typeof img>
   | MountedComponent<typeof input>
   | MountedComponent<typeof textarea>;
 
@@ -58,6 +61,7 @@ const hostPropsForType = {
   [span.type]: undefined as unknown as span.Props,
   [form.type]: undefined as unknown as form.Props,
   [button.type]: undefined as unknown as button.Props,
+  [img.type]: undefined as unknown as img.Props,
   [input.type]: undefined as unknown as input.Props,
   [textarea.type]: undefined as unknown as textarea.Props,
 } satisfies { [K in HostType]: HostProps };

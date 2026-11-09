@@ -141,7 +141,7 @@ impl Default for DivStyle {
             overflow_anchor: CssOverflowAnchor::Auto,
             scrollbar_color: ScrollbarColor::Auto,
             scrollbar_gutter: ScrollbarGutter::Auto,
-            image_rendering: ImageRendering::HalfBlock,
+            image_rendering: ImageRendering::Auto,
             white_space: CssWhiteSpace::Normal,
             overflow_wrap: CssOverflowWrap::Inherit,
             word_break: CssWordBreak::Inherit,
@@ -225,6 +225,7 @@ impl ScrollbarColor {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ImageRendering {
+    Auto,
     Ascii,
     HalfBlock,
 }
@@ -989,6 +990,7 @@ pub(crate) fn parse_scrollbar_gutter(value: &str) -> Result<ScrollbarGutter> {
 
 pub(crate) fn parse_image_rendering(value: &str) -> Result<ImageRendering> {
     match value.trim() {
+        "auto" => Ok(ImageRendering::Auto),
         "ascii" => Ok(ImageRendering::Ascii),
         "half-block" => Ok(ImageRendering::HalfBlock),
         value => Err(Error::from_reason(format!(

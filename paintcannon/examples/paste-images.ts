@@ -141,7 +141,7 @@ async function renderPastedImages(files: PaintFile[]): Promise<void> {
       image.src = filePath;
       image.style.width = 28;
       image.style.height = 10;
-      image.style.imageRendering = "half-block";
+      image.style.imageRendering = "auto";
       images.appendChild(image);
       return image;
     });

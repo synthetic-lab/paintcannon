@@ -2,6 +2,7 @@
 //! about the installed font. Legacy support includes the smooth mosaic corners
 //! U+1FB41/U+1FB4C/U+1FB52/U+1FB5D; sextants alone are insufficient.
 use super::NotificationProtocols;
+use crate::graphics::GraphicsProtocol;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum HyperlinkSupport {
@@ -21,6 +22,7 @@ pub(super) struct TerminalCapabilities {
     pub(super) osc8: HyperlinkSupport,
     pub(super) notifications: NotificationProtocols,
     pub(super) supports_apc: bool,
+    pub(super) graphics: Option<GraphicsProtocol>,
     pub(super) nerd_font: bool,
     pub(super) symbols_for_legacy_computing: bool,
 }
@@ -39,6 +41,8 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["otty"],
         capabilities: TerminalCapabilities {
+            // https://docs.otty.sh/terminal-features/images documents Kitty PNG graphics.
+            graphics: Some(GraphicsProtocol::Kitty),
             // OSC 9 (body) and 777 (title/body) both create desktop notifications.
             // Shell-controlled notifications default to enabled. OSC 99 is queried.
             // https://docs.otty.sh/terminal-features/notifications
@@ -65,6 +69,7 @@ const TERMINALS: &[Terminal] = &[
         term: &["domterm"],
         term_program: &["domterm"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // No OSC 9 notification handler; OSC 777 is explicitly ignored.
             // https://github.com/PerBothner/DomTerm/blob/master/hlib/domterm-parser.js (handleOperatingSystemControl)
             notifications: NotificationProtocols::NONE,
@@ -88,6 +93,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["hterm"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // OSC 9 and OSC 777;notify both call hterm.notify (browser permissions apply).
             // https://chromium.googlesource.com/apps/libapps/+/HEAD/hterm/js/hterm_vt.js
             notifications: NotificationProtocols::SIMPLE,
@@ -110,6 +116,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["hyper"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // No built-in OSC 9/777 notification handler in Hyper's xterm.js setup;
             // notification plugins are not evidence of support in a stock install.
             // https://github.com/vercel/hyper/blob/canary/lib/components/term.tsx
@@ -133,6 +140,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["mintty"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // OSC 9 only handles ConEmu-style taskbar progress (9;4), not messages;
             // do_cmd has no OSC 777 notification handler.
             // https://github.com/mintty/mintty/blob/master/src/termout.c (do_cmd)
@@ -153,6 +161,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["terminology"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // OSC 777;notify is implemented; OSC 9 messages are not. The
             // notification_escapes setting defaults to true (config.c).
             // https://github.com/borisfaure/terminology/blob/master/src/bin/termptyesc.c (_handle_xterm_777_command)
@@ -174,6 +183,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["secure shellfish"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // Documents OSC 777 for remote scripts to post local notifications;
             // OSC 9 message support is not documented.
             // https://secureshellfish.app/help/terminal
@@ -195,6 +205,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["absolutetelnet"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // OSC 9 and OSC 777 notifications were added in 14.03 (2026-08-20).
             // Older releases lack these formats; OSC 99 is always queried.
             // https://www.celestialsoftware.net/version-history/
@@ -216,6 +227,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["windows_terminal", "windowsterminal"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // OSC 9 handles ConEmu progress/cwd, not desktop messages. OSC 777
             // arrives in 1.26 Preview but requires compatibility.allowOSC777,
             // which defaults to false, so it is not a reliable fallback.
@@ -239,6 +251,8 @@ const TERMINALS: &[Terminal] = &[
         term: &["xterm-ghostty"],
         term_program: &["ghostty"],
         capabilities: TerminalCapabilities {
+            // https://ghostty.org/docs/features documents Kitty graphics support.
+            graphics: Some(GraphicsProtocol::Kitty),
             // Both OSC 9 and OSC 777 dispatch show_desktop_notification;
             // delivery can be disabled with desktop-notifications=false.
             // https://github.com/ghostty-org/ghostty/blob/main/src/terminal/osc.zig
@@ -268,6 +282,8 @@ const TERMINALS: &[Terminal] = &[
         term: &["wezterm"],
         term_program: &["wezterm"],
         capabilities: TerminalCapabilities {
+            // https://wezterm.org/imgcat.html documents iTerm2 inline image support.
+            graphics: Some(GraphicsProtocol::Iterm2),
             // Documents OSC 9 toast messages and OSC 777;notify title/body toasts.
             // https://wezterm.org/escape-sequences.html
             notifications: NotificationProtocols::SIMPLE,
@@ -290,6 +306,7 @@ const TERMINALS: &[Terminal] = &[
         term: &["rio"],
         term_program: &["rio"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // Documents both OSC 9 desktop messages and OSC 777;notify.
             // OSC 9;4 progress reporting is a separate supported subcommand.
             // https://rioterm.com/docs/escape-sequence-support
@@ -318,6 +335,8 @@ const TERMINALS: &[Terminal] = &[
         term: &["xterm-kitty"],
         term_program: &["kitty"],
         capabilities: TerminalCapabilities {
+            // https://sw.kovidgoyal.net/kitty/graphics-protocol/ documents PNG transfers; C=1 requires Kitty 0.20.0+.
+            graphics: Some(GraphicsProtocol::Kitty),
             // handle_notification_cmd implements both legacy OSC 9 and 777;
             // OSC 99 features are negotiated separately, never assumed here.
             // https://github.com/kovidgoyal/kitty/blob/master/kitty/notifications.py
@@ -339,6 +358,7 @@ const TERMINALS: &[Terminal] = &[
         term: &["alacritty", "alacritty-direct"],
         term_program: &["alacritty"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // The ANSI dispatch match has no OSC 9 or 777 notification handler;
             // bell handling is not support for titled desktop messages.
             // https://github.com/alacritty/vte/blob/master/src/ansi.rs (osc_dispatch)
@@ -361,6 +381,7 @@ const TERMINALS: &[Terminal] = &[
         term: &["foot", "foot-extra", "foot-direct"],
         term_program: &["foot"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // Documents both OSC 9 messages and OSC 777;notify, delivered via
             // foot.ini's notification command. OSC 99 is negotiated separately.
             // https://codeberg.org/dnkl/foot/src/branch/master/doc/foot-ctlseqs.7.scd
@@ -383,6 +404,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["konsole"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // OSC 777;notify creates a KNotification. OSC 9 is for ConEmu
             // progress reporting, not iTerm-style desktop messages.
             // https://github.com/KDE/konsole/blob/master/src/Vt102Emulation.cpp (processSessionAttributeRequest)
@@ -413,6 +435,7 @@ const TERMINALS: &[Terminal] = &[
             "roxterm",
         ],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // Upstream VTE has no OSC 9 desktop messages. Its opt-in OSC 777
             // translation only recognizes "Command completed" as shell-postexec,
             // not arbitrary notification titles/bodies. Distribution patches
@@ -467,6 +490,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["xterm.js", "xtermjs"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // Core InputHandler registers neither OSC 9 nor 777. An embedding
             // may add handlers, but xterm.js identification alone proves neither.
             // https://github.com/xtermjs/xterm.js/blob/master/src/common/InputHandler.ts
@@ -491,6 +515,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["vscode"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // Stock xterm.js integration adds no OSC 9/777 desktop-message
             // handler. Shell integration uses OSC 9;9 for cwd, not notifications;
             // third-party notification extensions cannot be assumed installed.
@@ -517,6 +542,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["apple_terminal"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // No documented OSC 9/777 desktop-message support. Apple's alert
             // documentation describes BEL sound/flash/Dock attention instead;
             // leave OSC unconfirmed and allow the local macOS backend.
@@ -536,6 +562,8 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["iterm.app", "iterm2"],
         capabilities: TerminalCapabilities {
+            // https://iterm2.com/documentation-images.html documents OSC 1337 File on all modern iTerm2 versions.
+            graphics: Some(GraphicsProtocol::Iterm2),
             // Documents OSC 9 for posting a notification; the parser maps 9
             // to ITERM_USER_NOTIFICATION and has no OSC 777 notification entry.
             // https://iterm2.com/documentation-escape-codes.html
@@ -558,6 +586,7 @@ const TERMINALS: &[Terminal] = &[
         term: &[],
         term_program: &["xterm"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // XTerm's supported OSC commands include neither 9 nor 777;
             // visual/urgency bells are not titled notification messages.
             // https://github.com/ThomasDickey/xterm-snapshots/blob/master/ctlseqs.txt (Operating System Commands)
@@ -580,6 +609,7 @@ const TERMINALS: &[Terminal] = &[
         ],
         term_program: &["rxvt", "rxvt-unicode", "urxvt"],
         capabilities: TerminalCapabilities {
+            graphics: None,
             // No built-in OSC 9 messages. In rxvt-unicode OSC 777 dispatches
             // to Perl extensions, so notifications need a separately installed
             // and enabled notify extension; the terminal name is insufficient.
