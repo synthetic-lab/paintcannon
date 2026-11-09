@@ -6,6 +6,7 @@ use taffy::{tree::Layout, NodeId};
 use crate::frame::{
     ClipBounds, ClipRect, Frame, GlyphStyle, GraphemeGlyph, LogicalLine, SelectionPoint,
 };
+use crate::graphics::{GraphicsImage, GraphicsProtocol};
 use crate::layout::{
     ArenaScrollMetrics, ImageLayoutData, InlineFragmentKind, InputLayoutData, LayoutArena,
     LayoutNodeKind, TextAreaLayoutData,
@@ -41,6 +42,7 @@ pub(crate) struct PaintOptions<'a> {
     pub(crate) transitions: Option<&'a TransitionState>,
     pub(crate) now: Instant,
     pub(crate) truecolor_enabled: bool,
+    pub(crate) graphics_protocol: Option<GraphicsProtocol>,
     pub(crate) default_foreground: Background,
     pub(crate) default_background: Background,
     pub(crate) terminal_focused: bool,
@@ -86,6 +88,7 @@ pub(crate) fn paint_arena(
             transitions: None,
             now: Instant::now(),
             truecolor_enabled: false,
+            graphics_protocol: None,
             default_foreground: Background::White,
             default_background: Background::Black,
             terminal_focused: true,
@@ -108,6 +111,7 @@ pub(crate) fn paint_arena_with_options(
         hit_regions: Vec::new(),
     };
     output.frame.hyperlinks = arena.hyperlinks();
+    output.frame.graphics_protocol = options.graphics_protocol;
     output.frame.powerline_extended = options.powerline_extended;
     output.frame.legacy_symbols = options.legacy_symbols;
     paint_arena_into(
@@ -618,8 +622,8 @@ impl<'a, 'out> Painter<'a, 'out> {
             self.arena.selection_source(id),
             image,
             style.image_rendering,
+            effective_background(background, self.options.default_background),
             content,
-            selection_background,
             state.glyph_style.hyperlink,
             child_clip,
         );
@@ -1100,18 +1104,32 @@ fn paint_image(
     source: usize,
     image: &ImageLayoutData,
     rendering: ImageRendering,
+    background: Background,
     rect: ClipRect,
-    selection_background: Option<Background>,
     hyperlink: Option<NodeId>,
     clip: ClipBounds,
 ) {
-    let Some(rgb) = image.rgb.as_ref() else {
+    let Some(rgba) = image.rgba.as_ref() else {
         return;
     };
     if image.width_px == 0 || image.height_px == 0 || rect.width() <= 0 || rect.height() <= 0 {
         return;
     }
 
+    let rect = if rendering == ImageRendering::Auto {
+        let scale = (rect.width() as f64 * image.cell_width_px as f64 / image.width_px as f64)
+            .min(rect.height() as f64 * image.cell_height_px as f64 / image.height_px as f64);
+        let width = (image.width_px as f64 * scale / image.cell_width_px as f64).ceil() as i32;
+        let height = (image.height_px as f64 * scale / image.cell_height_px as f64).ceil() as i32;
+        ClipRect::new(
+            rect.left,
+            rect.top,
+            width.min(rect.width()),
+            height.min(rect.height()),
+        )
+    } else {
+        rect
+    };
     match rendering {
         ImageRendering::Ascii => {
             let rect_width = rect.width().max(1) as u32;
@@ -1124,31 +1142,27 @@ fn paint_image(
                         .min(image.width_px.saturating_sub(1));
                     let source_y = (local_y.saturating_mul(image.height_px) / rect_height)
                         .min(image.height_px.saturating_sub(1));
-                    let Some(pixel) = image_pixel(rgb, image.width_px, source_x, source_y) else {
+                    let Some(pixel) =
+                        image_pixel(rgba, image.width_px, source_x, source_y, background)
+                    else {
                         continue;
                     };
-                    frame.write_glyph(
+                    frame.write_decoration_glyph(
                         x,
                         y,
                         ascii_pixel_char(pixel[0], pixel[1], pixel[2]),
-                        1,
                         GlyphStyle {
                             background: Background::Default,
                             foreground: Background::Rgb(pixel[0], pixel[1], pixel[2]),
-                            selection_background,
                             hyperlink,
                             ..Default::default()
                         },
                         clip,
-                        SelectionPoint {
-                            source,
-                            offset: (local_y * rect_width + local_x) as usize,
-                        },
                     );
                 }
             }
         }
-        ImageRendering::HalfBlock => {
+        ImageRendering::HalfBlock | ImageRendering::Auto => {
             let rect_width = rect.width().max(1) as u32;
             let virtual_height = (rect.height().max(1) as u32).saturating_mul(2);
             for y in rect.top..rect.bottom {
@@ -1165,19 +1179,21 @@ fn paint_image(
                         / virtual_height)
                         .min(image.height_px.saturating_sub(1));
 
-                    let Some(top_pixel) = image_pixel(rgb, image.width_px, source_x, top_y) else {
+                    let Some(top_pixel) =
+                        image_pixel(rgba, image.width_px, source_x, top_y, background)
+                    else {
                         continue;
                     };
-                    let Some(bottom_pixel) = image_pixel(rgb, image.width_px, source_x, bottom_y)
+                    let Some(bottom_pixel) =
+                        image_pixel(rgba, image.width_px, source_x, bottom_y, background)
                     else {
                         continue;
                     };
 
-                    frame.write_glyph(
+                    frame.write_decoration_glyph(
                         x,
                         y,
                         '▄',
-                        1,
                         GlyphStyle {
                             background: Background::Rgb(top_pixel[0], top_pixel[1], top_pixel[2]),
                             foreground: Background::Rgb(
@@ -1185,19 +1201,29 @@ fn paint_image(
                                 bottom_pixel[1],
                                 bottom_pixel[2],
                             ),
-                            selection_background,
                             hyperlink,
                             ..Default::default()
                         },
                         clip,
-                        SelectionPoint {
-                            source,
-                            offset: (local_y * rect_width + local_x) as usize,
-                        },
                     );
                 }
             }
         }
+    }
+    if rendering == ImageRendering::Auto && frame.graphics_protocol.is_some() {
+        frame.mark_image(
+            source,
+            GraphicsImage {
+                rgba: rgba.clone(),
+                width_px: image.width_px,
+                height_px: image.height_px,
+                cell_width_px: image.cell_width_px,
+                cell_height_px: image.cell_height_px,
+                bounds: rect,
+                background,
+            },
+            clip,
+        );
     }
 }
 
@@ -1428,10 +1454,26 @@ fn textarea_scroll_top(cursor_row: usize, viewport_height: usize) -> usize {
     cursor_row.saturating_add(1).saturating_sub(viewport_height)
 }
 
-fn image_pixel(rgb: &[u8], width_px: u32, x: u32, y: u32) -> Option<[u8; 3]> {
-    let index = (y as usize * width_px as usize + x as usize) * 3;
-    let pixel = rgb.get(index..index + 3)?;
-    Some([pixel[0], pixel[1], pixel[2]])
+fn image_pixel(
+    rgba: &[u8],
+    width_px: u32,
+    x: u32,
+    y: u32,
+    background: Background,
+) -> Option<[u8; 3]> {
+    let index = (y as usize * width_px as usize + x as usize) * 4;
+    let pixel = rgba.get(index..index + 4)?;
+    let (red, green, blue) = background.rgb().unwrap_or((0, 0, 0));
+    let blend = |channel: u8, backdrop: u8| {
+        ((u32::from(channel) * u32::from(pixel[3])
+            + u32::from(backdrop) * (255 - u32::from(pixel[3])))
+            / 255) as u8
+    };
+    Some([
+        blend(pixel[0], red),
+        blend(pixel[1], green),
+        blend(pixel[2], blue),
+    ])
 }
 
 fn ascii_pixel_char(red: u8, green: u8, blue: u8) -> char {
@@ -3359,6 +3401,7 @@ mod tests {
                 transitions: None,
                 now: Instant::now(),
                 truecolor_enabled: false,
+                graphics_protocol: None,
                 default_foreground: Background::White,
                 default_background: Background::Black,
                 terminal_focused: true,
@@ -4509,6 +4552,7 @@ mod tests {
                 transitions: None,
                 now: Instant::now(),
                 truecolor_enabled: false,
+                graphics_protocol: None,
                 default_foreground: Background::White,
                 default_background: Background::Black,
                 terminal_focused: false,
@@ -4790,6 +4834,7 @@ mod tests {
                 transitions: None,
                 now: Instant::now(),
                 truecolor_enabled: false,
+                graphics_protocol: None,
                 default_foreground: Background::White,
                 default_background: Background::Black,
                 terminal_focused: false,
@@ -4989,5 +5034,162 @@ mod tests {
         assert_eq!(output.target_at(0, 0), Some(child));
         assert_eq!(output.target_at(5, 2), Some(root));
         assert_eq!(output.target_at(6, 0), None);
+    }
+    #[test]
+    fn automatic_images_emit_native_png_with_a_half_block_fallback() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        use termprofile::TermProfile;
+
+        for (protocol, rendering) in [
+            (None, ImageRendering::Auto),
+            (Some(GraphicsProtocol::Iterm2), ImageRendering::Auto),
+            (Some(GraphicsProtocol::Kitty), ImageRendering::Auto),
+            (Some(GraphicsProtocol::Kitty), ImageRendering::HalfBlock),
+        ] {
+            let mut arena = LayoutArena::new();
+            let mut style = block_style(CssDimension::Length(2.0), CssDimension::Length(2.0));
+            style.image_rendering = rendering;
+            let node = arena.create_image(style, 2, 2, 1, 1);
+            arena.set_image_pixels(
+                node,
+                2,
+                2,
+                vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255],
+            );
+            arena.compute_layout(
+                node,
+                Size {
+                    width: AvailableSpace::Definite(2.0),
+                    height: AvailableSpace::Definite(2.0),
+                },
+            );
+            let output = paint_arena_with_options(
+                &arena,
+                node,
+                2,
+                2,
+                false,
+                PaintOptions {
+                    transitions: None,
+                    now: Instant::now(),
+                    truecolor_enabled: true,
+                    graphics_protocol: protocol,
+                    default_foreground: Background::White,
+                    default_background: Background::Black,
+                    terminal_focused: true,
+                    powerline_extended: false,
+                    legacy_symbols: false,
+                },
+            );
+            let mut bytes = Vec::new();
+            output
+                .frame
+                .write_diff_to(&mut bytes, None, TermProfile::TrueColor, false)
+                .unwrap();
+            let text = String::from_utf8(bytes).unwrap();
+            if protocol.is_none() || rendering == ImageRendering::HalfBlock {
+                assert!(text.contains('▄'));
+                assert!(!text.contains("\x1b_G"));
+                assert!(!text.contains("\x1b]1337;"));
+            } else {
+                let data = if protocol == Some(GraphicsProtocol::Iterm2) {
+                    text.split("preserveAspectRatio=1:")
+                        .nth(1)
+                        .unwrap()
+                        .split('\x07')
+                        .next()
+                        .unwrap()
+                } else {
+                    text.split("q=2,m=0;")
+                        .nth(1)
+                        .unwrap()
+                        .split("\x1b\\")
+                        .next()
+                        .unwrap()
+                };
+                let decoded =
+                    crate::image::decode_png_image(&STANDARD.decode(data).unwrap()).unwrap();
+                assert_eq!((decoded.width_px, decoded.height_px), (2, 2));
+                assert_eq!(
+                    decoded.rgba,
+                    [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255]
+                );
+            }
+        }
+    }
+    #[test]
+    fn selection_crosses_images_without_changing_their_pixels() {
+        use crate::frame::Selection;
+        use termprofile::TermProfile;
+
+        for (protocol, rendering) in [
+            (None, ImageRendering::HalfBlock),
+            (None, ImageRendering::Ascii),
+            (Some(GraphicsProtocol::Kitty), ImageRendering::Auto),
+            (Some(GraphicsProtocol::Iterm2), ImageRendering::Auto),
+        ] {
+            let mut frame = Frame::new(4, 2, true);
+            frame.graphics_protocol = protocol;
+            let anchor = SelectionPoint {
+                source: 0,
+                offset: 0,
+            };
+            let focus = SelectionPoint {
+                source: 2,
+                offset: 0,
+            };
+            frame.write_glyph(
+                0,
+                0,
+                'a',
+                1,
+                GlyphStyle::default(),
+                ClipBounds::unbounded(),
+                anchor,
+            );
+            paint_image(
+                &mut frame,
+                1,
+                &ImageLayoutData {
+                    width_px: 2,
+                    height_px: 2,
+                    cell_width_px: 1,
+                    cell_height_px: 1,
+                    rgba: Some(vec![255; 16].into()),
+                },
+                rendering,
+                Background::Black,
+                ClipRect::new(1, 0, 2, 2),
+                None,
+                ClipBounds::unbounded(),
+            );
+            frame.write_glyph(
+                3,
+                1,
+                'b',
+                1,
+                GlyphStyle::default(),
+                ClipBounds::unbounded(),
+                focus,
+            );
+            let previous = frame.clone();
+            let selection = Selection { anchor, focus };
+            frame.apply_selection(Some(&selection));
+            assert!(frame.cell(0, 0).unwrap().reversed);
+            assert!(frame.cell(3, 1).unwrap().reversed);
+            assert_eq!(frame.selected_text(&selection).as_deref(), Some("a\nb"));
+            for y in 0..2 {
+                for x in 1..3 {
+                    assert_eq!(frame.cell(x, y), previous.cell(x, y));
+                }
+            }
+            let mut bytes = Vec::new();
+            frame
+                .write_diff_to(&mut bytes, Some(&previous), TermProfile::TrueColor, false)
+                .unwrap();
+            let output = String::from_utf8(bytes).unwrap();
+            assert!(!output.contains("\x1b_G"));
+            assert!(!output.contains("\x1b]1337;"));
+        }
     }
 }

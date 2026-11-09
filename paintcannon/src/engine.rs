@@ -8,6 +8,7 @@ use taffy::{AvailableSpace, NodeId, Size};
 use termprofile::TermProfile;
 
 use crate::frame::Frame;
+use crate::graphics::GraphicsProtocol;
 use crate::image::load_png_image;
 use crate::layout::{
     AbsoluteRect, ArenaScrollAdjustment, ArenaScrollMetrics, ArenaScrollbarHit,
@@ -370,6 +371,9 @@ pub(crate) enum EngineCommand {
         node: DomId,
         href: String,
     },
+    SetGraphicsProtocol {
+        protocol: Option<GraphicsProtocol>,
+    },
     SetHyperlinkSupport {
         support: HyperlinkCapability,
     },
@@ -539,6 +543,7 @@ pub(crate) struct PaintEngine {
     connected_nodes: HashSet<NodeId>,
     established_nodes: HashSet<NodeId>,
     truecolor_enabled: bool,
+    graphics_protocol: Option<GraphicsProtocol>,
     terminal_foreground: Background,
     terminal_background: Background,
     terminal_focused: bool,
@@ -578,6 +583,7 @@ impl PaintEngine {
             connected_nodes: HashSet::new(),
             established_nodes: HashSet::new(),
             truecolor_enabled: true,
+            graphics_protocol: None,
             terminal_foreground: Background::White,
             terminal_background: Background::Black,
             terminal_focused: true,
@@ -1148,11 +1154,7 @@ impl PaintEngine {
         true
     }
 
-    pub(crate) fn set_image_source(
-        &mut self,
-        node: DomId,
-        src: impl AsRef<std::path::Path>,
-    ) -> bool {
+    pub(crate) fn set_image_source(&mut self, node: DomId, src: &str) -> bool {
         let Ok(image) = load_png_image(src) else {
             return false;
         };
@@ -1173,7 +1175,7 @@ impl PaintEngine {
             image.height_px,
             cell_width_px,
             cell_height_px,
-            image.rgb,
+            image.rgba,
         )
     }
 
@@ -1184,7 +1186,7 @@ impl PaintEngine {
         height_px: u32,
         cell_width_px: u32,
         cell_height_px: u32,
-        rgb: Vec<u8>,
+        rgba: Vec<u8>,
     ) -> bool {
         let Some(node) = self.node_for(node) else {
             return false;
@@ -1196,7 +1198,7 @@ impl PaintEngine {
             height_px,
             cell_width_px,
             cell_height_px,
-            rgb,
+            rgba,
         );
         true
     }
@@ -1601,6 +1603,7 @@ impl PaintEngine {
             transitions: None,
             now,
             truecolor_enabled: self.truecolor_enabled,
+            graphics_protocol: self.graphics_protocol,
             default_foreground: self.terminal_foreground,
             default_background: self.terminal_background,
             terminal_focused: self.terminal_focused,

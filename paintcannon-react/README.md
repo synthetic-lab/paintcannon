@@ -89,6 +89,7 @@ DOM API:
 - `Div`
 - `Span`
 - `A`
+- `Img`
 - `Input`
 - `Textarea`
 - `Button`
@@ -248,6 +249,7 @@ both supported:
 - `Form`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.
 - `Button`: shared props, plus `type?: "submit" | "button"`,
   `scrollLeft?: number`, and `scrollTop?: number`.
+- `Img`: shared props except `children`, plus required `src: string` (PNG path or data URL).
 - `Input`: shared props, plus `type?: "text"`, `value?: string`,
   `placeholder?: string`, `cursorPosition?: number`, and
   `autoFocus?: boolean`.
@@ -300,3 +302,21 @@ programmatically; Otty's current acknowledgement also does not advertise dismiss
 This package depends on `paintcannon`, which provides the NAPI-RS native
 renderer and DOM-like API. React commits are sent as PaintCannon transactions;
 the Rust-owned render loop presents dirty state at the configured `fps`.
+
+## Image previews
+
+`Img` uses the core renderer's automatic native graphics with a half-block fallback.
+Place it before a text control in a column to show an attachment above the prompt:
+
+```tsx
+<Div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+  <Img src={imageDataUrl} style={{ width: 12, height: 6 }} />
+  <Textarea value={value} onChange={event => setValue(event.target.value)} />
+</Div>
+```
+
+Run `npm run demo:image-preview` from the workspace root to compare automatic,
+half-block, and ASCII rendering of the same image. Press Escape to exit, or pass
+a PNG path with `npm run demo:image-preview -- /path/to/image.png`.
+See [core image rendering](../paintcannon/README.md#image-rendering) for terminal
+support and fallback behavior.

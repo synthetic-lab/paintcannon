@@ -5,6 +5,7 @@ use super::{
     terminals::{self, HyperlinkSupport},
     tmux,
 };
+use crate::graphics::GraphicsProtocol;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -112,6 +113,18 @@ impl Environment {
 
     pub(crate) fn nerd_font_override(&self) -> Option<bool> {
         self.values.get("NERD_FONT").map(|value| value != "0")
+    }
+
+    pub(crate) fn graphics_protocol(&self) -> Option<GraphicsProtocol> {
+        if self.clients.is_some()
+            || self.get("TERM").starts_with("screen")
+            || self.get("TERM").starts_with("tmux")
+        {
+            return None;
+        }
+        terminals::from_term_program(self.get("TERM_PROGRAM"))
+            .or_else(|| terminals::from_term(self.get("TERM")))
+            .and_then(|terminal| terminal.capabilities.graphics)
     }
 
     pub(crate) fn capabilities(&self) -> Capabilities {

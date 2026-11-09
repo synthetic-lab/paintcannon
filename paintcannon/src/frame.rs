@@ -3,6 +3,7 @@ use std::io::{self, Write};
 
 use termprofile::TermProfile;
 
+use crate::graphics::{delete_images, GraphicsImage, GraphicsProtocol, ImageFragment};
 use crate::style::{Background, BorderStyle, DivStyle};
 use crate::terminal::{write_synchronized_output_begin, write_synchronized_output_end};
 use crate::text::GraphemeSuffix;
@@ -40,6 +41,8 @@ pub(crate) struct Frame {
     width: usize,
     height: usize,
     cells: Vec<Cell>,
+    images: HashMap<usize, GraphicsImage>,
+    pub(crate) graphics_protocol: Option<GraphicsProtocol>,
     painted: Vec<bool>,
     foreground_painted: Vec<bool>,
     background_painted: Vec<bool>,
@@ -65,6 +68,7 @@ pub(crate) struct Cell {
     pub(crate) strikethrough: bool,
     pub(crate) hyperlink: Option<taffy::NodeId>,
     pub(crate) wide_continuation: bool,
+    pub(crate) image: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,6 +171,8 @@ impl Frame {
             width,
             height,
             cells: vec![Cell::default(); width.saturating_mul(height)],
+            images: HashMap::new(),
+            graphics_protocol: None,
             painted: vec![false; width.saturating_mul(height)],
             foreground_painted: vec![false; width.saturating_mul(height)],
             background_painted: vec![false; width.saturating_mul(height)],
@@ -240,6 +246,9 @@ impl Frame {
                 default_background,
             );
             self.cells[index] = cell;
+            if opacity > 0.0 {
+                self.cells[index].image = None;
+            }
             if source_replaces_glyph {
                 if let Some(suffix) = layer.grapheme_suffixes.get(&index) {
                     self.grapheme_suffixes.insert(index, suffix.clone());
@@ -253,6 +262,7 @@ impl Frame {
         }
 
         self.hyperlinks.extend(layer.hyperlinks);
+        self.images.extend(layer.images);
         self.selection_units = layer.selection_units;
     }
 
@@ -326,6 +336,7 @@ impl Frame {
                     strikethrough: false,
                     hyperlink: None,
                     wide_continuation: false,
+                    image: None,
                 };
                 self.painted[start + col] = true;
                 self.background_painted[start + col] = true;
@@ -407,6 +418,7 @@ impl Frame {
         self.cells[index].strikethrough = style.strikethrough;
         self.cells[index].hyperlink = style.hyperlink;
         self.cells[index].wide_continuation = false;
+        self.cells[index].image = None;
         self.painted[index] = true;
         self.foreground_painted[index] = true;
         if style.background != Background::Default {
@@ -436,6 +448,7 @@ impl Frame {
             self.cells[continuation_index].strikethrough = style.strikethrough;
             self.cells[continuation_index].hyperlink = style.hyperlink;
             self.cells[continuation_index].wide_continuation = true;
+            self.cells[continuation_index].image = None;
             self.painted[continuation_index] = true;
             self.foreground_painted[continuation_index] = true;
             if style.background != Background::Default {
@@ -473,6 +486,7 @@ impl Frame {
         self.cells[index].strikethrough = style.strikethrough;
         self.cells[index].hyperlink = style.hyperlink;
         self.cells[index].wide_continuation = false;
+        self.cells[index].image = None;
         self.painted[index] = true;
         self.foreground_painted[index] = true;
         if style.background != Background::Default {
@@ -723,6 +737,79 @@ impl Frame {
             .map(|(_, order)| self.selection_units[order].point)
     }
 
+    pub(crate) fn mark_image(&mut self, source: usize, image: GraphicsImage, clip: ClipBounds) {
+        let Some(visible) = self.visible_rect(image.bounds, clip) else {
+            return;
+        };
+        for y in visible.top..visible.bottom {
+            for x in visible.left..visible.right {
+                self.cells[y as usize * self.width + x as usize].image = Some(source);
+            }
+        }
+        self.images.insert(source, image);
+    }
+
+    fn image_fragments(&self) -> Vec<ImageFragment> {
+        if self.graphics_protocol.is_none() {
+            return Vec::new();
+        }
+        let mut fragments: Vec<ImageFragment> = Vec::new();
+        let mut previous_row = HashMap::new();
+        for y in 0..self.height {
+            let mut row = HashMap::new();
+            let mut x = 0;
+            while x < self.width {
+                let Some(source) = self.cells[y * self.width + x].image else {
+                    x += 1;
+                    continue;
+                };
+                let start = x;
+                while x < self.width && self.cells[y * self.width + x].image == Some(source) {
+                    x += 1;
+                }
+                let key = (source, start, x);
+                let index = if let Some(&index) = previous_row.get(&key) {
+                    let fragment: &mut ImageFragment = &mut fragments[index];
+                    fragment.rect.bottom += 1;
+                    index
+                } else {
+                    fragments.push(ImageFragment {
+                        image: self.images[&source].clone(),
+                        rect: ClipRect::new(start as i32, y as i32, (x - start) as i32, 1),
+                    });
+                    fragments.len() - 1
+                };
+                row.insert(key, index);
+            }
+            previous_row = row;
+        }
+        fragments
+    }
+
+    pub(crate) fn clear_images_to(&self, out: &mut impl Write) -> io::Result<()> {
+        let Some(protocol) = self.graphics_protocol else {
+            return Ok(());
+        };
+        let fragments = self.image_fragments();
+        if fragments.is_empty() {
+            return Ok(());
+        }
+        delete_images(out, protocol, fragments.len())?;
+        write!(out, "\x1b7\x1b[0m")?;
+        for fragment in fragments {
+            for row in fragment.rect.top..fragment.rect.bottom {
+                write!(
+                    out,
+                    "\x1b[{};{}H\x1b[{}X",
+                    row + 1,
+                    fragment.rect.left + 1,
+                    fragment.rect.width()
+                )?;
+            }
+        }
+        write!(out, "\x1b8")
+    }
+
     pub(crate) fn write_diff_to(
         &self,
         out: &mut impl Write,
@@ -730,11 +817,38 @@ impl Frame {
         color_profile: TermProfile,
         synchronized: bool,
     ) -> io::Result<()> {
+        let images = self.image_fragments();
+        let old_images = previous.map(Self::image_fragments).unwrap_or_default();
+        let images_changed = images != old_images
+            || previous.is_some_and(|old| {
+                old.graphics_protocol != self.graphics_protocol
+                    || old.width != self.width
+                    || old.height != self.height
+            });
+        let mut image_output = Vec::new();
+        if images_changed {
+            if let Some(protocol) = self.graphics_protocol {
+                write!(image_output, "\x1b7")?;
+                for (index, image) in images.iter().enumerate() {
+                    image.write_to(&mut image_output, protocol, index)?;
+                }
+                write!(image_output, "\x1b8")?;
+            }
+        }
         if synchronized {
             write_synchronized_output_begin(out)?;
         }
-
+        let matches = |previous: &Self, index: usize| {
+            !(images_changed
+                && (self.cells[index].image.is_some() || previous.cells[index].image.is_some()))
+                && self.cell_matches(previous, index)
+        };
         let result: io::Result<()> = (|| {
+            if images_changed {
+                if let Some(previous) = previous {
+                    previous.clear_images_to(out)?;
+                }
+            }
             write!(out, "\x1b[?7l")?;
             write!(out, "\x1b[?25l")?;
 
@@ -753,7 +867,7 @@ impl Frame {
                 let mut col = 0;
                 while col < self.width {
                     let index = row * self.width + col;
-                    if self.cell_matches(previous, index) {
+                    if matches(previous, index) {
                         col += 1;
                         continue;
                     }
@@ -761,7 +875,7 @@ impl Frame {
                     let start = col;
                     while col < self.width {
                         let index = row * self.width + col;
-                        if self.cell_matches(previous, index) {
+                        if matches(previous, index) {
                             break;
                         }
                         if self.cell_uses_complex_grapheme(index)
@@ -773,13 +887,14 @@ impl Frame {
                         col += 1;
                     }
 
-                    self.write_span_to(out, row, start, col, color_profile)?;
+                    self.write_span_to(out, row, start, col, color_profile, !images_changed)?;
                 }
             }
 
             Ok(())
         })();
 
+        let result = result.and_then(|()| out.write_all(&image_output));
         let link_result = if result.is_err() && !self.hyperlinks.is_empty() {
             write!(out, "\x1b]8;;\x1b\\")
         } else {
@@ -805,7 +920,7 @@ impl Frame {
         write!(out, "\x1b[H")?;
 
         for row in 0..self.trailing_empty_rows_start() {
-            self.write_span_to(out, row, 0, self.width, color_profile)?;
+            self.write_span_to(out, row, 0, self.width, color_profile, false)?;
         }
 
         Ok(())
@@ -818,6 +933,7 @@ impl Frame {
         start_col: usize,
         end_col: usize,
         color_profile: TermProfile,
+        preserve_images: bool,
     ) -> io::Result<()> {
         if start_col >= end_col {
             return Ok(());
@@ -835,7 +951,16 @@ impl Frame {
         let mut current_strikethrough = false;
         let mut next_glyph_needs_positioning = false;
         for col in start_col..end_col {
-            let cell = self.cells[row * self.width + col];
+            let mut cell = self.cells[row * self.width + col];
+            if let Some(source) = cell.image.filter(|_| self.graphics_protocol.is_some()) {
+                if preserve_images {
+                    next_glyph_needs_positioning = true;
+                    continue;
+                }
+                cell.character = ' ';
+                cell.background = self.images[&source].background;
+                cell.foreground = Background::Default;
+            }
             if cell.wide_continuation {
                 next_glyph_needs_positioning = true;
                 continue;
@@ -977,6 +1102,7 @@ impl Frame {
         self.cells[index].strikethrough = false;
         self.cells[index].hyperlink = None;
         self.cells[index].wide_continuation = false;
+        self.cells[index].image = None;
         self.painted[index] = true;
         self.foreground_painted[index] = true;
         if selection_background.is_some() {
@@ -1173,6 +1299,7 @@ impl Default for Cell {
             strikethrough: false,
             hyperlink: None,
             wide_continuation: false,
+            image: None,
         }
     }
 }
@@ -2825,5 +2952,77 @@ mod tests {
 
         assert!(output.contains("\x1b[2J"));
         assert!(output.contains("\x1b[H"));
+    }
+    #[test]
+    fn native_images_survive_text_updates_and_clear_after_clipping_or_removal() {
+        use std::sync::Arc;
+
+        for protocol in [GraphicsProtocol::Iterm2, GraphicsProtocol::Kitty] {
+            let mut first = Frame::new(8, 4, false);
+            first.graphics_protocol = Some(protocol);
+            let image = GraphicsImage {
+                rgba: Arc::from([
+                    255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+                ]),
+                width_px: 2,
+                height_px: 2,
+                cell_width_px: 1,
+                cell_height_px: 1,
+                bounds: ClipRect::new(2, 1, 4, 2),
+                background: Background::Black,
+            };
+            first.mark_image(1, image.clone(), ClipBounds::unbounded());
+            let mut typed = first.clone();
+            typed.write_decoration_glyph(0, 1, 'λ', GlyphStyle::default(), ClipBounds::unbounded());
+            let mut bytes = Vec::new();
+            typed
+                .write_diff_to(&mut bytes, Some(&first), TermProfile::TrueColor, false)
+                .unwrap();
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(text.contains('λ'));
+            assert!(!text.contains("\x1b_G"));
+            assert!(!text.contains("\x1b]1337;"));
+            assert!(!text.contains("\x1b[2;3H"));
+
+            let mut clipped = Frame::new(8, 4, false);
+            clipped.graphics_protocol = Some(protocol);
+            clipped.mark_image(
+                1,
+                image,
+                ClipBounds::from_rect_axes(ClipRect::new(4, 1, 2, 2), true, true),
+            );
+            clipped.write_decoration_glyph(
+                5,
+                1,
+                'x',
+                GlyphStyle::default(),
+                ClipBounds::unbounded(),
+            );
+            let fragments = clipped.image_fragments();
+            assert_eq!(fragments.len(), 2);
+            assert_eq!(fragments[0].rect, ClipRect::new(4, 1, 1, 1));
+            assert_eq!(fragments[1].rect, ClipRect::new(4, 2, 2, 1));
+            let mut bytes = Vec::new();
+            clipped
+                .write_diff_to(&mut bytes, Some(&typed), TermProfile::TrueColor, false)
+                .unwrap();
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(text.contains("\x1b[2;3H\x1b[4X"));
+            assert!(text.contains("\x1b[2;5H"));
+
+            let empty = Frame::new(8, 4, false);
+            let mut bytes = Vec::new();
+            empty
+                .write_diff_to(&mut bytes, Some(&clipped), TermProfile::TrueColor, false)
+                .unwrap();
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(text.contains("\x1b[2;5H\x1b[1X"));
+            assert!(text.contains("\x1b[3;5H\x1b[2X"));
+            assert!(!text.contains("\x1b]1337;"));
+            assert!(!text.contains("\x1b_Ga=T"));
+            if protocol == GraphicsProtocol::Kitty {
+                assert_eq!(text.matches("\x1b_Ga=d,d=I").count(), 2);
+            }
+        }
     }
 }

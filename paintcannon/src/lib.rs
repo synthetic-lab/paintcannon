@@ -7,6 +7,7 @@ mod api;
 mod engine;
 mod event_notification;
 mod frame;
+mod graphics;
 mod hyperlink;
 mod image;
 mod input;

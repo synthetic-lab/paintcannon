@@ -11,6 +11,7 @@ base64 = "0.22"
 crossbeam-channel = "0.5"
 crossterm = "0.29"
 csscolorparser = { version = "0.8", default-features = false, features = ["named-colors"] }
+image = { version = "0.25.10", default-features = false }
 libc = "0.2"
 signal-hook = "0.3"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }

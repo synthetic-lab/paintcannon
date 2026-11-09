@@ -602,3 +602,33 @@ root.appendChild(button);
 ## React
 
 For React rendering on top of this DOM API, use `paintcannon-react`.
+
+## Image rendering
+
+Create an `img` element and set `src` to a PNG path or a `data:image/png;base64,...`
+URL. Image data stays in memory when using a data URL, including clipboard images.
+
+```ts
+const preview = paintCannon.createElement("img");
+preview.src = "./screenshot.png";
+preview.style.width = 12;
+preview.style.height = 6;
+preview.style.imageRendering = "auto";
+container.appendChild(preview);
+```
+
+The default `imageRendering: "auto"` fits the image inside its layout box, preserving
+its aspect ratio. It uses PNG graphics on confirmed terminals: the
+[iTerm2 protocol](https://iterm2.com/documentation-images.html) in iTerm2 and
+[WezTerm](https://wezterm.org/imgcat.html), and the
+[Kitty protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) in Kitty 0.20.0+,
+[Ghostty](https://ghostty.org/docs/features), and
+[Otty](https://docs.otty.sh/terminal-features/images). Native previews retain PNG
+transparency and follow layout, clipping, overlapping text, and removal. Unchanged
+previews are not retransmitted while surrounding text updates.
+
+Unconfirmed terminals and terminal multiplexers currently use colored half blocks.
+Group opacity uses the same fallback for the affected cells. Image pixels are not
+selectable; highlighting across an image leaves it unchanged in every rendering mode.
+Explicit `imageRendering: "half-block"` and `"ascii"` keep their existing rendering
+behavior. PNG is currently the supported source format.

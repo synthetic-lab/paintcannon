@@ -2,6 +2,7 @@ use super::{environment::Environment, Detection, HyperlinkCapability};
 use crate::engine::EngineCommand;
 use crate::event_notification::EventNotification;
 use crate::glyph_detection::{protocol::Request, ProbeReport, SAMPLES};
+use crate::graphics::GraphicsProtocol;
 use crate::native_event::{NativeEvent, NativeEventQueue};
 use crate::notifications::query;
 use crossbeam_channel::{bounded, select, Receiver, RecvTimeoutError, Sender, TryRecvError};
@@ -54,6 +55,7 @@ impl CapabilityMonitor {
             let mut published = Published {
                 report: ProbeReport::default(),
                 osc8: HyperlinkCapability::Unconfirmed,
+                graphics: None,
                 commands,
                 events,
                 notifier,
@@ -63,7 +65,9 @@ impl CapabilityMonitor {
                 let deadline = Instant::now() + POLL_INTERVAL;
                 let detection = shared.read().unwrap().clone();
                 let snapshot = detection.environment.get_or_init(&mut environment);
-                if !published.update_osc8(snapshot.capabilities().osc8) {
+                if !published.update_osc8(snapshot.capabilities().osc8)
+                    || !published.update_graphics(snapshot.graphics_protocol())
+                {
                     break;
                 }
                 // Known sets needn't wait for unrelated, unrecognized sets. Keep
@@ -129,6 +133,7 @@ impl Drop for CapabilityMonitor {
 struct Published {
     report: ProbeReport,
     osc8: HyperlinkCapability,
+    graphics: Option<GraphicsProtocol>,
     commands: Sender<EngineCommand>,
     events: Arc<NativeEventQueue>,
     notifier: Arc<dyn EventNotification>,
@@ -136,6 +141,18 @@ struct Published {
 }
 
 impl Published {
+    fn update_graphics(&mut self, protocol: Option<GraphicsProtocol>) -> bool {
+        if self.graphics != protocol {
+            select! {
+                recv(self.stopping) -> _ => return false,
+                send(self.commands, EngineCommand::SetGraphicsProtocol { protocol }) -> result =>
+                    if result.is_err() { return false; },
+            }
+            self.graphics = protocol;
+        }
+        true
+    }
+
     fn update_osc8(&mut self, support: HyperlinkCapability) -> bool {
         if self.osc8 != support {
             select! {
@@ -215,6 +232,7 @@ mod tests {
         let mut published = Published {
             report: ProbeReport::default(),
             osc8: HyperlinkCapability::Unconfirmed,
+            graphics: None,
             commands,
             events: events.clone(),
             notifier: Arc::new(Notify(wake)),
@@ -273,6 +291,7 @@ mod tests {
         let mut published = Published {
             report: ProbeReport::default(),
             osc8: HyperlinkCapability::Unconfirmed,
+            graphics: None,
             commands,
             events: events.clone(),
             notifier: Arc::new(Notify(wake)),

@@ -3,6 +3,8 @@ export * from "./mounted.ts";
 export * as button from "./button/button.ts";
 export * as div from "./div/div.ts";
 export * as form from "./form/form.ts";
+export * as img from "./img/img.ts";
+export * as reconcileImg from "./img/reconcile-img.ts";
 export * as input from "./input/input.ts";
 export * as reconcileButton from "./button/reconcile-button.ts";
 export * as reconcileDiv from "./div/reconcile-div.ts";

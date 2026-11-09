@@ -224,6 +224,15 @@ fn apply_command_inner(
             engine.set_transition(node, transitions);
         }
         EngineCommand::SetAnchorHref { node, href } => engine.set_anchor_href(node, href),
+        EngineCommand::SetGraphicsProtocol { protocol } => {
+            use std::io::IsTerminal;
+            engine.graphics_protocol = if io::stdout().is_terminal() {
+                protocol
+            } else {
+                None
+            };
+            engine.mark_paint_dirty();
+        }
         EngineCommand::SetHyperlinkSupport { support } => {
             use std::io::IsTerminal;
             engine.set_hyperlink_support(if io::stdout().is_terminal() {
@@ -236,7 +245,7 @@ fn apply_command_inner(
             engine.set_text(node, text);
         }
         EngineCommand::SetImageSource { node, src } => {
-            engine.set_image_source(node, src);
+            engine.set_image_source(node, &src);
         }
         EngineCommand::SetInputValue {
             node,
@@ -416,6 +425,9 @@ fn apply_command_inner(
         }
         EngineCommand::InvalidateFrame => engine.invalidate_frame(),
         EngineCommand::Shutdown { response } => {
+            if let Some(frame) = &engine.previous_frame {
+                let _ = frame.clear_images_to(&mut io::stdout().lock());
+            }
             if let Some(response) = response {
                 let _ = response.send(());
             }

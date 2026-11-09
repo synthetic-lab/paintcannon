@@ -1,12 +1,12 @@
+use base64::{engine::general_purpose::STANDARD, Engine};
 use std::fs;
 use std::io::Cursor;
-use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DecodedImage {
     pub(crate) width_px: u32,
     pub(crate) height_px: u32,
-    pub(crate) rgb: Vec<u8>,
+    pub(crate) rgba: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,8 +17,14 @@ pub(crate) enum ImageError {
     UnsupportedColor,
 }
 
-pub(crate) fn load_png_image(path: impl AsRef<Path>) -> Result<DecodedImage, ImageError> {
-    let bytes = fs::read(path).map_err(|_| ImageError::ReadFailed)?;
+pub(crate) fn load_png_image(source: &str) -> Result<DecodedImage, ImageError> {
+    let bytes = if let Some(data) = source.strip_prefix("data:image/png;base64,") {
+        STANDARD
+            .decode(data)
+            .map_err(|_| ImageError::DecodeFailed)?
+    } else {
+        fs::read(source).map_err(|_| ImageError::ReadFailed)?
+    };
     decode_png_image(&bytes)
 }
 
@@ -42,38 +48,35 @@ pub(crate) fn decode_png_image(bytes: &[u8]) -> Result<DecodedImage, ImageError>
     Ok(DecodedImage {
         width_px: output.width,
         height_px: output.height,
-        rgb: decoded_png_to_rgb(&decoded[..output.buffer_size()], output.color_type)?,
+        rgba: decoded_png_to_rgba(&decoded[..output.buffer_size()], output.color_type)?,
     })
 }
 
-fn decoded_png_to_rgb(bytes: &[u8], color_type: png::ColorType) -> Result<Vec<u8>, ImageError> {
-    let mut rgb = Vec::new();
+fn decoded_png_to_rgba(bytes: &[u8], color_type: png::ColorType) -> Result<Vec<u8>, ImageError> {
+    let mut rgba = Vec::new();
     match color_type {
         png::ColorType::Rgb => {
-            rgb.extend_from_slice(bytes);
-        }
-        png::ColorType::Rgba => {
-            rgb.reserve(bytes.len() / 4 * 3);
-            for pixel in bytes.chunks_exact(4) {
-                rgb.extend_from_slice(&pixel[..3]);
+            for pixel in bytes.chunks_exact(3) {
+                rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
             }
         }
+        png::ColorType::Rgba => rgba.extend_from_slice(bytes),
         png::ColorType::Grayscale => {
-            rgb.reserve(bytes.len() * 3);
+            rgba.reserve(bytes.len() * 4);
             for value in bytes {
-                rgb.extend_from_slice(&[*value, *value, *value]);
+                rgba.extend_from_slice(&[*value, *value, *value, 255]);
             }
         }
         png::ColorType::GrayscaleAlpha => {
-            rgb.reserve(bytes.len() / 2 * 3);
+            rgba.reserve(bytes.len() * 2);
             for pixel in bytes.chunks_exact(2) {
                 let value = pixel[0];
-                rgb.extend_from_slice(&[value, value, value]);
+                rgba.extend_from_slice(&[value, value, value, pixel[1]]);
             }
         }
         png::ColorType::Indexed => return Err(ImageError::UnsupportedColor),
     }
-    Ok(rgb)
+    Ok(rgba)
 }
 
 #[cfg(test)]
@@ -93,36 +96,40 @@ mod tests {
     }
 
     #[test]
-    fn decodes_rgb_png() {
+    fn decodes_rgb_png_from_data_url() {
         let bytes = encode_png(png::ColorType::Rgb, 2, 1, &[255, 0, 0, 0, 255, 0]);
 
         assert_eq!(
-            decode_png_image(&bytes).unwrap(),
+            load_png_image(&format!(
+                "data:image/png;base64,{}",
+                STANDARD.encode(&bytes)
+            ))
+            .unwrap(),
             DecodedImage {
                 width_px: 2,
                 height_px: 1,
-                rgb: vec![255, 0, 0, 0, 255, 0],
+                rgba: vec![255, 0, 0, 255, 0, 255, 0, 255],
             }
         );
     }
 
     #[test]
-    fn decodes_rgba_png_by_dropping_alpha() {
+    fn decodes_rgba_png_preserving_alpha() {
         let bytes = encode_png(png::ColorType::Rgba, 2, 1, &[255, 0, 0, 1, 0, 255, 0, 255]);
 
         assert_eq!(
-            decode_png_image(&bytes).unwrap().rgb,
-            vec![255, 0, 0, 0, 255, 0]
+            decode_png_image(&bytes).unwrap().rgba,
+            vec![255, 0, 0, 1, 0, 255, 0, 255]
         );
     }
 
     #[test]
-    fn decodes_grayscale_png_to_rgb() {
+    fn decodes_grayscale_png_to_rgba() {
         let bytes = encode_png(png::ColorType::Grayscale, 2, 1, &[10, 250]);
 
         assert_eq!(
-            decode_png_image(&bytes).unwrap().rgb,
-            vec![10, 10, 10, 250, 250, 250]
+            decode_png_image(&bytes).unwrap().rgba,
+            vec![10, 10, 10, 255, 250, 250, 250, 255]
         );
     }
 }

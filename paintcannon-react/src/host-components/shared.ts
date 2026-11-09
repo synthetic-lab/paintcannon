@@ -7,7 +7,7 @@ import type {
   PaintElementTagName,
 } from "paintcannon";
 
-export type HostTagName = Exclude<PaintElementTagName, "img">;
+export type HostTagName = PaintElementTagName;
 export type HostType = `paintcannon.${HostTagName}`;
 
 export function typeString<Type extends HostType>(type: Type): Type {

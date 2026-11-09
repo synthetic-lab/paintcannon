@@ -21,15 +21,17 @@ root.style.backgroundColor = "#101820";
 
 const label = pc.createElement("div");
 label.style.color = "#e8f1f2";
-label.appendChild(pc.createTextNode("half-block and ASCII image rendering"));
+label.appendChild(pc.createTextNode("Native images with half-block and ASCII fallbacks"));
 
 const row = pc.createElement("div");
 row.style.display = "flex";
 row.style.flexDirection = "row";
 row.style.gap = 4;
 
-const halfBlockColumn = imageColumn("half-block default", "half-block");
+const nativeColumn = imageColumn("automatic (native when available)", "auto");
+const halfBlockColumn = imageColumn("half-block fallback", "half-block");
 const asciiColumn = imageColumn("ASCII fallback", "ascii");
+row.appendChild(nativeColumn);
 row.appendChild(halfBlockColumn);
 row.appendChild(asciiColumn);
 
@@ -49,7 +51,7 @@ pc.addEventListener("keydown", event => {
   }
 });
 
-function imageColumn(labelText: string, rendering: "ascii" | "half-block") {
+function imageColumn(labelText: string, rendering: "auto" | "ascii" | "half-block") {
   const column = pc.createElement("div");
   column.style.display = "flex";
   column.style.flexDirection = "column";
