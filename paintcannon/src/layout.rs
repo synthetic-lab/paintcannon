@@ -86,6 +86,8 @@ pub(crate) struct LayoutArena {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LayoutProfileStats {
+    #[cfg(test)]
+    pub(crate) uncached_layout_calls: u64,
     pub(crate) inline_width_calls: u64,
     pub(crate) inline_height_calls: u64,
     pub(crate) inline_fragment_calls: u64,
@@ -1427,6 +1429,10 @@ impl LayoutArena {
                 child,
                 LayoutInput {
                     known_dimensions,
+                    known_dimensions_are_definite: Size {
+                        width: true,
+                        height: true,
+                    },
                     parent_size: area_size.map(Some),
                     available_space,
                     sizing_mode: SizingMode::ContentSize,
@@ -1443,6 +1449,10 @@ impl LayoutArena {
             child,
             LayoutInput {
                 known_dimensions: final_size.map(Some),
+                known_dimensions_are_definite: Size {
+                    width: true,
+                    height: true,
+                },
                 parent_size: area_size.map(Some),
                 available_space,
                 sizing_mode: SizingMode::ContentSize,
@@ -1551,7 +1561,7 @@ impl LayoutArena {
             &Layout {
                 order: 0,
                 size: final_size,
-                content_size: layout_output.content_size,
+                scrollable_overflow_rect: layout_output.scrollable_overflow_rect,
                 scrollbar_size,
                 location: Point {
                     x: containing_origin.x + area_offset.x + x - parent_origin.x,
@@ -2842,6 +2852,7 @@ impl LayoutArena {
             style_min_size,
             style_max_size,
             scrollbar_gutter,
+            is_scroll_container,
         ) = {
             let node = &self.nodes[node_index(node_id)];
             let style = &node.taffy_style;
@@ -2855,6 +2866,7 @@ impl LayoutArena {
                 style.min_size,
                 style.max_size,
                 scrollbar_gutter_for_style(style),
+                style.overflow.x.is_scroll_container() || style.overflow.y.is_scroll_container(),
             )
         };
 
@@ -2985,7 +2997,27 @@ impl LayoutArena {
         }
         .maybe_max(padding_border_size.map(Some));
 
-        LayoutOutput::from_sizes(outer_size, measured_size)
+        LayoutOutput::from_sizes(
+            outer_size,
+            Rect {
+                left: 0.0,
+                right: padding.left
+                    + measured_size.width
+                    + if is_scroll_container {
+                        padding.right
+                    } else {
+                        0.0
+                    },
+                top: 0.0,
+                bottom: padding.top
+                    + measured_size.height
+                    + if is_scroll_container {
+                        padding.bottom
+                    } else {
+                        0.0
+                    },
+            },
+        )
     }
 
     fn inline_content_widths(&mut self, node_id: NodeId, config: TextWrapConfig) -> ContentWidths {
@@ -3334,6 +3366,10 @@ impl LayoutPartialTree for LayoutArena {
             compute_hidden_layout(self, node_id)
         } else {
             compute_cached_layout(self, node_id, inputs, |tree, node_id, inputs| {
+                #[cfg(test)]
+                {
+                    tree.profile.uncached_layout_calls += 1;
+                }
                 if tree.is_inline_context(node_id) {
                     return tree.compute_inline_layout(node_id, inputs);
                 }
@@ -3368,7 +3404,7 @@ impl LayoutPartialTree for LayoutArena {
 }
 
 impl CacheTree for LayoutArena {
-    fn cache_get(&self, node_id: NodeId, input: &LayoutInput) -> Option<LayoutOutput> {
+    fn cache_get(&mut self, node_id: NodeId, input: &LayoutInput) -> Option<LayoutOutput> {
         self.nodes[node_index(node_id)].cache.get(input)
     }
 
@@ -4640,6 +4676,10 @@ mod tests {
             row,
             LayoutInput {
                 known_dimensions: Size::NONE,
+                known_dimensions_are_definite: Size {
+                    width: true,
+                    height: true,
+                },
                 parent_size: Size::NONE,
                 available_space: Size {
                     width: AvailableSpace::MinContent,
@@ -4667,6 +4707,10 @@ mod tests {
             row,
             LayoutInput {
                 known_dimensions: Size::NONE,
+                known_dimensions_are_definite: Size {
+                    width: true,
+                    height: true,
+                },
                 parent_size: Size {
                     width: Some(20.0),
                     height: None,
@@ -6879,6 +6923,10 @@ mod tests {
                     row,
                     LayoutInput {
                         known_dimensions: Size::NONE,
+                        known_dimensions_are_definite: Size {
+                            width: true,
+                            height: true,
+                        },
                         parent_size: Size::NONE,
                         available_space: Size {
                             width: AvailableSpace::MinContent,
@@ -6942,6 +6990,10 @@ mod tests {
                 row,
                 LayoutInput {
                     known_dimensions: Size::NONE,
+                    known_dimensions_are_definite: Size {
+                        width: true,
+                        height: true,
+                    },
                     parent_size: Size::NONE,
                     available_space: Size {
                         width: AvailableSpace::MinContent,

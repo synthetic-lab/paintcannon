@@ -33,6 +33,87 @@ fn layout(engine: &PaintEngine, node: DomId) -> taffy::Layout {
 }
 
 #[test]
+fn nested_flex_table_keeps_sizing_work_bounded_when_rendered_and_resized() {
+    let mut engine = PaintEngine::new();
+    let root = engine.create_element(DivStyle {
+        display: LayoutDisplay::Flex,
+        flex_direction: LayoutFlexDirection::Column,
+        width: CssDimension::Percent(1.0),
+        height: CssDimension::Percent(1.0),
+        overflow_y: LayoutOverflow::Scroll,
+        scrollbar_gutter: ScrollbarGutter::Stable,
+        ..DivStyle::default()
+    });
+    engine.set_root(root);
+    let mut parent = root;
+    for _ in 0..12 {
+        let child = engine.create_element(DivStyle {
+            display: LayoutDisplay::Flex,
+            flex_direction: LayoutFlexDirection::Column,
+            flex_shrink: 0.0,
+            ..DivStyle::default()
+        });
+        engine.append_child(parent, child);
+        parent = child;
+    }
+    let grid = engine.create_element(DivStyle {
+        display: LayoutDisplay::Grid,
+        width: CssDimension::Percent(1.0),
+        max_width: CssDimension::Percent(1.0),
+        grid_template_columns: parse_grid_template_tracks("auto auto auto").unwrap(),
+        grid_auto_rows: parse_grid_auto_tracks("max-content").unwrap(),
+        justify_content: Some(LayoutJustifyContent::FlexStart),
+        ..DivStyle::default()
+    });
+    engine.append_child(parent, grid);
+    for (index, value) in ["#", "Name", "Details", "1", "First", "Some longer text"]
+        .iter()
+        .enumerate()
+    {
+        let cell = engine.create_element(DivStyle {
+            display: LayoutDisplay::Flex,
+            white_space: CssWhiteSpace::PreWrap,
+            overflow_wrap: CssOverflowWrap::Anywhere,
+            padding_left: CssLengthPercentage::Length(1.0),
+            padding_right: CssLengthPercentage::Length(1.0),
+            border_top: BorderStyle::Solid,
+            border_bottom: BorderStyle::Solid,
+            border_left: BorderStyle::Solid,
+            border_right: BorderStyle::Solid,
+            grid_column: CssGridLine {
+                start: CssGridPlacement::Line((index % 3) as i16 + 1),
+                ..CssGridLine::default()
+            },
+            grid_row: CssGridLine {
+                start: CssGridPlacement::Line((index / 3) as i16 + 1),
+                ..CssGridLine::default()
+            },
+            ..DivStyle::default()
+        });
+        let span = engine.create_element(DivStyle {
+            display: LayoutDisplay::Inline,
+            ..DivStyle::default()
+        });
+        let text = engine.create_text(*value);
+        engine.append_child(span, text);
+        engine.append_child(cell, span);
+        engine.append_child(grid, cell);
+    }
+    for width in [80, 40, 80] {
+        let frame = engine.render_frame(width, 30).unwrap();
+        assert_eq!(layout(&engine, grid).size.width, (width - 1) as f32);
+        assert_eq!(frame.cell(2, 1).unwrap().character, '#');
+        assert_eq!(frame.cell(2, 4).unwrap().character, '1');
+        let calls = engine.arena.profile_stats().uncached_layout_calls;
+        let nodes = engine.arena.stats().node_count;
+        assert!(
+            calls < nodes as u64 * 100,
+            "{calls} uncached layout calls for {nodes} nodes"
+        );
+    }
+}
+
+#[test]
 fn grid_minmax_content_tracks_wrap_and_remeasure_when_constrained() {
     let (mut engine, root, cells) = text_grid(
         "minmax(0, max-content) minmax(0, max-content)",
