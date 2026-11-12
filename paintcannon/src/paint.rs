@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::time::Instant;
 
-use taffy::{tree::Layout, NodeId};
+use taffy::{tree::Layout, NodeId, Point};
 
 use crate::frame::{
     ClipBounds, ClipRect, Frame, GlyphStyle, GraphemeGlyph, LogicalLine, SelectionPoint,
@@ -615,13 +615,15 @@ impl<'a, 'out> Painter<'a, 'out> {
         );
         paint_image(
             &mut self.output.frame,
-            self.arena.selection_source(id),
             image,
-            style.image_rendering,
             content,
-            selection_background,
-            state.glyph_style.hyperlink,
-            child_clip,
+            ImagePaintOptions {
+                source: self.arena.selection_source(id),
+                rendering: style.image_rendering,
+                selection_background,
+                hyperlink: state.glyph_style.hyperlink,
+                clip: child_clip,
+            },
         );
         let border_color =
             self.paint_color(id, TransitionProperty::BorderColor, style.border_color);
@@ -773,8 +775,7 @@ impl<'a, 'out> Painter<'a, 'out> {
         for (offset, grapheme) in text_graphemes(&normalized).enumerate() {
             let (character, suffix) = grapheme_parts(grapheme.text);
             self.output.frame.write_grapheme(
-                x + col,
-                y,
+                Point { x: x + col, y },
                 GraphemeGlyph {
                     character,
                     suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
@@ -837,8 +838,10 @@ impl<'a, 'out> Painter<'a, 'out> {
                         );
                     }
                     self.output.frame.write_grapheme(
-                        rect.left,
-                        rect.top,
+                        Point {
+                            x: rect.left,
+                            y: rect.top,
+                        },
                         GraphemeGlyph {
                             character: *character,
                             suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
@@ -1095,16 +1098,27 @@ fn apply_text_style(style: &DivStyle, mut glyph_style: GlyphStyle) -> GlyphStyle
     glyph_style
 }
 
-fn paint_image(
-    frame: &mut Frame,
+struct ImagePaintOptions {
     source: usize,
-    image: &ImageLayoutData,
     rendering: ImageRendering,
-    rect: ClipRect,
     selection_background: Option<Background>,
     hyperlink: Option<NodeId>,
     clip: ClipBounds,
+}
+
+fn paint_image(
+    frame: &mut Frame,
+    image: &ImageLayoutData,
+    rect: ClipRect,
+    options: ImagePaintOptions,
 ) {
+    let ImagePaintOptions {
+        source,
+        rendering,
+        selection_background,
+        hyperlink,
+        clip,
+    } = options;
     let Some(rgb) = image.rgb.as_ref() else {
         return;
     };
@@ -1128,8 +1142,7 @@ fn paint_image(
                         continue;
                     };
                     frame.write_glyph(
-                        x,
-                        y,
+                        Point { x, y },
                         ascii_pixel_char(pixel[0], pixel[1], pixel[2]),
                         1,
                         GlyphStyle {
@@ -1174,8 +1187,7 @@ fn paint_image(
                     };
 
                     frame.write_glyph(
-                        x,
-                        y,
+                        Point { x, y },
                         '▄',
                         1,
                         GlyphStyle {
@@ -1264,8 +1276,10 @@ fn paint_input(
     for (offset, (grapheme, col)) in glyphs.iter().enumerate() {
         let (character, suffix) = grapheme_parts(grapheme.text);
         frame.write_grapheme(
-            rect.left + *col as i32 - start as i32,
-            rect.top,
+            Point {
+                x: rect.left + *col as i32 - start as i32,
+                y: rect.top,
+            },
             GraphemeGlyph {
                 character,
                 suffix: suffix.as_deref().map(|suffix| suffix.as_str()),
@@ -1285,8 +1299,10 @@ fn paint_input(
         if cursor_col < width {
             if !glyphs.iter().any(|(_, col)| *col == cursor_cell) {
                 frame.write_glyph(
-                    rect.left + cursor_col as i32,
-                    rect.top,
+                    Point {
+                        x: rect.left + cursor_col as i32,
+                        y: rect.top,
+                    },
                     ' ',
                     1,
                     glyph_style,
@@ -1355,8 +1371,10 @@ fn paint_textarea(
     let clip = clip.intersect(ClipBounds::from_rect_axes(rect, true, true));
     for glyph in &layout.glyphs {
         frame.write_grapheme(
-            rect.left + glyph.col as i32,
-            rect.top + glyph.row as i32 - scroll_top as i32,
+            Point {
+                x: rect.left + glyph.col as i32,
+                y: rect.top + glyph.row as i32 - scroll_top as i32,
+            },
             GraphemeGlyph {
                 character: glyph.character,
                 suffix: glyph.suffix.as_deref().map(|suffix| suffix.as_str()),
@@ -1391,8 +1409,10 @@ fn paint_textarea(
                 .any(|glyph| glyph.width > 0 && glyph.row == row && glyph.col == col)
             {
                 frame.write_grapheme(
-                    rect.left + col as i32,
-                    rect.top + visible_row as i32,
+                    Point {
+                        x: rect.left + col as i32,
+                        y: rect.top + visible_row as i32,
+                    },
                     GraphemeGlyph {
                         character: ' ',
                         suffix: None,

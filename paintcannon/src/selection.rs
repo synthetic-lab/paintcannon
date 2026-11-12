@@ -250,14 +250,16 @@ mod tests {
     use crate::layout::LayoutArena;
     use crate::paint::paint_arena;
     use crate::style::{CssDimension, DivStyle, LayoutFlexDirection, LayoutOverflow};
-    use taffy::{AvailableSpace, Size};
+    use taffy::{AvailableSpace, Point, Size};
 
     fn text_frame(text: &str) -> Frame {
         let mut frame = Frame::new(text.len(), 1, false);
         for (index, character) in text.chars().enumerate() {
             frame.write_glyph(
-                index as i32,
-                0,
+                Point {
+                    x: index as i32,
+                    y: 0,
+                },
                 character,
                 1,
                 GlyphStyle::default(),
