@@ -8,7 +8,8 @@ renders to a terminal backend instead of a GUI in your window manager.
 PaintCannon supports the following CSS:
 
 - FlexBox
-- Grid
+- Grid, including sizing based on cell lengths, percentages, `fr`, `auto`,
+  `min-content`, `max-content`, and `minmax(min, max)`
 - Block
 - Inline
 - Relative and absolute positioning with CSS stacking contexts and `z-index`

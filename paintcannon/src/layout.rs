@@ -2434,7 +2434,8 @@ impl LayoutArena {
 
         if self.is_inline_context(node_id) {
             let widths = self.inline_content_widths(node_id, text_wrap);
-            let content_width = float_to_cells(scroll_content_box_size(layout).width).max(1);
+            let content_width =
+                inline_wrap_width(scroll_content_box_size(self.nodes[index].layout).width);
             let height = self.inline_content_height(node_id, text_wrap, content_width);
             scroll_width = scroll_width.max(float_to_cells(
                 layout.padding.left + widths.max + layout.padding.right,
@@ -2729,10 +2730,7 @@ impl LayoutArena {
 
     fn compute_inline_fragments_for_stored_layout(&mut self, node: NodeId) {
         let index = node_index(node);
-        let width = scroll_content_box_size(self.nodes[index].layout)
-            .width
-            .max(1.0)
-            .round() as u32;
+        let width = inline_wrap_width(scroll_content_box_size(self.nodes[index].layout).width);
         let text_wrap = self.text_wrap_config(node);
         self.compute_inline_fragments(node, text_wrap, width);
         self.mark_inline_descendants_clean(node);
@@ -2957,17 +2955,13 @@ impl LayoutArena {
             });
 
         let inline_height_start = Instant::now();
-        let content_height =
-            self.inline_content_height(node_id, text_wrap, content_width.max(1.0).round() as u32);
+        let wrap_width = inline_wrap_width(content_width);
+        let content_height = self.inline_content_height(node_id, text_wrap, wrap_width);
         self.profile.inline_height_calls += 1;
         self.profile.inline_height_ns += inline_height_start.elapsed().as_nanos();
         if run_mode == RunMode::PerformLayout && self.should_store_layout() {
             let inline_fragment_start = Instant::now();
-            self.compute_inline_fragments(
-                node_id,
-                text_wrap,
-                content_width.max(1.0).round() as u32,
-            );
+            self.compute_inline_fragments(node_id, text_wrap, wrap_width);
             self.mark_inline_descendants_clean(node_id);
             self.profile.inline_fragment_calls += 1;
             self.profile.inline_fragment_ns += inline_fragment_start.elapsed().as_nanos();
@@ -3353,7 +3347,7 @@ impl LayoutPartialTree for LayoutArena {
                 let has_children = tree.child_count(node_id) > 0;
                 match (display, has_children) {
                     (taffy::Display::None, _) => compute_hidden_layout(tree, node_id),
-                    (taffy::Display::Block, true) => {
+                    (taffy::Display::Block | taffy::Display::FlowRoot, true) => {
                         compute_block_layout(tree, node_id, inputs, None)
                     }
                     (taffy::Display::Flex, true) => compute_flexbox_layout(tree, node_id, inputs),
@@ -4048,6 +4042,12 @@ fn can_cull_vertical_anchor_children(style: &DivStyle) -> bool {
     }
 }
 
+fn inline_wrap_width(width: f32) -> u32 {
+    // A fractional layout width cannot fit an extra cell. Measurement and fragments
+    // must agree, even when shared track edges snap to different integer widths.
+    width.floor().max(1.0) as u32
+}
+
 fn text_content_widths(text: &str, config: TextWrapConfig) -> ContentWidths {
     let chars = parse_text_for_white_space(text, config.white_space);
     let normalized = chars.iter().collect::<String>();
@@ -4302,10 +4302,9 @@ fn resolve_word_break(inherited: CssWordBreak, own: CssWordBreak) -> CssWordBrea
 mod tests {
     use super::*;
     use crate::style::{
-        BorderStyle, CssDimension, CssGridTemplateTrack, CssLengthPercentage,
-        CssLengthPercentageAuto, CssOverflowWrap, CssPosition, CssTrackSizing, CssWhiteSpace,
-        CssWordBreak, LayoutAlignItems, LayoutFlexDirection, LayoutJustifyContent, LayoutOverflow,
-        ScrollbarGutter,
+        BorderStyle, CssDimension, CssLengthPercentage, CssLengthPercentageAuto, CssOverflowWrap,
+        CssPosition, CssWhiteSpace, CssWordBreak, LayoutAlignItems, LayoutFlexDirection,
+        LayoutJustifyContent, LayoutOverflow, ScrollbarGutter,
     };
 
     fn block_style(width: CssDimension, height: CssDimension) -> DivStyle {
@@ -4865,10 +4864,7 @@ mod tests {
         let mut arena = LayoutArena::new();
         let mut root_style = block_style(CssDimension::Length(20.0), CssDimension::Length(5.0));
         root_style.display = LayoutDisplay::Grid;
-        root_style.grid_template_columns = vec![
-            CssGridTemplateTrack::Single(CssTrackSizing::Length(5.0)),
-            CssGridTemplateTrack::Single(CssTrackSizing::Length(7.0)),
-        ];
+        root_style.grid_template_columns = crate::style::parse_grid_template_tracks("5 7").unwrap();
         let root = arena.create_element(root_style);
         let first = fixed_box(&mut arena, 1.0, 1.0);
         let second = fixed_box(&mut arena, 1.0, 1.0);
