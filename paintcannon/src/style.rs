@@ -457,6 +457,14 @@ impl CssDimension {
             Self::Percent(value) => Dimension::percent(value),
         }
     }
+
+    fn to_taffy_min_max(self) -> LengthPercentageAuto {
+        match self {
+            Self::Auto => LengthPercentageAuto::AUTO,
+            Self::Length(value) => LengthPercentageAuto::length(value),
+            Self::Percent(value) => LengthPercentageAuto::percent(value),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -808,12 +816,12 @@ impl DivStyle {
                 height: self.height.to_taffy(),
             },
             min_size: Size {
-                width: self.min_width.to_taffy(),
-                height: self.min_height.to_taffy(),
+                width: self.min_width.to_taffy_min_max(),
+                height: self.min_height.to_taffy_min_max(),
             },
             max_size: Size {
-                width: self.max_width.to_taffy(),
-                height: self.max_height.to_taffy(),
+                width: self.max_width.to_taffy_min_max(),
+                height: self.max_height.to_taffy_min_max(),
             },
             border: Rect {
                 left: LengthPercentage::length(self.border_left.width()),

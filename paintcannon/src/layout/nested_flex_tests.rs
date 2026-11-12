@@ -23,6 +23,56 @@ fn flexible() -> DivStyle {
     }
 }
 
+#[test]
+fn nested_flex_measurements_do_not_grow_exponentially() {
+    let mut arena = LayoutArena::new();
+    let leaf = arena.create_element(DivStyle {
+        width: CssDimension::Length(10.0),
+        height: CssDimension::Length(1.0),
+        ..DivStyle::default()
+    });
+    let depth = 12;
+    let mut child = leaf;
+    for _ in 0..depth {
+        let parent = arena.create_element(DivStyle {
+            flex_shrink: 0.0,
+            ..column()
+        });
+        arena.append_child(parent, child);
+        child = parent;
+    }
+    let root = arena.create_element(DivStyle {
+        width: CssDimension::Percent(1.0),
+        height: CssDimension::Percent(1.0),
+        overflow_y: LayoutOverflow::Scroll,
+        scrollbar_gutter: ScrollbarGutter::Stable,
+        ..column()
+    });
+    arena.append_child(root, child);
+    arena.compute_layout(
+        root,
+        Size {
+            width: AvailableSpace::Definite(80.0),
+            height: AvailableSpace::Definite(30.0),
+        },
+    );
+    assert_eq!(
+        arena.layout(leaf).size,
+        Size {
+            width: 10.0,
+            height: 1.0
+        }
+    );
+    let calls = arena.profile_stats().uncached_layout_calls;
+    // Allow ample room for intrinsic/final sizing passes, but not repeated
+    // subtree measurements caused by hot cache entries evicting one another.
+    assert!(
+        calls < (depth + 2) * 100,
+        "{calls} uncached layout calls for {} nodes",
+        depth + 2
+    );
+}
+
 fn text(arena: &mut LayoutArena, parent: NodeId, value: &str) {
     let span = arena.create_element(DivStyle {
         display: LayoutDisplay::Inline,
