@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
 
+use taffy::Point;
 use termprofile::TermProfile;
 
 use crate::style::{Background, BorderStyle, DivStyle};
@@ -348,8 +349,7 @@ impl Frame {
 
     pub(crate) fn write_glyph(
         &mut self,
-        x: i32,
-        y: i32,
+        position: Point<i32>,
         character: char,
         width: usize,
         style: GlyphStyle,
@@ -357,8 +357,7 @@ impl Frame {
         point: SelectionPoint,
     ) {
         self.write_grapheme(
-            x,
-            y,
+            position,
             GraphemeGlyph {
                 character,
                 suffix: None,
@@ -373,14 +372,14 @@ impl Frame {
 
     pub(crate) fn write_grapheme(
         &mut self,
-        x: i32,
-        y: i32,
+        position: Point<i32>,
         glyph: GraphemeGlyph<'_>,
         style: GlyphStyle,
         clip: ClipBounds,
         point: SelectionPoint,
         logical_line: Option<LogicalLine>,
     ) {
+        let Point { x, y } = position;
         let visible = self.cell_index(x, y).is_some() && clip.contains(x, y);
         if !visible && !self.capture_hidden_selection_units {
             return;
@@ -1795,8 +1794,7 @@ mod tests {
         frame.powerline_extended = true;
         let clip = ClipBounds::unbounded();
         frame.write_glyph(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             'x',
             1,
             GlyphStyle {
@@ -2185,8 +2183,10 @@ mod tests {
         let glyph_style = GlyphStyle::default();
         for (index, character) in "abc".chars().enumerate() {
             frame.write_glyph(
-                index as i32,
-                0,
+                Point {
+                    x: index as i32,
+                    y: 0,
+                },
                 character,
                 1,
                 glyph_style,
@@ -2196,8 +2196,10 @@ mod tests {
         }
         for (index, character) in "de ".chars().enumerate() {
             frame.write_glyph(
-                index as i32,
-                1,
+                Point {
+                    x: index as i32,
+                    y: 1,
+                },
                 character,
                 1,
                 glyph_style,
@@ -2226,8 +2228,7 @@ mod tests {
             ..Default::default()
         };
         frame.write_grapheme(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             GraphemeGlyph {
                 character: '\u{26a0}',
                 suffix: Some("\u{fe0f}"),
@@ -2239,8 +2240,7 @@ mod tests {
             None,
         );
         frame.write_glyph(
-            0,
-            1,
+            Point { x: 0, y: 1 },
             'x',
             1,
             style,
@@ -2267,8 +2267,7 @@ mod tests {
             .hyperlinks
             .insert(id, crate::hyperlink::encode_href("https://example.com"));
         frame.write_glyph(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             'a',
             1,
             GlyphStyle {
@@ -2280,8 +2279,7 @@ mod tests {
         );
         let mut layer = frame.layer();
         layer.write_glyph(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             'b',
             1,
             GlyphStyle::default(),
@@ -2294,8 +2292,7 @@ mod tests {
 
         let mut layer = frame.layer();
         layer.write_glyph(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             'c',
             1,
             GlyphStyle {
@@ -2314,8 +2311,7 @@ mod tests {
             "an unrelated border owns its cell"
         );
         frame.write_glyph(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             'c',
             1,
             GlyphStyle {
@@ -2338,8 +2334,7 @@ mod tests {
     fn selection_text_preserves_grapheme_suffixes() {
         let mut frame = Frame::new(2, 1, false);
         frame.write_grapheme(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             GraphemeGlyph {
                 character: '\u{26a0}',
                 suffix: Some("\u{fe0f}"),
@@ -2367,8 +2362,7 @@ mod tests {
             for (suffix, width) in [(None, 1), (Some("\u{fe0e}"), 1), (Some("\u{fe0f}"), 2)] {
                 let mut frame = Frame::new(3, 1, false);
                 frame.write_grapheme(
-                    0,
-                    0,
+                    Point { x: 0, y: 0 },
                     GraphemeGlyph {
                         character,
                         suffix,
@@ -2401,8 +2395,7 @@ mod tests {
     fn selection_point_uses_nearest_selectable_cell_on_row() {
         let mut frame = Frame::new(8, 1, false);
         frame.write_glyph(
-            2,
-            0,
+            Point { x: 2, y: 0 },
             'a',
             1,
             GlyphStyle::default(),
@@ -2410,8 +2403,7 @@ mod tests {
             selection_point(frame.selection_units.len()),
         );
         frame.write_glyph(
-            5,
-            0,
+            Point { x: 5, y: 0 },
             'b',
             1,
             GlyphStyle::default(),
@@ -2443,8 +2435,7 @@ mod tests {
             let mut frame = Frame::new(3, 1, true);
             for (x, (point, character)) in glyphs.into_iter().enumerate() {
                 frame.write_glyph(
-                    x as i32,
-                    0,
+                    Point { x: x as i32, y: 0 },
                     character,
                     1,
                     GlyphStyle::default(),
@@ -2471,8 +2462,7 @@ mod tests {
         let mut frame = Frame::new(3, 1, true);
         for (x, (offset, character)) in [(2, 'a'), (4, 'b'), (8, 'c')].into_iter().enumerate() {
             frame.write_glyph(
-                x as i32,
-                0,
+                Point { x: x as i32, y: 0 },
                 character,
                 1,
                 GlyphStyle::default(),
@@ -2498,8 +2488,10 @@ mod tests {
         let mut frame = Frame::new(3, 1, false);
         for (index, character) in "abc".chars().enumerate() {
             frame.write_glyph(
-                index as i32,
-                0,
+                Point {
+                    x: index as i32,
+                    y: 0,
+                },
                 character,
                 1,
                 GlyphStyle::default(),
@@ -2523,8 +2515,7 @@ mod tests {
         let previous = Frame::new(4, 2, false);
         let mut next = Frame::new(4, 2, false);
         next.write_glyph(
-            2,
-            1,
+            Point { x: 2, y: 1 },
             'x',
             1,
             GlyphStyle::default(),
@@ -2546,8 +2537,7 @@ mod tests {
     fn diff_writes_when_only_grapheme_suffix_changes() {
         let mut previous = Frame::new(1, 1, false);
         previous.write_grapheme(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             GraphemeGlyph {
                 character: 'e',
                 suffix: Some("\u{301}"),
@@ -2560,8 +2550,7 @@ mod tests {
         );
         let mut next = Frame::new(1, 1, false);
         next.write_grapheme(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             GraphemeGlyph {
                 character: 'e',
                 suffix: Some("\u{308}"),
@@ -2587,8 +2576,7 @@ mod tests {
         for (character, suffix) in [('👍', "\u{1f3fd}"), ('👩', "\u{200d}\u{1f4bb}")] {
             let mut previous = Frame::new(6, 1, false);
             previous.write_glyph(
-                0,
-                0,
+                Point { x: 0, y: 0 },
                 '│',
                 1,
                 GlyphStyle::default(),
@@ -2596,8 +2584,7 @@ mod tests {
                 selection_point(previous.selection_units.len()),
             );
             previous.write_glyph(
-                1,
-                0,
+                Point { x: 1, y: 0 },
                 '🐙',
                 2,
                 GlyphStyle::default(),
@@ -2605,8 +2592,7 @@ mod tests {
                 selection_point(previous.selection_units.len()),
             );
             previous.write_glyph(
-                3,
-                0,
+                Point { x: 3, y: 0 },
                 'x',
                 1,
                 GlyphStyle::default(),
@@ -2614,8 +2600,7 @@ mod tests {
                 selection_point(previous.selection_units.len()),
             );
             previous.write_glyph(
-                4,
-                0,
+                Point { x: 4, y: 0 },
                 '│',
                 1,
                 GlyphStyle::default(),
@@ -2624,8 +2609,7 @@ mod tests {
             );
             let mut next = previous.clone();
             next.write_grapheme(
-                1,
-                0,
+                Point { x: 1, y: 0 },
                 GraphemeGlyph {
                     character,
                     suffix: Some(suffix),
@@ -2653,8 +2637,7 @@ mod tests {
     fn diff_starting_in_a_continuation_cell_positions_the_following_text() {
         let mut previous = Frame::new(3, 1, false);
         previous.write_glyph(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             '🐙',
             2,
             GlyphStyle::default(),
@@ -2662,8 +2645,7 @@ mod tests {
             selection_point(previous.selection_units.len()),
         );
         previous.write_glyph(
-            2,
-            0,
+            Point { x: 2, y: 0 },
             'x',
             1,
             GlyphStyle::default(),
@@ -2673,8 +2655,7 @@ mod tests {
         let mut next = previous.clone();
         next.cells[1].background = Background::Red;
         next.write_glyph(
-            2,
-            0,
+            Point { x: 2, y: 0 },
             'y',
             1,
             GlyphStyle::default(),
@@ -2693,8 +2674,7 @@ mod tests {
     fn full_frame_write_emits_text_attribute_sgr() {
         let mut frame = Frame::new(2, 1, false);
         frame.write_glyph(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             'a',
             1,
             GlyphStyle {
@@ -2708,8 +2688,7 @@ mod tests {
             selection_point(frame.selection_units.len()),
         );
         frame.write_glyph(
-            1,
-            0,
+            Point { x: 1, y: 0 },
             'b',
             1,
             GlyphStyle::default(),
@@ -2732,8 +2711,7 @@ mod tests {
     fn diff_writes_cells_when_only_text_attributes_change() {
         let mut previous = Frame::new(1, 1, false);
         previous.write_glyph(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             'x',
             1,
             GlyphStyle::default(),
@@ -2742,8 +2720,7 @@ mod tests {
         );
         let mut next = Frame::new(1, 1, false);
         next.write_glyph(
-            0,
-            0,
+            Point { x: 0, y: 0 },
             'x',
             1,
             GlyphStyle {
@@ -2766,8 +2743,7 @@ mod tests {
     fn terminal_frame_writes_disable_autowrap_while_flushing() {
         let mut next = Frame::new(4, 1, false);
         next.write_glyph(
-            3,
-            0,
+            Point { x: 3, y: 0 },
             'x',
             1,
             GlyphStyle::default(),
@@ -2792,8 +2768,7 @@ mod tests {
     fn full_frame_write_skips_trailing_empty_rows() {
         let mut frame = Frame::new(4, 4, false);
         frame.write_glyph(
-            0,
-            1,
+            Point { x: 0, y: 1 },
             'x',
             1,
             GlyphStyle::default(),

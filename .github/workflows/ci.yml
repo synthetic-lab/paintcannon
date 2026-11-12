@@ -28,10 +28,12 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
       - run: npm ci
       - run: npm run format:check
       - run: cargo fmt --check
+        working-directory: paintcannon
+      - run: cargo clippy --locked --all-targets -- -D warnings
         working-directory: paintcannon
       - run: npm run build --workspaces
       - run: npm run test

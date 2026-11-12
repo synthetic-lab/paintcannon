@@ -129,7 +129,7 @@ fn grid_minmax_content_tracks_wrap_and_remeasure_when_constrained() {
         let first = layout(&engine, cells[0]);
         let second = layout(&engine, cells[1]);
         let next_row = layout(&engine, cells[2]);
-        let available = (width as usize - 1).min(20);
+        let available = (width - 1).min(20);
         let lines = 20_usize.div_ceil(available);
         assert_eq!(layout(&engine, root).size.width, width as f32);
         assert_eq!(first.size.width, 1.0);

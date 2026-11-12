@@ -54,7 +54,7 @@ fn decoded_png_to_rgb(bytes: &[u8], color_type: png::ColorType) -> Result<Vec<u8
         }
         png::ColorType::Rgba => {
             rgb.reserve(bytes.len() / 4 * 3);
-            for pixel in bytes.chunks_exact(4) {
+            for pixel in bytes.as_chunks::<4>().0 {
                 rgb.extend_from_slice(&pixel[..3]);
             }
         }
@@ -66,7 +66,7 @@ fn decoded_png_to_rgb(bytes: &[u8], color_type: png::ColorType) -> Result<Vec<u8
         }
         png::ColorType::GrayscaleAlpha => {
             rgb.reserve(bytes.len() / 2 * 3);
-            for pixel in bytes.chunks_exact(2) {
+            for pixel in bytes.as_chunks::<2>().0 {
                 let value = pixel[0];
                 rgb.extend_from_slice(&[value, value, value]);
             }
@@ -119,6 +119,16 @@ mod tests {
     #[test]
     fn decodes_grayscale_png_to_rgb() {
         let bytes = encode_png(png::ColorType::Grayscale, 2, 1, &[10, 250]);
+
+        assert_eq!(
+            decode_png_image(&bytes).unwrap().rgb,
+            vec![10, 10, 10, 250, 250, 250]
+        );
+    }
+
+    #[test]
+    fn decodes_grayscale_alpha_png_to_rgb_by_dropping_alpha() {
+        let bytes = encode_png(png::ColorType::GrayscaleAlpha, 2, 1, &[10, 0, 250, 127]);
 
         assert_eq!(
             decode_png_image(&bytes).unwrap().rgb,
