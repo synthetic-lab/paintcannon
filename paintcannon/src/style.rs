@@ -493,6 +493,28 @@ impl CssLengthPercentageAuto {
 
 #[derive(Clone, Copy)]
 pub(crate) enum CssTrackSizing {
+    Breadth(CssTrackBreadth),
+    MinMax {
+        min: CssTrackBreadth,
+        max: CssTrackBreadth,
+    },
+}
+
+impl CssTrackSizing {
+    fn to_taffy(self) -> TrackSizingFunction {
+        match self {
+            Self::Breadth(breadth) => breadth.to_taffy(),
+            Self::MinMax { min, max } => TrackSizingFunction {
+                min: min.to_taffy().min,
+                max: max.to_taffy().max,
+            },
+        }
+    }
+}
+
+// Taffy's compact track values are not Send; styles cross the renderer channel.
+#[derive(Clone, Copy)]
+pub(crate) enum CssTrackBreadth {
     Auto,
     Length(f32),
     Percent(f32),
@@ -501,7 +523,7 @@ pub(crate) enum CssTrackSizing {
     MaxContent,
 }
 
-impl CssTrackSizing {
+impl CssTrackBreadth {
     fn to_taffy(self) -> TrackSizingFunction {
         match self {
             Self::Auto => TrackSizingFunction::AUTO,
@@ -752,28 +774,28 @@ impl DivStyle {
             flex_grow: self.flex_grow,
             flex_shrink: self.flex_shrink,
             justify_content: self.justify_content.map(|value| match value {
-                LayoutJustifyContent::Start => JustifyContent::Start,
-                LayoutJustifyContent::FlexStart => JustifyContent::FlexStart,
-                LayoutJustifyContent::Center => JustifyContent::Center,
-                LayoutJustifyContent::End => JustifyContent::End,
-                LayoutJustifyContent::FlexEnd => JustifyContent::FlexEnd,
-                LayoutJustifyContent::Stretch => JustifyContent::Stretch,
-                LayoutJustifyContent::SpaceBetween => JustifyContent::SpaceBetween,
-                LayoutJustifyContent::SpaceAround => JustifyContent::SpaceAround,
-                LayoutJustifyContent::SpaceEvenly => JustifyContent::SpaceEvenly,
+                LayoutJustifyContent::Start => JustifyContent::START,
+                LayoutJustifyContent::FlexStart => JustifyContent::FLEX_START,
+                LayoutJustifyContent::Center => JustifyContent::CENTER,
+                LayoutJustifyContent::End => JustifyContent::END,
+                LayoutJustifyContent::FlexEnd => JustifyContent::FLEX_END,
+                LayoutJustifyContent::Stretch => JustifyContent::STRETCH,
+                LayoutJustifyContent::SpaceBetween => JustifyContent::SPACE_BETWEEN,
+                LayoutJustifyContent::SpaceAround => JustifyContent::SPACE_AROUND,
+                LayoutJustifyContent::SpaceEvenly => JustifyContent::SPACE_EVENLY,
             }),
             align_items: self.align_items.map(layout_align_items_to_taffy),
             align_self: self.align_self.map(layout_align_items_to_taffy),
             align_content: self.align_content.map(|value| match value {
-                LayoutJustifyContent::Start => AlignContent::Start,
-                LayoutJustifyContent::FlexStart => AlignContent::FlexStart,
-                LayoutJustifyContent::Center => AlignContent::Center,
-                LayoutJustifyContent::End => AlignContent::End,
-                LayoutJustifyContent::FlexEnd => AlignContent::FlexEnd,
-                LayoutJustifyContent::Stretch => AlignContent::Stretch,
-                LayoutJustifyContent::SpaceBetween => AlignContent::SpaceBetween,
-                LayoutJustifyContent::SpaceAround => AlignContent::SpaceAround,
-                LayoutJustifyContent::SpaceEvenly => AlignContent::SpaceEvenly,
+                LayoutJustifyContent::Start => AlignContent::START,
+                LayoutJustifyContent::FlexStart => AlignContent::FLEX_START,
+                LayoutJustifyContent::Center => AlignContent::CENTER,
+                LayoutJustifyContent::End => AlignContent::END,
+                LayoutJustifyContent::FlexEnd => AlignContent::FLEX_END,
+                LayoutJustifyContent::Stretch => AlignContent::STRETCH,
+                LayoutJustifyContent::SpaceBetween => AlignContent::SPACE_BETWEEN,
+                LayoutJustifyContent::SpaceAround => AlignContent::SPACE_AROUND,
+                LayoutJustifyContent::SpaceEvenly => AlignContent::SPACE_EVENLY,
             }),
             justify_items: self.justify_items.map(layout_align_items_to_taffy),
             justify_self: self.justify_self.map(layout_align_items_to_taffy),
@@ -871,13 +893,13 @@ impl DivStyle {
 
 fn layout_align_items_to_taffy(value: LayoutAlignItems) -> AlignItems {
     match value {
-        LayoutAlignItems::Start => AlignItems::Start,
-        LayoutAlignItems::FlexStart => AlignItems::FlexStart,
-        LayoutAlignItems::Center => AlignItems::Center,
-        LayoutAlignItems::End => AlignItems::End,
-        LayoutAlignItems::FlexEnd => AlignItems::FlexEnd,
-        LayoutAlignItems::Baseline => AlignItems::Baseline,
-        LayoutAlignItems::Stretch => AlignItems::Stretch,
+        LayoutAlignItems::Start => AlignItems::START,
+        LayoutAlignItems::FlexStart => AlignItems::FLEX_START,
+        LayoutAlignItems::Center => AlignItems::CENTER,
+        LayoutAlignItems::End => AlignItems::END,
+        LayoutAlignItems::FlexEnd => AlignItems::FLEX_END,
+        LayoutAlignItems::Baseline => AlignItems::BASELINE,
+        LayoutAlignItems::Stretch => AlignItems::STRETCH,
     }
 }
 
@@ -1491,10 +1513,35 @@ pub(crate) fn parse_grid_template_tracks(value: &str) -> Result<Vec<CssGridTempl
 }
 
 pub(crate) fn parse_grid_auto_tracks(value: &str) -> Result<Vec<CssTrackSizing>> {
-    let tracks = value
-        .split_whitespace()
-        .map(parse_track_sizing)
-        .collect::<Result<Vec<_>>>()?;
+    let mut tracks = Vec::new();
+    let mut start = 0;
+    let mut depth = 0_usize;
+    // Whitespace separates tracks only outside functions, not their arguments.
+    for (index, character) in value.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1).ok_or_else(|| {
+                    Error::from_reason(format!("unmatched ')' in grid track list: {value}"))
+                })?;
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if start < index {
+                    tracks.push(parse_track_sizing(&value[start..index])?);
+                }
+                start = index + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return Err(Error::from_reason(format!(
+            "unclosed '(' in grid track list: {value}"
+        )));
+    }
+    if start < value.len() {
+        tracks.push(parse_track_sizing(&value[start..])?);
+    }
 
     if tracks.is_empty() {
         Err(Error::from_reason("grid track list cannot be empty"))
@@ -1504,37 +1551,55 @@ pub(crate) fn parse_grid_auto_tracks(value: &str) -> Result<Vec<CssTrackSizing>>
 }
 
 fn parse_track_sizing(value: &str) -> Result<CssTrackSizing> {
+    let value = value.trim().to_ascii_lowercase();
+    if let Some(arguments) = value.strip_prefix("minmax(") {
+        let (min, max) = arguments
+            .strip_suffix(')')
+            .and_then(|arguments| arguments.split_once(','))
+            .ok_or_else(|| Error::from_reason(format!("invalid minmax track size: {value}")))?;
+        let min = parse_track_breadth(min)?;
+        if matches!(min, CssTrackBreadth::Fr(_)) {
+            return Err(Error::from_reason(format!(
+                "minmax minimum cannot be fractional: {value}"
+            )));
+        }
+        let max = parse_track_breadth(max)?;
+        return Ok(CssTrackSizing::MinMax { min, max });
+    }
+    parse_track_breadth(&value).map(CssTrackSizing::Breadth)
+}
+
+fn parse_track_breadth(value: &str) -> Result<CssTrackBreadth> {
     let value = value.trim();
     match value {
-        "auto" => return Ok(CssTrackSizing::Auto),
-        "min-content" => return Ok(CssTrackSizing::MinContent),
-        "max-content" => return Ok(CssTrackSizing::MaxContent),
+        "auto" => return Ok(CssTrackBreadth::Auto),
+        "min-content" => return Ok(CssTrackBreadth::MinContent),
+        "max-content" => return Ok(CssTrackBreadth::MaxContent),
         _ => {}
     }
 
     if let Some(fr) = value.strip_suffix("fr") {
-        let fr = fr
-            .trim()
-            .parse::<f32>()
-            .map_err(|_| Error::from_reason(format!("invalid fr track size: {value}")))?;
-        return Ok(CssTrackSizing::Fr(fr));
+        return parse_track_number(fr).map(CssTrackBreadth::Fr);
     }
 
     if let Some(percent) = value.strip_suffix('%') {
-        let percent = percent
-            .trim()
-            .parse::<f32>()
-            .map_err(|_| Error::from_reason(format!("invalid percentage track size: {value}")))?;
-        return Ok(CssTrackSizing::Percent(percent / 100.0));
+        return parse_track_number(percent)
+            .map(|percent| CssTrackBreadth::Percent(percent / 100.0));
     }
 
+    parse_track_number(value.strip_suffix("px").unwrap_or(value)).map(CssTrackBreadth::Length)
+}
+
+fn parse_track_number(value: &str) -> Result<f32> {
     let number = value
-        .strip_suffix("px")
-        .unwrap_or(value)
-        .trim()
         .parse::<f32>()
         .map_err(|_| Error::from_reason(format!("invalid track size: {value}")))?;
-    Ok(CssTrackSizing::Length(number))
+    if !number.is_finite() || number < 0.0 {
+        return Err(Error::from_reason(format!(
+            "grid track size must be finite and non-negative: {value}"
+        )));
+    }
+    Ok(number)
 }
 
 pub(crate) fn parse_grid_auto_flow(value: &str) -> Result<LayoutGridAutoFlow> {
@@ -1605,6 +1670,138 @@ pub(crate) fn parse_grid_placement(value: &str) -> Result<CssGridPlacement> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_minmax_accepts_all_supported_bounds() {
+        let minima = [
+            ("0", MinTrackSizingFunction::from_length(0.0_f32)),
+            ("0px", MinTrackSizingFunction::from_length(0.0_f32)),
+            ("3px", MinTrackSizingFunction::from_length(3.0_f32)),
+            ("20%", MinTrackSizingFunction::from_percent(0.2_f32)),
+            ("auto", MinTrackSizingFunction::AUTO),
+            ("min-content", MinTrackSizingFunction::MIN_CONTENT),
+            ("max-content", MinTrackSizingFunction::MAX_CONTENT),
+        ];
+        let maxima = [
+            ("0", MaxTrackSizingFunction::from_length(0.0_f32)),
+            ("12px", MaxTrackSizingFunction::from_length(12.0_f32)),
+            ("50%", MaxTrackSizingFunction::from_percent(0.5_f32)),
+            ("1fr", MaxTrackSizingFunction::from_fr(1.0_f32)),
+            ("0fr", MaxTrackSizingFunction::from_fr(0.0_f32)),
+            ("auto", MaxTrackSizingFunction::AUTO),
+            ("min-content", MaxTrackSizingFunction::MIN_CONTENT),
+            ("max-content", MaxTrackSizingFunction::MAX_CONTENT),
+        ];
+        for (min_text, min) in minima {
+            for (max_text, max) in maxima {
+                let value = format!("minmax( {min_text} , {max_text} )");
+                assert_eq!(
+                    parse_track_sizing(&value).unwrap().to_taffy(),
+                    TrackSizingFunction { min, max },
+                    "{value}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn grid_minmax_lists_preserve_whitespace_and_all_four_track_properties() {
+        let value = "  2px\tminmax(0, max-content)\nminmax( 3 ,\n 1fr )  minmax(20%,1fr) auto  ";
+        let expected = vec![
+            TrackSizingFunction::from_length(2.0_f32),
+            minmax(
+                MinTrackSizingFunction::from_length(0.0_f32),
+                MaxTrackSizingFunction::MAX_CONTENT,
+            ),
+            minmax(
+                MinTrackSizingFunction::from_length(3.0_f32),
+                MaxTrackSizingFunction::from_fr(1.0_f32),
+            ),
+            minmax(
+                MinTrackSizingFunction::from_percent(0.2_f32),
+                MaxTrackSizingFunction::from_fr(1.0_f32),
+            ),
+            TrackSizingFunction::AUTO,
+        ];
+        let style = DivStyle {
+            grid_template_columns: parse_grid_template_tracks(value).unwrap(),
+            grid_template_rows: parse_grid_template_tracks(value).unwrap(),
+            grid_auto_columns: parse_grid_auto_tracks(value).unwrap(),
+            grid_auto_rows: parse_grid_auto_tracks(value).unwrap(),
+            ..DivStyle::default()
+        }
+        .to_taffy();
+        let template: Vec<GridTemplateComponent<String>> = expected
+            .iter()
+            .copied()
+            .map(GridTemplateComponent::Single)
+            .collect();
+        assert_eq!(style.grid_template_columns, template);
+        assert_eq!(style.grid_template_rows, template);
+        assert_eq!(style.grid_auto_columns, expected);
+        assert_eq!(style.grid_auto_rows, expected);
+    }
+
+    #[test]
+    fn grid_minmax_zero_is_not_an_automatic_minimum() {
+        for zero in ["0", "0px"] {
+            assert_eq!(
+                parse_track_sizing(zero).unwrap().to_taffy(),
+                TrackSizingFunction::from_length(0.0_f32)
+            );
+            let explicit = parse_track_sizing(&format!("minmax({zero}, 1fr)"))
+                .unwrap()
+                .to_taffy();
+            let bare = parse_track_sizing("1fr").unwrap().to_taffy();
+            assert_eq!(explicit.min, MinTrackSizingFunction::from_length(0.0_f32));
+            assert_eq!(bare.min, MinTrackSizingFunction::AUTO);
+            assert_eq!(explicit.max, bare.max);
+        }
+        // CSS floors the maximum at the minimum during layout, not parsing.
+        assert!(parse_grid_auto_tracks("minmax(8, 3)").is_ok());
+    }
+
+    #[test]
+    fn grid_minmax_rejects_invalid_track_syntax() {
+        for value in [
+            "",
+            " ",
+            "minmax()",
+            "minmax(0)",
+            "minmax(0 1fr)",
+            "minmax(,1fr)",
+            "minmax(0,)",
+            "minmax(0,1fr,2fr)",
+            "minmax(1fr,2fr)",
+            "minmax(-1,1fr)",
+            "minmax(0,-1fr)",
+            "minmax(0,NaN)",
+            "minmax(0,inf)",
+            "minmax(0,1e100fr)",
+            "minmax(0,1fr",
+            "minmax(0,1fr))",
+            "0) minmax(0,1fr)",
+            "minmax(0,minmax(0,1fr))",
+            "minmax(0,1fr)junk",
+            "repeat(2,1fr)",
+            "minmax (0,1fr)",
+            "minmax(3 px,1fr)",
+            "minmax(0,1 fr)",
+            "minmax(1em,1fr)",
+            "1fr, 1fr",
+            "-1px",
+            "-20%",
+            "-1fr",
+            "NaN",
+            "inf",
+        ] {
+            assert!(
+                parse_grid_template_tracks(value).is_err(),
+                "template: {value}"
+            );
+            assert!(parse_grid_auto_tracks(value).is_err(), "auto: {value}");
+        }
+    }
 
     #[test]
     fn colors_accept_css_named_colors_with_browser_rgb_values() {

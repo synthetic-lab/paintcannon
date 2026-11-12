@@ -13,7 +13,7 @@ instead of a GUI window.
 PaintCannon supports the following CSS layout and paint features:
 
 - Flexbox
-- Grid
+- Grid, including `minmax()` track sizing
 - Block layout
 - Inline layout
 - Relative and absolute positioning with CSS stacking contexts and `z-index`
@@ -68,6 +68,45 @@ Opacity accepts numbers or percentages and is clamped to the CSS range from `0` 
 queries supporting terminals for their default foreground and background colors so translucent
 content can blend correctly when a color resolves to the terminal default. Run
 `npm run demo:opacity` to see group opacity over overlapping text and backgrounds.
+
+## Grid Track Sizing
+
+`gridTemplateColumns`, `gridTemplateRows`, `gridAutoColumns`, and `gridAutoRows`
+(and their kebab-case CSS names) accept whitespace-separated track lists. A track can be:
+
+- A non-negative number or `px` length, measured in terminal cells: `0`, `3`, `12px`.
+- A non-negative percentage or fractional size: `20%`, `1fr`, `2.5fr`.
+- `auto`, `min-content`, or `max-content`.
+- `minmax(min, max)`, with optional whitespace around either argument and the comma.
+  The minimum accepts lengths, percentages, `auto`, `min-content`, or `max-content`.
+  The maximum accepts those values and fractional sizes such as `1fr`.
+
+For content-sized columns that can shrink and wrap in a narrow terminal:
+
+```ts
+table.style.display = "grid";
+table.style.width = "100%";
+table.style.gridTemplateColumns = "minmax(0, max-content) minmax(0, max-content)";
+table.style.justifyContent = "flex-start";
+
+// Apply to each grid cell.
+cell.style.minWidth = 0;
+cell.style.overflowWrap = "anywhere";
+```
+
+With sufficient space, these tracks retain their content widths and leave spare space
+after the columns. When constrained, their zero minima allow them to shrink and the
+cells wrap. Explicit minima, gaps, padding, and borders still occupy space and can
+cause overflow if they exceed the container.
+
+For equal flexible columns, use `minmax(0, 1fr) minmax(0, 1fr)`. Unlike bare `1fr`,
+which has an automatic minimum, `minmax(0, 1fr)` passes an actual zero minimum to
+layout. `0px` also means zero cells, not `auto`. Other examples include `minmax(3, 1fr)`,
+`minmax(min-content, max-content)`, and `minmax(20%, 1fr)`.
+
+Track sizing uses Taffy's CSS Grid implementation. Fractional minima, negative sizes,
+and malformed functions are rejected as style parsing errors. `repeat()` is not supported;
+generate repeated track strings in JavaScript when the column count is known.
 
 ## Elements
 

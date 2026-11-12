@@ -240,6 +240,31 @@ both supported:
 - `font-weight`/`fontWeight` (accepts `"bold"` or `"normal"`)
 - `text-decoration`/`textDecoration` (accepts `"underline"`, `"line-through"`, or `"none"`)
 
+Grid template and automatic track props accept the same strings as core: cell lengths,
+percentages, `fr`, `auto`, `min-content`, `max-content`, and `minmax(min, max)`.
+The minimum accepts any of those except `fr`; the maximum accepts all of them.
+Whitespace is allowed inside `minmax()`. For example:
+
+```tsx
+<Div
+  style={{
+    display: "grid",
+    width: "100%",
+    gridTemplateColumns: "minmax(0, max-content) minmax(0, max-content)",
+    justifyContent: "flex-start",
+  }}
+>
+  <Div style={{ minWidth: 0, overflowWrap: "anywhere" }}>#</Div>
+  <Div style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+    A longer cell that can wrap in a narrow terminal.
+  </Div>
+</Div>
+```
+
+`minmax(0, 1fr)` uses a zero minimum, unlike bare `1fr`'s automatic minimum.
+Sizes must be non-negative; `repeat()` is not supported.
+See the [full grid track grammar](../paintcannon/README.md#grid-track-sizing).
+
 ### Per-component props:
 
 - `Div`: shared props, plus `scrollLeft?: number` and `scrollTop?: number`.

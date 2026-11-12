@@ -56,7 +56,8 @@ mod tests {
     #[test]
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn reads_ssh_markers_from_processes() {
-        use std::process::Command;
+        use std::io::Read;
+        use std::process::{Command, Stdio};
 
         for (key, value, expected) in [
             ("SSH_CONNECTION", "", false),
@@ -67,16 +68,26 @@ mod tests {
             ("SSH_TTY", "/dev/pts/1", true),
             ("NOT_SSH_CLIENT", "remote", false),
         ] {
-            let mut child = Command::new("sleep")
-                .arg("30")
+            // A newly spawned process can briefly expose an empty environment.
+            // Signal readiness, then keep the same process alive until stdin closes.
+            let mut child = Command::new("sh")
+                .args(["-c", "printf ready; read -r line; exit 0"])
                 .env_clear()
                 .env("TERM", "xterm-ghostty")
                 .env(key, value)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
                 .spawn()
                 .unwrap();
+            let mut ready = [0; 5];
+            let readiness = child.stdout.take().unwrap().read_exact(&mut ready);
             let result = for_process(child.id());
-            let _ = child.kill();
-            child.wait().unwrap();
+            // Reap the child before asserting, including on handshake failure.
+            drop(child.stdin.take());
+            let status = child.wait().unwrap();
+            readiness.unwrap();
+            assert_eq!(&ready, b"ready");
+            assert!(status.success());
             assert_eq!(result, Some(expected), "{key}={value}");
         }
     }

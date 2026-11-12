@@ -109,10 +109,10 @@
     "@napi-rs/cli": "^3.6.2",
     "@types/node": "^25.9.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.7"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "antipattern": "^0.0.7",
-    "shell-quote": "^1.10.0"
+    "shell-quote": "^1.12.0"
   }
 }

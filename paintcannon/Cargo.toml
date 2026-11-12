@@ -18,7 +18,7 @@ terminput = "0.5"
 napi = { version = "3", default-features = false, features = ["napi4", "dyn-symbols"] }
 napi-derive = "3"
 png = "0.18"
-taffy = "0.10"
+taffy = "0.13"
 terminal-colorsaurus = "1.0"
 termprofile = { version = "0.2", features = ["color-cache", "convert", "terminfo"] }
 unicode-linebreak = "0.1"
