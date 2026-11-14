@@ -53,18 +53,18 @@ impl PasteMode {
     }
 
     pub(crate) fn query(&mut self, out: &mut impl Write) -> io::Result<()> {
-        self.query_with_focus_events(out, tmux::focus_events_enabled)
+        self.query_with_tmux_setup(out, tmux::prepare_rich_paste)
     }
 
-    fn query_with_focus_events(
+    fn query_with_tmux_setup(
         &mut self,
         out: &mut impl Write,
-        focus_events_enabled: impl FnOnce() -> bool,
+        prepare_tmux: impl FnOnce() -> bool,
     ) -> io::Result<()> {
         if !self.queried && !self.unfocused && !self.blocked {
-            // Passthrough affects every pane sharing the outer terminal. Without
-            // focus reports we cannot release that mode when another pane is selected.
-            if self.tmux && !focus_events_enabled() {
+            // Passthrough affects every pane sharing the outer terminal. Require
+            // focus reports and a way to reset the mode even after our pane is hidden.
+            if self.tmux && !prepare_tmux() {
                 self.blocked = true;
                 self.support.set(Some(false));
                 return Ok(());
