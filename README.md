@@ -66,8 +66,8 @@ And the following DOM events and event handlers, with bubbling,
 - Mouse enter and leave events
 - Keyboard events
 - Text and image paste events, including in-memory images on terminals with
-  Kitty Clipboard Protocol support (including through tmux when `focus-events` is enabled;
-  otherwise PaintCannon keeps ordinary text and file-path paste)
+  Kitty Clipboard Protocol support (including through tmux when `focus-events`
+  is enabled)
 - Input change events
 - Form submit events
 - Focus and blur events (if inside tmux, requires the tmux `focus-events`

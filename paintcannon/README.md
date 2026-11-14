@@ -236,8 +236,9 @@ these copied-image paste events. This waits for native capability negotiation an
 boolean; it does not access clipboard contents. An unsupported terminal, missing terminal input,
 or an unanswered query (after at most two seconds of waiting) resolves to `false`. Inside tmux,
 PaintCannon uses DCS passthrough to query the outer terminal and read pasted images. It attempts
-to enable `allow-passthrough` for its pane. Ordinary text and file-path paste remain available
-when this returns `false`.
+to enable `allow-passthrough=all` for its pane so paste-mode cleanup can reach the terminal
+even after zooming another pane or switching windows hides it. If that setup fails, rich
+paste remains disabled. Ordinary text and file-path paste remain available when this returns `false`.
 
 This only reads clipboard data in response to a user paste, using the terminal's one-use paste
 token when supplied. It does not poll clipboard contents or request general clipboard access.
